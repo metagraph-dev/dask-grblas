@@ -6,4 +6,4 @@ This is a work in progress.  It is ready to be played with (lightly), but not us
 
 `dask-grblas` mirrors the `grblas` API and uses [`dask`](https://dask.org/) for out-of-core or distributed computation.  I hope this can be a pleasant way to scale GraphBLAS to very large problems.
 
-Sparse arrays are hard.  Distributed sparse arrays are even harder--but interesting!  If you're curious, would like to help, or just feel like saying hello, please [leave a message](https://github.com/erikns/dask-grblas/issues)!
+Sparse arrays are hard.  Distributed sparse arrays are even harder--but interesting!  If you're curious, would like to help, or just feel like saying hello, please [leave a message](https://github.com/eriknw/dask-grblas/issues)!
