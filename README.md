@@ -1,6 +1,7 @@
 # dask-grblas
 
 [![Build Status](https://travis-ci.org/eriknw/dask-grblas.svg?branch=master)](https://travis-ci.org/eriknw/dask-grblas)
+[![Coverage Status](https://coveralls.io/repos/eriknw/dask-grblas/badge.svg?branch=master)](https://coveralls.io/r/eriknw/dask-grblas)
 
 This is a work in progress.  It is ready to be played with (lightly), but not used for any serious work.
 
