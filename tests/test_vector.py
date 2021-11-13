@@ -105,7 +105,8 @@ def test_ewise(vs, ws):
                 w << getattr(x, method_name)(y, op)
                 return w
 
-            errors = method_name == 'ewise_add' and op is gb.binary.plus
+            # errors = method_name == 'ewise_add' and op is gb.binary.plus
+            errors = False
             compute = not errors
             funcs = [
                 lambda x, y: getattr(x, method_name)(y, op).new(),
@@ -116,7 +117,7 @@ def test_ewise(vs, ws):
                 lambda x, y: getattr(x, method_name)(y, op).new(mask=~x.V),
             ]
             for dv in vs[1]:
-                for func in funcs:
+                for index, func in enumerate(funcs):
                     compare(func, (v, v), (dv, dv), errors=errors, compute=compute)
                 if method_name == 'ewise_add':
                     compare(binfunc, (v, v), (dv, dv))
@@ -149,7 +150,7 @@ def test_reduce(vs):
         compare(lambda x: x.reduce().new(), v, dv)
         compare(lambda x: x.reduce(gb.monoid.max).new(), v, dv)
         compare(lambda x: x.reduce().new(dtype=dtypes.FP64), v, dv)
-        compare(lambda x: x.reduce(gb.binary.plus).new(), v, dv, errors=True)
+        compare(lambda x: x.reduce(gb.binary.plus).new(), v, dv)
         for i, f in enumerate([f0, f1, f2]):
             s = gb.Scalar.new(int)
             ds = dgb.Scalar.from_value(s.dup())

@@ -28,12 +28,12 @@ class Scalar(BaseType):
     def from_value(cls, scalar, dtype=None, *, name=None):
         if type(scalar) is PythonScalar:
             scalar = cls(scalar._delayed, scalar._meta)
-            if dtype is not None and scalar.dtype != gb.dtypes.lookup(dtype):
+            if dtype is not None and scalar.dtype != gb.dtypes.lookup_dtype(dtype):
                 scalar = scalar.dup(dtype=dtype)
             return scalar
         if type(scalar) is not gb.Scalar:
             scalar = gb.Scalar.from_value(scalar, dtype=dtype)
-        elif dtype is not None and scalar.dtype != gb.dtypes.lookup(dtype):
+        elif dtype is not None and scalar.dtype != gb.dtypes.lookup_dtype(dtype):
             scalar = scalar.dup(dtype=dtype)
         return cls.from_delayed(delayed(scalar), scalar.dtype, name=name)
 
@@ -73,7 +73,7 @@ class Scalar(BaseType):
         assert type(delayed) is GbDelayed
         delayed._update(self, accum=accum)
 
-    def dup(self, *, dtype=None):
+    def dup(self, dtype=None):
         if dtype is None:
             meta = self._meta
         else:

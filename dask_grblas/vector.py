@@ -152,7 +152,7 @@ class Vector(BaseType):
 
     def apply(self, op, left=None, right=None):
         meta = self._meta.apply(op=op, left=left, right=right)
-        return GbDelayed(self, 'apply', op, left, right, meta=meta)
+        return GbDelayed(self, 'apply', op, right, meta=meta, left=left)
 
     def reduce(self, op=monoid.plus):
         meta = self._meta.reduce(op)
@@ -169,6 +169,14 @@ class Vector(BaseType):
     def to_values(self):
         # TODO: make this lazy; can we do something smart with this?
         return self.compute().to_values()
+
+    def isequal(self, other, *, check_dtype=False):
+        other = self._expect_type(other, Vector, within="isequal", argname="other")
+        return super().isequal(other, check_dtype=check_dtype)
+
+    def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
+        other = self._expect_type(other, Vector, within="isclose", argname="other")
+        return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
 
 @da.core.concatenate_lookup.register(InnerVector)
