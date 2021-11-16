@@ -1,10 +1,10 @@
 import dask.array as da
 import grblas as gb
 import numpy as np
-from functools import partial
+from functools import partial, reduce
 from .base import BaseType, InnerBaseType
 from .mask import Mask
-from .utils import np_dtype, get_meta, get_return_type, get_grblas_type, wrap_inner
+from .utils import np_dtype, get_meta, get_return_type, get_grblas_type, get_inner_type, wrap_inner
 
 
 class GbDelayed:
@@ -14,6 +14,31 @@ class GbDelayed:
         self.args = args
         self.kwargs = kwargs
         self._meta = meta
+
+    def _reduce_along_axis(self, axis, dtype):
+        assert not self.kwargs
+        op = self.args[0]
+        delayed = da.reduction(
+            self.parent._delayed,
+            partial(_reduce_axis, op, dtype),
+            partial(_reduce_axis_combine, op),
+            concatenate=False,
+            dtype=np_dtype(dtype),
+            axis=axis
+        )
+        return delayed
+
+    def _reduce_scalar(self, dtype):
+        assert not self.kwargs
+        op = self.args[0]
+        delayed = da.reduction(
+            self.parent._delayed,
+            partial(_reduce_scalar, op, dtype),
+            partial(_reduce_combine, op),
+            concatenate=False,
+            dtype=np_dtype(dtype),
+        )
+        return delayed
 
     def _reduce(self, dtype):
         assert not self.kwargs
@@ -40,6 +65,12 @@ class GbDelayed:
 
         if self.method_name == 'reduce':
             delayed = self._reduce(meta.dtype)
+        elif self.method_name == 'reduce_scalar':
+            delayed = self._reduce_scalar(meta.dtype)
+        elif self.method_name == 'reduce_rowwise':
+            delayed = self._reduce_along_axis(1, meta.dtype)
+        elif self.method_name == 'reduce_columnwise':
+            delayed = self._reduce_along_axis(0, meta.dtype)
         elif self.method_name in {'apply', 'ewise_add', 'ewise_mult'}:
             delayed = da.core.elemwise(
                 _expr_new,
@@ -70,6 +101,39 @@ class GbDelayed:
             if accum is not None:
                 delayed = da.core.elemwise(
                     _reduce_accum,
+                    updating._delayed,
+                    delayed,
+                    accum,
+                    dtype=np_dtype(updating.dtype),
+                )
+        elif self.method_name == 'reduce_scalar':
+            meta.clear()
+            delayed = self._reduce_scalar(meta.dtype)
+            if accum is not None:
+                delayed = da.core.elemwise(
+                    _reduce_accum,
+                    updating._delayed,
+                    delayed,
+                    accum,
+                    dtype=np_dtype(updating.dtype),
+                )
+        elif self.method_name == 'reduce_rowwise':
+            meta.clear()
+            delayed = self._reduce_along_axis(1, meta.dtype)
+            if accum is not None:
+                delayed = da.core.elemwise(
+                    _reduce_axis_accum,
+                    updating._delayed,
+                    delayed,
+                    accum,
+                    dtype=np_dtype(updating.dtype),
+                )
+        elif self.method_name == 'reduce_columnwise':
+            meta.clear()
+            delayed = self._reduce_along_axis(0, meta.dtype)
+            if accum is not None:
+                delayed = da.core.elemwise(
+                    _reduce_axis_accum,
                     updating._delayed,
                     delayed,
                     accum,
@@ -254,6 +318,33 @@ def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
     return wrap_inner(expr.new(dtype=dtype, mask=mask))
 
 
+def _reduce_axis(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
+    """ Call reduce_rowwise or reduce_columnwise on each chunk"""
+    if computing_meta:
+        return np.empty(0, dtype=dtype)
+    if axis == (1,):
+        return wrap_inner(x.value.reduce_rowwise(op).new(dtype=gb_dtype))
+    if axis == (0,):
+        return wrap_inner(x.value.reduce_columnwise(op).new(dtype=gb_dtype))
+    
+
+def _reduce_axis_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
+    """ Combine results from _reduce_axis on each chunk"""
+    if computing_meta:
+        return np.empty(0, dtype=dtype)
+    if type(x) is list:
+        vals = [val.value for val in x]
+        return wrap_inner(reduce(lambda x, y: x.ewise_add(y, op).new(), vals))
+    return x
+
+
+def _reduce_scalar(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
+    """ Call reduce_scalar on each chunk"""
+    if computing_meta:
+        return np.empty(0, dtype=dtype)
+    return wrap_inner(x.value.reduce_scalar(op).new(dtype=gb_dtype))
+
+
 def _reduce(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
     """ Call reduce on each chunk"""
     if computing_meta:
@@ -262,16 +353,18 @@ def _reduce(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtyp
 
 
 def _reduce_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
-    """ Combine results from reduce on each chunk"""
+    """ Combine results from reduce or reduce_scalar on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
     if type(x) is list:
         # do we need `gb_dtype` instead of `np_dtype` below?
-        vals = [val.value.value for val in x]
-        values = gb.Vector.from_values(list(range(len(x))), vals, size=len(x), dtype=dtype)
+        if type(x[0]) is list:
+            vals = [val.value.value for sublist in x for val in sublist]
+        else:
+            vals = [val.value.value for val in x]
+        values = gb.Vector.from_values(list(range(len(vals))), vals, size=len(vals), dtype=dtype)
         return wrap_inner(values.reduce(op).new())
-    else:
-        return x
+    return x
 
 
 def _reduce_accum(output, reduced, accum):
@@ -288,6 +381,23 @@ def _reduce_accum(output, reduced, accum):
         right = gb.Vector.from_values([0], [reduced.value.value], dtype=reduced.value.dtype)
     result = left.ewise_add(right, op=accum, require_monoid=False).new(dtype=dtype)
     result = result[0].new()
+    return wrap_inner(result)
+
+
+def _reduce_axis_accum(output, reduced, accum):
+    """ Accumulate the results of reduce_axis with a vector"""
+    if isinstance(reduced, np.ndarray) and (reduced.size == 0):
+        return wrap_inner(gb.Vector.new())
+    dtype = output.value.dtype
+    if output.value.shape == 0:
+        left = gb.Vector.new(dtype, 1)
+    else:
+        left = output.value
+    if reduced.value.shape == 0:
+        right = gb.Vector.new(reduced.value.dtype, 1)
+    else:
+        right = reduced.value
+    result = left.ewise_add(right, op=accum, require_monoid=False).new(dtype=dtype)
     return wrap_inner(result)
 
 

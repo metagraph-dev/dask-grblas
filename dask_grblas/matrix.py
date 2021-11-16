@@ -125,15 +125,15 @@ class Matrix(BaseType):
 
     def apply(self, op, left=None, right=None):
         meta = self._meta.apply(op=op, left=left, right=right)
-        return GbDelayed(self, 'apply', op, left, right, meta=meta)
+        return GbDelayed(self, 'apply', op, right, meta=meta, left=left)
 
-    def reduce_rows(self, op=monoid.plus):
-        meta = self._meta.reduce_rows(op)
-        return GbDelayed(self, 'reduce_rows', op, meta=meta)
+    def reduce_rowwise(self, op=monoid.plus):
+        meta = self._meta.reduce_rowwise(op)
+        return GbDelayed(self, 'reduce_rowwise', op, meta=meta)
 
-    def reduce_columns(self, op=monoid.plus):
-        meta = self._meta.reduce_columns(op)
-        return GbDelayed(self, 'reduce_columns', op, meta=meta)
+    def reduce_columnwise(self, op=monoid.plus):
+        meta = self._meta.reduce_columnwise(op)
+        return GbDelayed(self, 'reduce_columnwise', op, meta=meta)
 
     def reduce_scalar(self, op=monoid.plus):
         meta = self._meta.reduce_scalar(op)
@@ -150,6 +150,18 @@ class Matrix(BaseType):
     def to_values(self):
         # TODO: make this lazy; can we do something smart with this?
         return self.compute().to_values()
+
+    def isequal(self, other, *, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isequal", argname="other"
+        )
+        return super().isequal(other, check_dtype=check_dtype)
+
+    def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isclose", argname="other"
+        )
+        return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
 
 class TransposedMatrix:
@@ -187,8 +199,8 @@ class TransposedMatrix:
     mxm = Matrix.mxm
     kronecker = Matrix.kronecker
     apply = Matrix.apply
-    reduce_rows = Matrix.reduce_rows
-    reduce_columns = Matrix.reduce_columns
+    reduce_rows = Matrix.reduce_rowwise
+    reduce_columns = Matrix.reduce_columnwise
     reduce_scalar = Matrix.reduce_scalar
 
     # Misc.

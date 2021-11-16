@@ -6,6 +6,32 @@ from .expr import AmbiguousAssignOrExtract, GbDelayed
 from .utils import np_dtype, get_meta
 
 
+def from_delayed(cls, scalar, dtype, *, name=None):
+    if not isinstance(scalar, Delayed):
+        raise TypeError('Value is not a dask delayed object.  Please use dask.delayed to create a grblas.Scalar')
+    inner = delayed(InnerScalar)(scalar)
+    value = da.from_delayed(inner, (), dtype=np_dtype(dtype), name=name)
+    return cls(value)
+
+
+def from_value(cls, scalar, dtype=None, *, name=None):
+    if type(scalar) is PythonScalar:
+        scalar = cls(scalar._delayed, scalar._meta)
+        if dtype is not None and scalar.dtype != gb.dtypes.lookup_dtype(dtype):
+            scalar = scalar.dup(dtype=dtype)
+        return scalar
+    if type(scalar) is not gb.Scalar:
+        scalar = gb.Scalar.from_value(scalar, dtype=dtype)
+    elif dtype is not None and scalar.dtype != gb.dtypes.lookup_dtype(dtype):
+        scalar = scalar.dup(dtype=dtype)
+    return cls.from_delayed(delayed(scalar), scalar.dtype, name=name)
+
+
+def new(cls, dtype, *, name=None):
+    scalar = gb.Scalar.new(dtype)
+    return cls.from_delayed(delayed(scalar), scalar.dtype, name=name)
+
+
 class InnerScalar(InnerBaseType):
     ndim = 0
     shape = ()
@@ -18,29 +44,15 @@ class InnerScalar(InnerBaseType):
 class Scalar(BaseType):
     @classmethod
     def from_delayed(cls, scalar, dtype, *, name=None):
-        if not isinstance(scalar, Delayed):
-            raise TypeError('Value is not a dask delayed object.  Please use dask.delayed to create a grblas.Scalar')
-        inner = delayed(InnerScalar)(scalar)
-        value = da.from_delayed(inner, (), dtype=np_dtype(dtype), name=name)
-        return cls(value)
+        return from_delayed(cls, scalar, dtype, name=name)
 
     @classmethod
     def from_value(cls, scalar, dtype=None, *, name=None):
-        if type(scalar) is PythonScalar:
-            scalar = cls(scalar._delayed, scalar._meta)
-            if dtype is not None and scalar.dtype != gb.dtypes.lookup_dtype(dtype):
-                scalar = scalar.dup(dtype=dtype)
-            return scalar
-        if type(scalar) is not gb.Scalar:
-            scalar = gb.Scalar.from_value(scalar, dtype=dtype)
-        elif dtype is not None and scalar.dtype != gb.dtypes.lookup_dtype(dtype):
-            scalar = scalar.dup(dtype=dtype)
-        return cls.from_delayed(delayed(scalar), scalar.dtype, name=name)
+        return from_value(cls, scalar, dtype=dtype, name=name)
 
     @classmethod
     def new(cls, dtype, *, name=None):
-        scalar = gb.Scalar.new(dtype)
-        return cls.from_delayed(delayed(scalar), scalar.dtype, name=name)
+        return new(cls, dtype, name=None)
 
     def __init__(self, delayed, meta=None):
         assert type(delayed) is da.Array
@@ -133,13 +145,22 @@ class Scalar(BaseType):
 
 
 class PythonScalar:
-    from_delayed = Scalar.from_delayed
-    from_value = Scalar.from_value
-    new = Scalar.new
     __init__ = Scalar.__init__
     __bool__ = Scalar.__bool__
     # __int__?
     # __float__?
+
+    @classmethod
+    def from_delayed(cls, scalar, dtype, *, name=None):
+        return from_delayed(cls, scalar, dtype, name=name)
+
+    @classmethod
+    def from_value(cls, scalar, dtype=None, *, name=None):
+        return from_value(cls, scalar, dtype=dtype, name=name)
+
+    @classmethod
+    def new(cls, dtype, *, name=None):
+        return new(cls, dtype, name=None)
 
     def __eq__(self, other):
         return Scalar.from_value(self) == other

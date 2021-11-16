@@ -26,13 +26,13 @@ def vs():
 
 @pytest.fixture
 def ws():
-    v = gb.Vector.from_values([0, 1, 3, 4, 5], [1.0, 2.0, 3.0, -4.0, 0.0])
-    dv0 = dgb.Vector.from_vector(v)
-    dv1 = dgb.concat_vectors([
+    w = gb.Vector.from_values([0, 1, 3, 4, 5], [1.0, 2.0, 3.0, -4.0, 0.0])
+    dw0 = dgb.Vector.from_vector(w)
+    dw1 = dgb.concat_vectors([
         dgb.Vector.from_vector(gb.Vector.from_values([0, 1], [1.0, 2.0])),
         dgb.Vector.from_vector(gb.Vector.from_values([1, 2, 3], [3.0, -4.0, 0.0])),
     ])
-    return v, (dv0, dv1)
+    return w, (dw0, dw1)
 
 
 def test_new():
