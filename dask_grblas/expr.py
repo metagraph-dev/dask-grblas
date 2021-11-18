@@ -15,6 +15,41 @@ class GbDelayed:
         self.kwargs = kwargs
         self._meta = meta
 
+    def _matmult(self, meta, updating=None, mask=None, accum=None):
+            a = self.parent._delayed
+            b = self.args[0]._delayed
+            op = self.args[1]
+            lhs_ind = 'ij' if (a.ndim == 2) else 'j'
+            rhs_ind = 'jk' if (b.ndim == 2) else 'j'
+            if lhs_ind == 'ij':
+                out_ind = 'ik' if (rhs_ind == 'jk') else 'i'
+            else:
+                out_ind = 'k' if (rhs_ind == 'jk') else ''
+
+            not_updating = updating is None
+            no_mask = mask is None
+            grblas_mask_type = None
+            if not_updating:
+                args = [a, lhs_ind, b, rhs_ind]
+            elif no_mask:
+                args = [updating, out_ind,
+                        a, lhs_ind, b, rhs_ind]
+            else:
+                grblas_mask_type = get_grblas_type(mask)
+                args = [updating, out_ind,
+                        mask.mask._delayed, out_ind,
+                        a, lhs_ind, b, rhs_ind]
+
+            return da.core.blockwise(
+                partial(_matmul, op, meta.dtype,
+                        not_updating,
+                        no_mask, grblas_mask_type,
+                        accum),
+                out_ind,
+                *args,
+                meta=wrap_inner(meta)
+            )
+
     def _reduce_along_axis(self, axis, dtype):
         assert not self.kwargs
         op = self.args[0]
@@ -83,6 +118,8 @@ class GbDelayed:
                 *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
                 dtype=np_dtype(meta.dtype),
             )
+        elif self.method_name in {'vxm', 'mxv'}:
+            delayed = self._matmult(meta)
         else:
             raise ValueError(self.method_name)
         return get_return_type(meta)(delayed)
@@ -171,6 +208,11 @@ class GbDelayed:
                     *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
                     dtype=np_dtype(meta.dtype),
                 )
+        elif self.method_name in {'vxm', 'mxv'}:
+            delayed = self._matmult(meta,
+                                    updating=updating._optional_dup(),
+                                    mask=mask,
+                                    accum=accum)
         else:
             raise ValueError(self.method_name)
         updating._delayed = delayed
@@ -419,3 +461,29 @@ def _update_expr_full(method_name, updating, accum, mask, mask_type, replace, x,
         mask = mask_type(mask.value)
     updating.value(accum=accum, mask=mask, replace=replace) << expr
     return updating
+
+
+def _matmul(op, dtype, not_updating, no_mask, mask_type, accum, *args, computing_meta=None):
+    if computing_meta:
+        return np.empty(0, dtype=dtype)
+
+    if not_updating:
+        a_blocks, b_blocks = args
+        vals = [op(a.value @ b.value).new(dtype=dtype)
+                for a, b in zip(a_blocks, b_blocks)]
+        return wrap_inner(reduce(lambda x, y: x.ewise_add(y, op.monoid).new(),
+                                 vals))
+    else:
+        if no_mask:
+            u, a_blocks, b_blocks = args
+            mask = None
+        else:
+            u, mask, a_blocks, b_blocks = args
+            mask = mask_type(mask.value)
+
+        vals = [op(a.value @ b.value).new(dtype=dtype)
+                for a, b in zip(a_blocks, b_blocks)]
+        gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(),
+                        vals)
+        u.value(mask=mask, accum=accum) << gb_obj
+        return u

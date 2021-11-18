@@ -5,6 +5,7 @@ from grblas import dtypes
 from pytest import raises
 from .utils import compare
 from functools import partial
+from builtins import getattr
 
 
 @pytest.fixture
@@ -34,6 +35,39 @@ def ws():
         dgb.Vector.from_vector(gb.Vector.from_values([1, 2, 4], [3.0, -4.0, 0.0])),
     ])
     return w, (dw0, dw1)
+
+
+@pytest.fixture
+def vms():
+    val_mask = gb.Vector.from_values(
+        [0, 1, 2, 3, 4],
+        [True, False, False, True, True],
+        size=7)
+    dvm0 = dgb.Vector.from_vector(val_mask)
+    dvm1 = dgb.concat_vectors([
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([0, 1], [True, False])),
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([0, 1, 2], [False, True, True], size=5)),
+    ])
+    return val_mask, (dvm0, dvm1)
+
+
+@pytest.fixture
+def sms():
+    struct_mask = gb.Vector.from_values(
+        [0, 3, 4],
+        [False, False, False],
+        size=7)
+
+    dsm0 = dgb.Vector.from_vector(struct_mask)
+    dsm1 = dgb.concat_vectors([
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([0], [False], size=2)),
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([1, 2], [False, False], size=5)),
+    ])
+    return struct_mask, (dsm0, dsm1)
 
 
 @pytest.fixture
@@ -276,6 +310,7 @@ def test_clear(As):
     compare(f, A, dAs[0])
 
 
+@pytest.mark.slow
 def test_ewise(As, Cs):
     A = As[0]
     C = Cs[0]
@@ -312,6 +347,7 @@ def test_ewise(As, Cs):
                     compare(f, (C.dup(), A, C), (dw.dup(), dA, dw), errors=errors, compute=compute)
 
 
+@pytest.mark.slow
 def test_reduce_axis(As, vs, ws):
     A, dAs = As
 
@@ -357,6 +393,7 @@ def test_reduce_axis(As, vs, ws):
                         compare(f, (w, A), (dw, dA))
 
 
+@pytest.mark.slow
 def test_reduce_scalar(As):
     A, dAs = As
 
@@ -396,6 +433,7 @@ def test_reduce_scalar(As):
                 compare(f, (s, A), (ds, dA))
 
 
+@pytest.mark.slow
 def test_apply(As):
     A, dAs = As
 
@@ -411,6 +449,7 @@ def test_apply(As):
         compare(f, A.dup(), dA.dup())
 
 
+@pytest.mark.slow
 def test_update(As, Cs):
     A, dAs = As
     C, dCs = Cs
@@ -444,6 +483,98 @@ def test_update(As, Cs):
             for dC in dCs:
                 compare(f, (A.dup(), C.dup()), (dA.dup(), dC.dup()))
                 compare(f, (A.dup(dtype=float), C.dup()), (dA.dup(dtype=float), dC.dup()))
+
+
+@pytest.mark.slow
+def test_matmult(As, vs, ws, vms, sms):
+    def f0(method_name, z, x, y):
+        z << getattr(x, method_name)(y)
+        return z
+
+    def f1(method_name, z, x, y):
+        z() << getattr(x, method_name)(y)
+        return z
+
+    def f2(method_name, z, x, y):
+        z(accum=gb.binary.plus) << getattr(x, method_name)(y)
+        return z
+
+    def f3(method_name,z, m, x, y):
+        z(mask=m, accum=gb.binary.plus) << getattr(x, method_name)(y)
+        return z
+
+    def f4(method_name,z, m, x, y):
+        z(mask=m) << getattr(x, method_name)(y)
+        return z
+
+    A, dAs = As
+    v, dvs = vs
+
+    for dA in dAs:
+        for dv in dvs:
+            for method_name in ['mxv', 'vxm']:
+                if method_name == 'mxv':
+                    gb_args = (A, v)
+                    dgb_args = (dA, dv)
+                else:
+                    gb_args = (v, A)
+                    dgb_args = (dv, dA)
+
+                compare(lambda x, y: getattr(x, method_name)(y).new(), gb_args, dgb_args)
+                compare(lambda x, y: getattr(x, method_name)(y, gb.semiring.min_second).new(), gb_args, dgb_args)
+                compare(lambda x, y: getattr(x, method_name)(y).new(dtype=dtypes.FP64), gb_args, dgb_args)
+                compare(lambda x, y: getattr(x, method_name)(y, gb.binary.plus).new(), gb_args, dgb_args, errors=True)
+                for func in [f0, f1, f2]:
+                    f = partial(func, method_name)
+                    v1 = gb.Vector.new(int, 7)
+                    dv1 = dgb.Vector.from_vector(v1.dup())
+                    compare(f, (v1, *gb_args), (dv1, *dgb_args))
+                
+                    v1 = gb.Vector.new(float, 7)
+                    dv1 = dgb.Vector.from_vector(v1.dup())
+                    compare(f, (v1, *gb_args), (dv1, *dgb_args))
+                
+                    v0, dv0s = vs
+                    for dv0 in dv0s:
+                        v1 = v0.dup()
+                        dv1 = dv0.dup()
+                        compare(f, (v1, *gb_args), (dv1, *dgb_args))
+                
+                    w0, dw0s = ws
+                    for dw0 in dw0s:
+                        w1 = w0.dup()
+                        dw1 = dw0.dup()
+                        compare(f, (w1, *gb_args), (dw1, *dgb_args))
+
+                for f in [partial(f3, method_name), partial(f4, method_name)]:
+                    for attr, mask, dmasks in [('V', *vms), ('S', *sms)]:
+                        for dmask in dmasks:
+                            gb_mask = getattr(mask, attr)
+                            dgb_mask = getattr(dmask, attr)
+    
+                            v1 = gb.Vector.new(int, 7)
+                            dv1 = dgb.Vector.from_vector(v1.dup())
+                            compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
+                            compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
+    
+                            v1 = gb.Vector.new(float, 7)
+                            dv1 = dgb.Vector.from_vector(v1.dup())
+                            compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
+                            compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
+    
+                            v0, dv0s = vs
+                            for dv0 in dv0s:
+                                v1 = v0.dup()
+                                dv1 = dv0.dup()
+                                compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
+                                compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
+    
+                            w0, dw0s = ws
+                            for dw0 in dw0s:
+                                w1 = w0.dup()
+                                dw1 = dw0.dup()
+                                compare(f, (w1, gb_mask, *gb_args), (dw1, dgb_mask, *dgb_args))
+                                compare(f, (w1, ~gb_mask, *gb_args), (dw1, ~dgb_mask, *dgb_args))
 
 
 def test_attrs(vs):
