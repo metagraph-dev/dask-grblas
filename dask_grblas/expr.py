@@ -16,39 +16,114 @@ class GbDelayed:
         self._meta = meta
 
     def _matmult(self, meta, updating=None, mask=None, accum=None):
-            a = self.parent._delayed
-            b = self.args[0]._delayed
-            op = self.args[1]
-            lhs_ind = 'ij' if (a.ndim == 2) else 'j'
-            rhs_ind = 'jk' if (b.ndim == 2) else 'j'
-            if lhs_ind == 'ij':
-                out_ind = 'ik' if (rhs_ind == 'jk') else 'i'
-            else:
-                out_ind = 'k' if (rhs_ind == 'jk') else ''
+        a = self.parent._delayed
+        b = self.args[0]._delayed
+        op = self.args[1]
+        lhs_ind = 'ij' if (a.ndim == 2) else 'j'
+        rhs_ind = 'jk' if (b.ndim == 2) else 'j'
+        if lhs_ind == 'ij':
+            out_ind = 'ik' if (rhs_ind == 'jk') else 'i'
+        else:
+            out_ind = 'k' if (rhs_ind == 'jk') else ''
 
-            not_updating = updating is None
-            no_mask = mask is None
-            grblas_mask_type = None
-            if not_updating:
-                args = [a, lhs_ind, b, rhs_ind]
-            elif no_mask:
-                args = [updating, out_ind,
-                        a, lhs_ind, b, rhs_ind]
-            else:
-                grblas_mask_type = get_grblas_type(mask)
-                args = [updating, out_ind,
-                        mask.mask._delayed, out_ind,
-                        a, lhs_ind, b, rhs_ind]
+        not_updating = updating is None
+        no_mask = mask is None
+        grblas_mask_type = None
+        if not_updating:
+            args = [a, lhs_ind, b, rhs_ind]
+        elif no_mask:
+            args = [updating, out_ind,
+                    a, lhs_ind, b, rhs_ind]
+        else:
+            grblas_mask_type = get_grblas_type(mask)
+            args = [updating, out_ind,
+                    mask.mask._delayed, out_ind,
+                    a, lhs_ind, b, rhs_ind]
 
-            return da.core.blockwise(
-                partial(_matmul, op, meta.dtype,
-                        not_updating,
-                        no_mask, grblas_mask_type,
-                        accum),
-                out_ind,
-                *args,
-                meta=wrap_inner(meta)
-            )
+        return da.core.blockwise(
+            partial(_matmul, op, meta.dtype,
+                    not_updating,
+                    no_mask, grblas_mask_type,
+                    accum),
+            out_ind,
+            *args,
+            meta=wrap_inner(meta)
+        )
+
+    def _matmul2(self, meta, updating=None, mask=None, accum=None):
+        a = self.parent._delayed
+        b = self.args[0]._delayed
+        op = self.args[1]
+        a_is_1d = False
+        if a.ndim == 1:
+            a_is_1d = True
+            a = a.map_blocks(asOneRowMatrix, new_axis=0, meta=asOneRowMatrix(wrap_inner(meta)))
+            sum_meta = asOneRowMatrix(wrap_inner(meta))
+            out_meta = FakeInnerTensor(sum_meta.value, face=(0, 2))
+
+        b_is_1d = False
+        if b.ndim == 1:
+            b_is_1d = True
+            b = b.map_blocks(asOneColMatrix, new_axis=1, meta=asOneColMatrix(wrap_inner(meta)))
+            sum_meta = asOneColMatrix(wrap_inner(meta))
+            out_meta = FakeInnerTensor(sum_meta.value, face=(0, 2))
+
+        # out_ind includes all dimensions to prevent contraction
+        # in the blockwise below
+        out_ind = (0, 1, 2)
+        # lhs_ind includes `a`/LHS dimensions
+        lhs_ind = (0, 1)
+        # on `b`/RHS -2 dimension is "contracted" with the last dimension
+        # of `a`, last dimension of `b` is `b` specific
+        rhs_ind = (1, 2)
+    
+        out = da.core.blockwise(
+            partial(_matmul2, op, meta.dtype),
+            out_ind,
+            a,
+            lhs_ind,
+            b,
+            rhs_ind,
+            adjust_chunks={lhs_ind[-1]: 1},
+            dtype=np.result_type(a, b),
+            concatenate=False,
+            meta=out_meta
+        )
+        
+        # out is 3D (a slab or a bar)
+    
+        # Because contraction + concatenate in blockwise leads to high
+        # memory footprints, we want to avoid them. Instead we will perform
+        # blockwise (without contraction) followed by reduction. More about
+        # this issue: https://github.com/dask/dask/issues/6874
+    
+        # When we perform reduction, we need to worry about the last 2 dimensions
+        # which hold the matrices, some care is required to handle chunking in
+        # that space.
+        contraction_dimension_is_chunked = (
+            max(min(a.chunks[-1], b.chunks[-2])) < a.shape[-1]
+        )
+        b_last_dim_max_chunk = max(b.chunks[-1])
+        if contraction_dimension_is_chunked or b_last_dim_max_chunk < b.shape[-1]:
+            if b_last_dim_max_chunk > 1:
+                # This is the case when both contraction and last dimension axes
+                # are chunked
+                out = out.reshape(out.shape[:-1] + (1, -1))  # 4D
+                out = sum_by_monoid(op.monoid, out, axis=-3, meta=out_meta) # 3D
+                out = out.reshape((out.shape[0],) + (b.shape[-1],))  # 2D
+            else:
+                # Contraction axis is chunked
+                out = sum_by_monoid(op.monoid, out, axis=-2, meta=sum_meta) # 2D
+        else:
+            # Neither contraction nor last dimension axes are chunked, we
+            # remove the dummy dimension without reduction
+            out = out.reshape((out.shape[0],) + (b.shape[-1],)) # 2D
+
+        if a_is_1d:
+            out = out[..., 0, :]    # 1D
+        if b_is_1d:
+            out = out[..., 0]   #1D
+        return out
 
     def _reduce_along_axis(self, axis, dtype):
         assert not self.kwargs
@@ -119,7 +194,7 @@ class GbDelayed:
                 dtype=np_dtype(meta.dtype),
             )
         elif self.method_name in {'vxm', 'mxv'}:
-            delayed = self._matmult(meta)
+            delayed = self._matmul2(meta)
         else:
             raise ValueError(self.method_name)
         return get_return_type(meta)(delayed)
@@ -209,10 +284,9 @@ class GbDelayed:
                     dtype=np_dtype(meta.dtype),
                 )
         elif self.method_name in {'vxm', 'mxv'}:
-            delayed = self._matmult(meta,
-                                    updating=updating._optional_dup(),
-                                    mask=mask,
-                                    accum=accum)
+            delayed = self._matmul2(meta)
+            updating(mask=mask, accum=accum) << get_return_type(meta)(delayed)
+            return
         else:
             raise ValueError(self.method_name)
         updating._delayed = delayed
@@ -350,7 +424,106 @@ class AmbiguousAssignOrExtract:
         return self.new().value
 
 
+class FakeInnerTensor(InnerBaseType):
+    # Class to help in efficient dask computation of mxv, vxm
+    # and mxm methods.
+    # The underlying data-structure of FakeInnerTensor is always
+    # a grblas matrix whose two dimensions coincide with two of
+    # the dimensions of FakeInnerTensor.  These two dimensions
+    # are stored as a tuple in the attribute 'face'. face[0] is
+    # always 0.  The rest of the dimensions of FakeInnerTensor
+    # have a maximum length of 1 each.  The total number ndim of
+    # dimensions of FakeInnerTensor is always greater than 2.
+
+    def __init__(self, grblas_matrix, shape=None, face=(0, 1)):
+        assert type(grblas_matrix) is gb.Matrix
+        self.value = grblas_matrix
+        self.face = face
+        if shape is None:
+            self.shape = (*grblas_matrix.shape, 1)
+            self.ndim = 3
+        else:
+            self.shape = shape
+            self.ndim = len(shape) 
+        self.dtype = np_dtype(grblas_matrix.dtype)
+
+    def __getitem__(self, index):
+        # Fix index, handling ellipsis and incomplete slices.
+        if not isinstance(index, tuple):
+            index = (index,)
+        fixed = []
+        new_axes = [k for k, i in enumerate(index) if i is None]
+        n_newdims = len(new_axes)
+        length, dims = len(index), self.ndim + n_newdims
+        for slice_ in index:
+            if slice_ is Ellipsis:
+                fixed.extend([slice(None)]*(dims - length + 1))
+                length = len(fixed)
+            elif isinstance(slice_, int):
+                fixed.append(slice(slice_, slice_ + 1, 1))
+            else:
+                fixed.append(slice_)
+        index = tuple(fixed)
+        if len(index) < dims:
+            index += (slice(None),) * (dims - len(index))
+        if n_newdims > 0:
+            # temporarily remove the new axes
+            new_axes = [k for k, i in enumerate(index) if i is None]
+            index = list(index)
+            for k in new_axes[::-1]:
+                index.pop(k)
+            index = tuple(index)
+        # Take the slice.  This always copies!
+        assert (type(index) is tuple) and (len(index) == self.ndim)
+        i, j = index[self.face[0]], index[self.face[1]]
+        value = self.value[i, j].new()
+        shape = [0 if k in self.face else len([object][x])
+                 for k, x in enumerate(index)]
+        shape[self.face[0]] = value.shape[0]
+        shape[self.face[1]] = value.shape[1]
+        out = FakeInnerTensor(value, shape=tuple(shape), face=self.face)
+        if n_newdims == 0:
+            return out
+        else:
+            # restore the new axes that were previously removed
+            shape = list(out.shape)
+            face = out.face[1]
+            for k in new_axes:
+                shape.insert(k, 1)
+                if k <= face:
+                    face += 1
+            return out.reshape(tuple(shape), face=(0, face))
+    
+    def reshape(self, *args, face=None):
+        # New shape is assumed to preserve shape of underlying grblas matrix
+        shape, = args
+        prod = lambda x, y: x*y
+        volume = reduce(prod, self.value.shape)
+        no_len_axes = [i for i, sz in enumerate(shape) if sz == -1]
+        if len(no_len_axes) == 1:
+            shape[no_len_axes[0]] = volume//(-reduce(prod, shape))
+        new_volume = reduce(prod, shape)
+        if volume == new_volume:
+            new_ndim = len(shape)
+            if new_ndim == 2:
+                if shape == self.value.shape:
+                    return wrap_inner(self.value)
+            elif new_ndim > 2:
+                if face is None:
+                    face = [k for k, x in enumerate(shape)
+                            if (x > 1) and (k > 0)]
+                    n = len(face)
+                    if n == 0:
+                        face = self.face
+                    elif n == 1:
+                        face = (self.face[0], face[0])
+                return FakeInnerTensor(self.value, shape=shape, face=face)
+        raise NotImplementedError()
+
+
 # Dask task functions
+
+
 def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
     # expr.new(...)
     args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
@@ -487,3 +660,110 @@ def _matmul(op, dtype, not_updating, no_mask, mask_type, accum, *args, computing
                         vals)
         u.value(mask=mask, accum=accum) << gb_obj
         return u
+
+
+def asOneColMatrix(inner_vector):
+    vector = inner_vector.value
+    contents = vector.ss.export(format='sparse', raw=True, give_ownership=False)
+    return wrap_inner(gb.Matrix.ss.import_csc(
+        nrows=contents['size'], ncols=1,
+        indptr=np.array([0, contents['nvals']], dtype=contents['indices'].dtype),
+        values=contents['values'],
+        row_indices=contents['indices'],
+        take_ownership=False
+    ))
+
+
+def asOneRowMatrix(inner_vector):
+    vector = inner_vector.value
+    contents = vector.ss.export(format='sparse', raw=True, give_ownership=False)
+    return wrap_inner(gb.Matrix.ss.import_csr(
+        ncols=contents['size'], nrows=1,
+        indptr=np.array([0, contents['nvals']], dtype=contents['indices'].dtype),
+        values=contents['values'],
+        col_indices=contents['indices'],
+        take_ownership=False
+    ))
+
+
+def asVector(matrix):
+    if matrix.nrows == 1:
+        contents = matrix.ss.unpack(format='csr', raw=True)
+        return gb.Vector.ss.import_sparse(
+            size=contents['ncols'],
+            indices=contents['col_indices'],
+            values=contents['values'],
+            take_ownership=True
+        )
+    elif matrix.ncols == 1:
+        contents = matrix.ss.unpack(format='csc', raw=True)
+        return gb.Vector.ss.import_sparse(
+            size=contents['nrows'],
+            indices=contents['row_indices'],
+            values=contents['values'],
+            take_ownership=True
+        )
+    else:
+        raise NotImplementedError()
+
+
+def _matmul2(op, dtype, a, b, computing_meta=None):
+    if computing_meta:
+        return np.empty(0, dtype=dtype)
+
+    return FakeInnerTensor(op(a.value @ b.value).new(dtype=dtype),
+                           face=(0, 2))
+
+
+def _sum_by_monoid(monoid, a, axis=None, keepdims=None):
+    axis, = axis
+    demote = lambda x: x if x < axis else (x - 1)
+    if type(a) is not list:
+        if keepdims:
+            return a
+        else:
+            if a.shape[axis] == 1:
+                # remove axis, relocating face
+                face0 = demote(a.face[0])
+                face1 = demote(a.face[1])
+                before = a.shape[:axis]
+                beyond = () if axis == a.ndim - 1 else a.shape[axis + 1:]
+                return a.reshape(before + beyond, face=(face0, face1))
+            else:
+                raise NotImplementedError()
+    vals = [x.value for x in a]
+    out = FakeInnerTensor(
+        reduce(lambda x, y: x.ewise_add(y, monoid).new(), vals),
+        shape=a[0].shape, face=a[0].face)
+    if keepdims:
+        return out
+    # remove axis
+    if a[0].ndim == 3:
+        return wrap_inner(out.value)    # now 2D
+    if a[0].ndim == 4:
+        # remember to relocate face
+        face0 = demote(a[0].face[0])
+        face1 = demote(a[0].face[1])
+        before = a[0].shape[:axis]
+        beyond = () if axis == a[0].ndim - 1 else a[0].shape[axis + 1:]
+        return out.reshape(before + beyond, face=(face0, face1)) # now 3D
+    else:
+        raise NotImplementedError()
+
+
+def sum_by_monoid(monoid, a, axis=None, dtype=None, keepdims=False, split_every=None, out=None, meta=None):
+    if dtype is None:
+        dtype = getattr(np.zeros(1, dtype=a.dtype).sum(), "dtype", object)
+    result = da.reduction(
+        a,
+        partial(_sum_by_monoid, monoid),
+        partial(_sum_by_monoid, monoid),
+        axis=axis,
+        keepdims=keepdims,
+        dtype=dtype,
+        split_every=split_every,
+        out=out,
+        meta=meta,
+        concatenate=False,
+    )
+    return result
