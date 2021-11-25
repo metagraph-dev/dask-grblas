@@ -91,34 +91,7 @@ class GbDelayed:
         )
         
         # out is 3D (a slab or a bar)
-    
-        # Because contraction + concatenate in blockwise leads to high
-        # memory footprints, we want to avoid them. Instead we will perform
-        # blockwise (without contraction) followed by reduction. More about
-        # this issue: https://github.com/dask/dask/issues/6874
-    
-        # When we perform reduction, we need to worry about the last 2 dimensions
-        # which hold the matrices, some care is required to handle chunking in
-        # that space.
-        contraction_dimension_is_chunked = (
-            max(min(a.chunks[-1], b.chunks[-2])) < a.shape[-1]
-        )
-        b_last_dim_max_chunk = max(b.chunks[-1])
-        if contraction_dimension_is_chunked or b_last_dim_max_chunk < b.shape[-1]:
-            if b_last_dim_max_chunk > 1:
-                # This is the case when both contraction and last dimension axes
-                # are chunked
-                out = out.reshape(out.shape[:-1] + (1, -1))  # 4D
-                out = sum_by_monoid(op.monoid, out, axis=-3, meta=out_meta) # 3D
-                out = out.reshape((out.shape[0],) + (b.shape[-1],))  # 2D
-            else:
-                # Contraction axis is chunked
-                out = sum_by_monoid(op.monoid, out, axis=-2, meta=sum_meta) # 2D
-        else:
-            # Neither contraction nor last dimension axes are chunked, we
-            # remove the dummy dimension without reduction
-            out = out.reshape((out.shape[0],) + (b.shape[-1],)) # 2D
-
+        out = sum_by_monoid(op.monoid, out, axis=-2, meta=sum_meta) # 2D
         if a_is_1d:
             out = out[..., 0, :]    # 1D
         if b_is_1d:
@@ -440,7 +413,10 @@ class FakeInnerTensor(InnerBaseType):
         self.value = grblas_matrix
         self.face = face
         if shape is None:
-            self.shape = (*grblas_matrix.shape, 1)
+            shape = [1]*3
+            shape[self.face[0]] = self.value.shape[0]
+            shape[self.face[1]] = self.value.shape[1]
+            self.shape = tuple(shape)
             self.ndim = 3
         else:
             self.shape = shape
