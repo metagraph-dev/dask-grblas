@@ -59,14 +59,12 @@ class GbDelayed:
             a_is_1d = True
             a = a.map_blocks(asOneRowMatrix, new_axis=0, meta=asOneRowMatrix(wrap_inner(meta)))
             sum_meta = asOneRowMatrix(wrap_inner(meta))
-            out_meta = FakeInnerTensor(sum_meta.value, face=(0, 2))
 
         b_is_1d = False
         if b.ndim == 1:
             b_is_1d = True
             b = b.map_blocks(asOneColMatrix, new_axis=1, meta=asOneColMatrix(wrap_inner(meta)))
             sum_meta = asOneColMatrix(wrap_inner(meta))
-            out_meta = FakeInnerTensor(sum_meta.value, face=(0, 2))
 
         # out_ind includes all dimensions to prevent contraction
         # in the blockwise below
@@ -87,7 +85,7 @@ class GbDelayed:
             adjust_chunks={lhs_ind[-1]: 1},
             dtype=np.result_type(a, b),
             concatenate=False,
-            meta=out_meta
+            meta=FakeInnerTensor(sum_meta.value)
         )
         
         # out is 3D (a slab or a bar)
@@ -398,106 +396,15 @@ class AmbiguousAssignOrExtract:
 
 
 class FakeInnerTensor(InnerBaseType):
+    ndim = 3
     # Class to help in efficient dask computation of mxv, vxm
     # and mxm methods.
-    # The underlying data-structure of FakeInnerTensor is always
-    # a grblas matrix whose two dimensions coincide with two of
-    # the dimensions of FakeInnerTensor.  These two dimensions
-    # are stored as a tuple in the attribute 'face'. face[0] is
-    # always 0.  The rest of the dimensions of FakeInnerTensor
-    # have a maximum length of 1 each.  The total number ndim of
-    # dimensions of FakeInnerTensor is always greater than 2.
 
-    def __init__(self, grblas_matrix, shape=None, face=(0, 1)):
+    def __init__(self, grblas_matrix):
         assert type(grblas_matrix) is gb.Matrix
-        self.value = grblas_matrix
-        self.face = face
-        if shape is None:
-            shape = [1]*3
-            shape[self.face[0]] = self.value.shape[0]
-            shape[self.face[1]] = self.value.shape[1]
-            self.shape = tuple(shape)
-            self.ndim = 3
-        else:
-            self.shape = shape
-            self.ndim = len(shape) 
         self.dtype = np_dtype(grblas_matrix.dtype)
-
-    def __getitem__(self, index):
-        # Fix index, handling ellipsis and incomplete slices.
-        if not isinstance(index, tuple):
-            index = (index,)
-        fixed = []
-        new_axes = [k for k, i in enumerate(index) if i is None]
-        n_newdims = len(new_axes)
-        length, dims = len(index), self.ndim + n_newdims
-        for slice_ in index:
-            if slice_ is Ellipsis:
-                fixed.extend([slice(None)]*(dims - length + 1))
-                length = len(fixed)
-            elif isinstance(slice_, int):
-                fixed.append(slice(slice_, slice_ + 1, 1))
-            else:
-                fixed.append(slice_)
-        index = tuple(fixed)
-        if len(index) < dims:
-            index += (slice(None),) * (dims - len(index))
-        if n_newdims > 0:
-            # temporarily remove the new axes
-            new_axes = [k for k, i in enumerate(index) if i is None]
-            index = list(index)
-            for k in new_axes[::-1]:
-                index.pop(k)
-            index = tuple(index)
-        # Take the slice.  This always copies!
-        assert (type(index) is tuple) and (len(index) == self.ndim)
-        i, j = index[self.face[0]], index[self.face[1]]
-        value = self.value[i, j].new()
-        shape = [0 if k in self.face else len([object][x])
-                 for k, x in enumerate(index)]
-        shape[self.face[0]] = value.shape[0]
-        shape[self.face[1]] = value.shape[1]
-        out = FakeInnerTensor(value, shape=tuple(shape), face=self.face)
-        if n_newdims == 0:
-            return out
-        else:
-            # restore the new axes that were previously removed
-            shape = list(out.shape)
-            face = out.face[1]
-            for k in new_axes:
-                shape.insert(k, 1)
-                if k <= face:
-                    face += 1
-            return out.reshape(tuple(shape), face=(0, face))
-    
-    def reshape(self, *args, face=None):
-        # New shape is assumed to preserve shape of underlying grblas matrix
-        shape, = args
-        prod = lambda x, y: x*y
-        volume = reduce(prod, self.value.shape)
-        no_len_axes = [i for i, sz in enumerate(shape) if sz == -1]
-        if len(no_len_axes) == 1:
-            shape[no_len_axes[0]] = volume//(-reduce(prod, shape))
-        new_volume = reduce(prod, shape)
-        if volume == new_volume:
-            new_ndim = len(shape)
-            if new_ndim == 2:
-                if shape == self.value.shape:
-                    return wrap_inner(self.value)
-            elif new_ndim > 2:
-                if face is None:
-                    face = [k for k, x in enumerate(shape)
-                            if (x > 1) and (k > 0)]
-                    n = len(face)
-                    if n == 0:
-                        face = self.face
-                    elif n == 1:
-                        face = (self.face[0], face[0])
-                return FakeInnerTensor(self.value, shape=shape, face=face)
-        raise NotImplementedError()
-
-
-# Dask task functions
+        self.value = grblas_matrix
+        self.shape = (grblas_matrix.shape[0], 1, grblas_matrix.shape[1])
 
 
 def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
@@ -687,44 +594,19 @@ def _matmul2(op, dtype, a, b, computing_meta=None):
     if computing_meta:
         return np.empty(0, dtype=dtype)
 
-    return FakeInnerTensor(op(a.value @ b.value).new(dtype=dtype),
-                           face=(0, 2))
+    return FakeInnerTensor(op(a.value @ b.value).new(dtype=dtype))
 
 
 def _sum_by_monoid(monoid, a, axis=None, keepdims=None):
-    axis, = axis
-    demote = lambda x: x if x < axis else (x - 1)
     if type(a) is not list:
-        if keepdims:
-            return a
-        else:
-            if a.shape[axis] == 1:
-                # remove axis, relocating face
-                face0 = demote(a.face[0])
-                face1 = demote(a.face[1])
-                before = a.shape[:axis]
-                beyond = () if axis == a.ndim - 1 else a.shape[axis + 1:]
-                return a.reshape(before + beyond, face=(face0, face1))
-            else:
-                raise NotImplementedError()
-    vals = [x.value for x in a]
-    out = FakeInnerTensor(
-        reduce(lambda x, y: x.ewise_add(y, monoid).new(), vals),
-        shape=a[0].shape, face=a[0].face)
-    if keepdims:
-        return out
-    # remove axis
-    if a[0].ndim == 3:
-        return wrap_inner(out.value)    # now 2D
-    if a[0].ndim == 4:
-        # remember to relocate face
-        face0 = demote(a[0].face[0])
-        face1 = demote(a[0].face[1])
-        before = a[0].shape[:axis]
-        beyond = () if axis == a[0].ndim - 1 else a[0].shape[axis + 1:]
-        return out.reshape(before + beyond, face=(face0, face1)) # now 3D
+        out = a
     else:
-        raise NotImplementedError()
+        vals = [x.value for x in a]
+        out = reduce(lambda x, y: x.ewise_add(y, monoid).new(), vals)
+        out = FakeInnerTensor(out)
+    if not keepdims:
+        out = wrap_inner(out.value)
+    return out
 
 
 def sum_by_monoid(monoid, a, axis=None, dtype=None, keepdims=False, split_every=None, out=None, meta=None):
