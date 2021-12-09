@@ -174,6 +174,7 @@ def test_update():
         compare(f, (s, v[0]), (ds, dv[0]))
 
 
+@pytest.mark.xfail
 def test_attrs():
     s = gb.Scalar.from_value(3)
     ds = dgb.Scalar.from_value(s)

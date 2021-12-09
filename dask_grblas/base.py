@@ -14,7 +14,7 @@ class InnerBaseType:
 
 class BaseType:
     _expect_type = _expect_type
-    
+
     def isequal(self, other, *, check_dtype=False):
         from .scalar import PythonScalar
         # if type(other) is not type(self):

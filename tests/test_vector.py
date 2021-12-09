@@ -164,10 +164,9 @@ def test_reduce(vs):
             ds = dgb.Scalar.from_value(s.dup())
             compare(f, (s, v), (ds, dv))
 
-            if f is not f2:  # XXX: uncomment when updated to SS 3.3.1 and fixed in grblas
-                s = gb.Scalar.from_value(1.23)
-                ds = dgb.Scalar.from_value(s.dup())
-                compare(f, (s, v), (ds, dv))
+            s = gb.Scalar.from_value(1.23)
+            ds = dgb.Scalar.from_value(s.dup())
+            compare(f, (s, v), (ds, dv))
 
 
 def test_apply(vs):
@@ -243,6 +242,7 @@ def test_extract(vs, ws):
                 compare(f, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
 
 
+@pytest.mark.xfail
 def test_attrs(vs):
     v, dvs = vs
     dv = dvs[0]

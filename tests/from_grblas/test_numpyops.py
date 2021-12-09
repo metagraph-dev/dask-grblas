@@ -7,7 +7,7 @@ import grblas.unary.numpy as npunary
 import grblas.binary.numpy as npbinary
 import grblas.monoid.numpy as npmonoid
 import grblas.semiring.numpy as npsemiring
-from grblas import ops, monoid, binary
+from grblas import operator as ops, monoid, binary
 
 
 def test_numpyops_dir():
@@ -19,20 +19,24 @@ def test_numpyops_dir():
 
 @pytest.mark.slow
 def test_bool_doesnt_get_too_large():
+    import grblas
     a = dgb.Vector.from_values([0, 1, 2, 3], [True, False, True, False])
     b = dgb.Vector.from_values([0, 1, 2, 3], [True, True, False, False])
-    z = a.ewise_mult(b, monoid.numpy.add).new()
-    # z.show()
-    x, y = z.to_values()
-    assert y == (True, True, True, False)
+    if grblas.config["mapnumpy"]:
+        with pytest.raises(KeyError, match="plus does not work with BOOL"):
+            z = a.ewise_mult(b, monoid.numpy.add).new()
+    else:
+        z = a.ewise_mult(b, monoid.numpy.add).new()
+        x, y = z.to_values()
+        np.testing.assert_array_equal(y, (True, True, True, False))
 
     op = ops.UnaryOp.register_anonymous(lambda x: np.add(x, x))
     z = a.apply(op).new()
-    # z.show()
     x, y = z.to_values()
-    assert y == (True, False, True, False)
+    np.testing.assert_array_equal(y, (True, False, True, False))
 
 
+@pytest.mark.xfail
 @pytest.mark.slow
 def test_npunary():
     L = list(range(5))
@@ -78,6 +82,7 @@ def test_npunary():
             assert compare
 
 
+@pytest.mark.xfail
 @pytest.mark.slow
 def test_npbinary():
     values1 = [0, 0, 1, 1, 2, 5]
@@ -156,6 +161,7 @@ def test_npbinary():
             assert compare
 
 
+@pytest.mark.xfail
 @pytest.mark.slow
 def test_npmonoid():
     values1 = [0, 0, 1, 1, 2, 5]
@@ -241,6 +247,7 @@ def test_npmonoid():
             assert gb_result.value == np_result
 
 
+@pytest.mark.xfail
 @pytest.mark.slow
 def test_npsemiring():
     for monoid_name, binary_name in itertools.product(

@@ -74,7 +74,7 @@ class GbDelayed:
         # on `b`/RHS -2 dimension is "contracted" with the last dimension
         # of `a`, last dimension of `b` is `b` specific
         rhs_ind = (1, 2)
-    
+
         out = da.core.blockwise(
             partial(_matmul2, op, meta.dtype),
             out_ind,
@@ -87,7 +87,7 @@ class GbDelayed:
             concatenate=False,
             meta=FakeInnerTensor(sum_meta.value)
         )
-        
+
         # out is 3D (a slab or a bar)
         out = sum_by_monoid(op.monoid, out, axis=-2, meta=sum_meta) # 2D
         if a_is_1d:
@@ -165,6 +165,7 @@ class GbDelayed:
                 dtype=np_dtype(meta.dtype),
             )
         elif self.method_name in {'vxm', 'mxv'}:
+            # TODO: handle dtype and mask
             delayed = self._matmul2(meta)
         else:
             raise ValueError(self.method_name)
@@ -256,7 +257,7 @@ class GbDelayed:
                 )
         elif self.method_name in {'vxm', 'mxv'}:
             delayed = self._matmul2(meta)
-            updating(mask=mask, accum=accum) << get_return_type(meta)(delayed)
+            updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
             return
         else:
             raise ValueError(self.method_name)
@@ -424,7 +425,7 @@ def _reduce_axis(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None,
         return wrap_inner(x.value.reduce_rowwise(op).new(dtype=gb_dtype))
     if axis == (0,):
         return wrap_inner(x.value.reduce_columnwise(op).new(dtype=gb_dtype))
-    
+
 
 def _reduce_axis_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
     """ Combine results from _reduce_axis on each chunk"""

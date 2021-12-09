@@ -87,7 +87,7 @@ def As():
     ]
     A = gb.Matrix.from_values(*data)
     dA0 = dgb.Matrix.from_matrix(A)
-    
+
     dA1 = dgb.row_stack([
         dgb.Matrix.from_matrix(
             gb.Matrix.from_values([3, 0, 3, 0, 1, 2, 1],
@@ -178,7 +178,7 @@ def Cs():
     ]
     C = gb.Matrix.from_values(*data)
     dC0 = dgb.Matrix.from_matrix(C)
-    
+
     dC1 = dgb.row_stack([
         dgb.Matrix.from_matrix(
             gb.Matrix.from_values([3, 0, 3, 0, 2, 2, 1],
@@ -225,7 +225,7 @@ def Bs():
     ]
     B = gb.Matrix.from_values(*data)
     dB0 = dgb.Matrix.from_matrix(B)
-    
+
     dB1 = dgb.row_stack([
         dgb.Matrix.from_matrix(
             gb.Matrix.from_values([0, 0, 0, 1, 2, 2, 3, 6, 6, 1, 2, 3, 2, 4, 5, 4],
@@ -374,17 +374,17 @@ def test_reduce_axis(As, vs, ws):
                 v = gb.Vector.new(int, 7)
                 dv = dgb.Vector.from_vector(v.dup())
                 compare(f, (v, A), (dv, dA))
-    
+
                 v = gb.Vector.new(float, 7)
                 dv = dgb.Vector.from_vector(v.dup())
                 compare(f, (v, A), (dv, dA))
-    
+
                 v0, dvs = vs
                 for dv0 in dvs:
                     v = v0.dup()
                     dv = dv0.dup()
                     compare(f, (v, A), (dv, dA))
-        
+
                 if f is not f2:
                     w0, dws = ws
                     for dw0 in dws:
@@ -427,10 +427,9 @@ def test_reduce_scalar(As):
             ds = dgb.Scalar.from_value(s.dup())
             compare(f, (s, A), (ds, dA))
 
-            if f is not f2:  # XXX: uncomment when updated to SS 3.3.1 and fixed in grblas
-                s = gb.Scalar.from_value(1.23)
-                ds = dgb.Scalar.from_value(s.dup())
-                compare(f, (s, A), (ds, dA))
+            s = gb.Scalar.from_value(1.23)
+            ds = dgb.Scalar.from_value(s.dup())
+            compare(f, (s, A), (ds, dA))
 
 
 @pytest.mark.slow
@@ -529,17 +528,17 @@ def test_matmult(As, vs, ws, vms, sms):
                     v1 = gb.Vector.new(int, 7)
                     dv1 = dgb.Vector.from_vector(v1.dup())
                     compare(f, (v1, *gb_args), (dv1, *dgb_args))
-                
+
                     v1 = gb.Vector.new(float, 7)
                     dv1 = dgb.Vector.from_vector(v1.dup())
                     compare(f, (v1, *gb_args), (dv1, *dgb_args))
-                
+
                     v0, dv0s = vs
                     for dv0 in dv0s:
                         v1 = v0.dup()
                         dv1 = dv0.dup()
                         compare(f, (v1, *gb_args), (dv1, *dgb_args))
-                
+
                     w0, dw0s = ws
                     for dw0 in dw0s:
                         w1 = w0.dup()
@@ -551,24 +550,24 @@ def test_matmult(As, vs, ws, vms, sms):
                         for dmask in dmasks:
                             gb_mask = getattr(mask, attr)
                             dgb_mask = getattr(dmask, attr)
-    
+
                             v1 = gb.Vector.new(int, 7)
                             dv1 = dgb.Vector.from_vector(v1.dup())
                             compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
                             compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
-    
+
                             v1 = gb.Vector.new(float, 7)
                             dv1 = dgb.Vector.from_vector(v1.dup())
                             compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
                             compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
-    
+
                             v0, dv0s = vs
                             for dv0 in dv0s:
                                 v1 = v0.dup()
                                 dv1 = dv0.dup()
                                 compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
                                 compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
-    
+
                             w0, dw0s = ws
                             for dw0 in dw0s:
                                 w1 = w0.dup()
@@ -577,6 +576,7 @@ def test_matmult(As, vs, ws, vms, sms):
                                 compare(f, (w1, ~gb_mask, *gb_args), (dw1, ~dgb_mask, *dgb_args))
 
 
+@pytest.mark.xfail
 def test_attrs(vs):
     A, dvs = vs
     dv = dvs[0]
