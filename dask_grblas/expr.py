@@ -550,10 +550,12 @@ def asOneColMatrix(inner_vector):
     vector = inner_vector.value
     contents = vector.ss.export(format='sparse', raw=True, give_ownership=False)
     return wrap_inner(gb.Matrix.ss.import_csc(
-        nrows=contents['size'], ncols=1,
+        nrows=contents['size'],
+        ncols=1,
         indptr=np.array([0, contents['nvals']], dtype=contents['indices'].dtype),
         values=contents['values'],
         row_indices=contents['indices'],
+        is_iso=contents['is_iso'],
         take_ownership=False
     ))
 
@@ -562,10 +564,12 @@ def asOneRowMatrix(inner_vector):
     vector = inner_vector.value
     contents = vector.ss.export(format='sparse', raw=True, give_ownership=False)
     return wrap_inner(gb.Matrix.ss.import_csr(
-        ncols=contents['size'], nrows=1,
+        ncols=contents['size'],
+        nrows=1,
         indptr=np.array([0, contents['nvals']], dtype=contents['indices'].dtype),
         values=contents['values'],
         col_indices=contents['indices'],
+        is_iso=contents['is_iso'],
         take_ownership=False
     ))
 
