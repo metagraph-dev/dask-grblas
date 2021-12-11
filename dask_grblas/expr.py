@@ -65,6 +65,8 @@ class GbDelayed:
             b_is_1d = True
             b = b.map_blocks(asOneColMatrix, new_axis=1, meta=asOneColMatrix(wrap_inner(meta)))
             sum_meta = asOneColMatrix(wrap_inner(meta))
+        elif not a_is_1d:
+            sum_meta = wrap_inner(meta)
 
         # out_ind includes all dimensions to prevent contraction
         # in the blockwise below
@@ -164,7 +166,7 @@ class GbDelayed:
                 *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
                 dtype=np_dtype(meta.dtype),
             )
-        elif self.method_name in {'vxm', 'mxv'}:
+        elif self.method_name in {'vxm', 'mxv', 'mxm'}:
             # TODO: handle dtype and mask
             delayed = self._matmul2(meta)
         else:
@@ -255,7 +257,7 @@ class GbDelayed:
                     *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
                     dtype=np_dtype(meta.dtype),
                 )
-        elif self.method_name in {'vxm', 'mxv'}:
+        elif self.method_name in {'vxm', 'mxv', 'mxm'}:
             delayed = self._matmul2(meta)
             updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
             return

@@ -180,13 +180,13 @@ def test_set_element(A):
 ###         del A[3:5, 3]
 
 
-### def test_mxm(A):
-###     C = A.mxm(A, semiring.plus_times).new()
-###     result = Matrix.from_values(
-###         [0, 0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 4, 5, 6, 6, 6],
-###         [0, 2, 4, 6, 2, 3, 4, 5, 2, 1, 3, 5, 2, 5, 0, 2, 5],
-###         [9, 9, 16, 8, 20, 28, 12, 56, 1, 6, 9, 3, 7, 1, 21, 21, 26])
-###     assert C.isequal(result)
+def test_mxm(A):
+    C = A.mxm(A, semiring.plus_times).new()
+    result = Matrix.from_values(
+        [0, 0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 4, 5, 6, 6, 6],
+        [0, 2, 4, 6, 2, 3, 4, 5, 2, 1, 3, 5, 2, 5, 0, 2, 5],
+        [9, 9, 16, 8, 20, 28, 12, 56, 1, 6, 9, 3, 7, 1, 21, 21, 26])
+    assert C.isequal(result)
 
 
 ### def test_mxm_transpose(A):
@@ -205,56 +205,56 @@ def test_set_element(A):
 ###     assert C.isequal(result2)
 
 
-### def test_mxm_nonsquare():
-###     A = Matrix.from_values([0, 0, 0], [0, 2, 4], [1, 2, 3], nrows=1, ncols=5)
-###     B = Matrix.from_values([0, 2, 4], [0, 0, 0], [10, 20, 30], nrows=5, ncols=1)
-###     C = Matrix.new(A.dtype, nrows=1, ncols=1)
-###     C << A.mxm(B, semiring.max_plus)
-###     assert C[0, 0].value == 33
-###     C1 = A.mxm(B, semiring.max_plus).new()
-###     assert C1.isequal(C)
+def test_mxm_nonsquare():
+    A = Matrix.from_values([0, 0, 0], [0, 2, 4], [1, 2, 3], nrows=1, ncols=5)
+    B = Matrix.from_values([0, 2, 4], [0, 0, 0], [10, 20, 30], nrows=5, ncols=1)
+    C = Matrix.new(A.dtype, nrows=1, ncols=1)
+    C << A.mxm(B, semiring.max_plus)
+    assert C[0, 0].value == 33
+    C1 = A.mxm(B, semiring.max_plus).new()
+    assert C1.isequal(C)
 ###     C2 = A.T.mxm(B.T, semiring.max_plus).new()
 ###     assert C2.nrows == 5
 ###     assert C2.ncols == 5
 
 
-### def test_mxm_mask(A):
-###     val_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7)
-###     struct_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [1, 0, 0], nrows=7, ncols=7)
-###     C = A.dup()
-###     C(val_mask.V) << A.mxm(A, semiring.plus_times)
-###     result = Matrix.from_values(
-###         [0, 0, 0, 1, 1, 2, 3, 3, 3, 4, 4, 5, 6, 6, 6],
-###         [1, 2, 3, 4, 6, 5, 0, 2, 3, 2, 5, 2, 2, 3, 4],
-###         [2, 9, 3, 8, 4, 1, 3, 3, 9, 7, 7, 1, 5, 7, 3])
-###     assert C.isequal(result)
-###     C = A.dup()
-###     C(~val_mask.V) << A.mxm(A, semiring.plus_times)
-###     result2 = Matrix.from_values(
-###         [0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 5, 6, 6, 6],
-###         [0, 4, 6, 2, 3, 4, 5, 2, 1, 5, 5, 0, 2, 5],
-###         [9, 16, 8, 20, 28, 12, 56, 1, 6, 3, 1, 21, 21, 26])
-###     assert C.isequal(result2)
-###     C = A.dup()
-###     C(struct_mask.S, replace=True).update(A.mxm(A, semiring.plus_times))
-###     result3 = Matrix.from_values(
-###         [0, 3, 4],
-###         [2, 3, 2],
-###         [9, 9, 7], nrows=7, ncols=7)
-###     assert C.isequal(result3)
-###     C2 = A.mxm(A, semiring.plus_times).new(mask=struct_mask.S)
+def test_mxm_mask(A):
+    val_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7)
+    struct_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [1, 0, 0], nrows=7, ncols=7)
+    C = A.dup()
+    C(val_mask.V) << A.mxm(A, semiring.plus_times)
+    result = Matrix.from_values(
+        [0, 0, 0, 1, 1, 2, 3, 3, 3, 4, 4, 5, 6, 6, 6],
+        [1, 2, 3, 4, 6, 5, 0, 2, 3, 2, 5, 2, 2, 3, 4],
+        [2, 9, 3, 8, 4, 1, 3, 3, 9, 7, 7, 1, 5, 7, 3])
+    assert C.isequal(result)
+    C = A.dup()
+    C(~val_mask.V) << A.mxm(A, semiring.plus_times)
+    result2 = Matrix.from_values(
+        [0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 5, 6, 6, 6],
+        [0, 4, 6, 2, 3, 4, 5, 2, 1, 5, 5, 0, 2, 5],
+        [9, 16, 8, 20, 28, 12, 56, 1, 6, 3, 1, 21, 21, 26])
+    assert C.isequal(result2)
+    C = A.dup()
+    C(struct_mask.S, replace=True).update(A.mxm(A, semiring.plus_times))
+    result3 = Matrix.from_values(
+        [0, 3, 4],
+        [2, 3, 2],
+        [9, 9, 7], nrows=7, ncols=7)
+    assert C.isequal(result3)
+    C2 = A.mxm(A, semiring.plus_times).new(mask=struct_mask.S)
 ###     assert C2.isequal(result3)
 ###     with pytest.raises(TypeError, match="Mask must indicate"):
 ###         A.mxm(A).new(mask=struct_mask)
 
 
-### def test_mxm_accum(A):
-###     A(binary.plus) << A.mxm(A, semiring.plus_times)
-###     result = Matrix.from_values(
-###         [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 6, 6],
-###         [0, 1, 2, 3, 4, 6, 2, 3, 4, 5, 6, 2, 5, 0, 1, 2, 3, 5, 2, 5, 2, 5, 0, 2, 3, 4, 5],
-###         [9, 2, 9, 3, 16, 8, 20, 28, 20, 56, 4, 1, 1, 3, 6, 3, 9, 3, 7, 7, 1, 1, 21, 26, 7, 3, 26])
-###     assert A.isequal(result)
+def test_mxm_accum(A):
+    A(binary.plus) << A.mxm(A, semiring.plus_times)
+    result = Matrix.from_values(
+        [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 6, 6],
+        [0, 1, 2, 3, 4, 6, 2, 3, 4, 5, 6, 2, 5, 0, 1, 2, 3, 5, 2, 5, 2, 5, 0, 2, 3, 4, 5],
+        [9, 2, 9, 3, 16, 8, 20, 28, 20, 56, 4, 1, 1, 3, 6, 3, 9, 3, 7, 7, 1, 1, 21, 26, 7, 3, 26])
+    assert A.isequal(result)
 
 
 def test_mxv(A, v):
