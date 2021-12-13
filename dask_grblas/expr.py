@@ -15,16 +15,33 @@ class GbDelayed:
         self.kwargs = kwargs
         self._meta = meta
 
-    def _matmult(self, meta, updating=None, mask=None, accum=None):
-        a = self.parent._delayed
-        b = self.args[0]._delayed
+    def _matmul(self, meta, updating=None, mask=None, accum=None):
+        left_operand = self.parent
+        right_operand = self.args[0]
         op = self.args[1]
-        lhs_ind = 'ij' if (a.ndim == 2) else 'j'
-        rhs_ind = 'jk' if (b.ndim == 2) else 'j'
-        if lhs_ind == 'ij':
-            out_ind = 'ik' if (rhs_ind == 'jk') else 'i'
+
+        if (len(left_operand.shape) == 2) and left_operand._is_transposed:
+            a = left_operand._matrix._delayed
+            at = True
+            lhs_ind = 'ji'
         else:
-            out_ind = 'k' if (rhs_ind == 'jk') else ''
+            a = left_operand._delayed
+            at = False
+            lhs_ind = 'ij' if (a.ndim == 2) else 'j'
+
+        if (len(right_operand.shape) == 2) and right_operand._is_transposed:
+            b = right_operand._matrix._delayed
+            bt = True
+            rhs_ind = 'kj'
+        else:
+            b = right_operand._delayed
+            bt = False
+            rhs_ind = 'jk' if (b.ndim == 2) else 'j'
+
+        if len(lhs_ind) == 2:
+            out_ind = 'ik' if (len(rhs_ind) == 2) else 'i'
+        else:
+            out_ind = 'k' if (len(rhs_ind) == 2) else ''
 
         not_updating = updating is None
         no_mask = mask is None
@@ -41,7 +58,7 @@ class GbDelayed:
                     a, lhs_ind, b, rhs_ind]
 
         return da.core.blockwise(
-            partial(_matmul, op, meta.dtype,
+            partial(_matmul, op, at, bt, meta.dtype,
                     not_updating,
                     no_mask, grblas_mask_type,
                     accum),
@@ -51,8 +68,33 @@ class GbDelayed:
         )
 
     def _matmul2(self, meta, updating=None, mask=None, accum=None):
-        a = self.parent._delayed
-        b = self.args[0]._delayed
+        left_operand = self.parent
+        right_operand = self.args[0]
+        # out_ind includes all dimensions to prevent full contraction
+        # in the blockwise below
+        # axis `1` is chosen to be the "contraction" axis
+        out_ind = (0, 1, 2)
+
+        # lhs_ind includes LHS dimensions
+        if (len(left_operand.shape) == 2) and left_operand._is_transposed:
+            a = left_operand._matrix._delayed
+            at = True
+            lhs_ind = (1, 0)
+        else:
+            a = left_operand._delayed
+            at = False
+            lhs_ind = (0, 1)
+
+        # rhs_ind includes RHS dimensions
+        if (len(right_operand.shape) == 2) and right_operand._is_transposed:
+            b = right_operand._matrix._delayed
+            bt = True
+            rhs_ind = (2, 1)
+        else:
+            b = right_operand._delayed
+            bt = False
+            rhs_ind = (1, 2)
+
         op = self.args[1]
         a_is_1d = False
         if a.ndim == 1:
@@ -68,23 +110,14 @@ class GbDelayed:
         elif not a_is_1d:
             sum_meta = wrap_inner(meta)
 
-        # out_ind includes all dimensions to prevent contraction
-        # in the blockwise below
-        out_ind = (0, 1, 2)
-        # lhs_ind includes `a`/LHS dimensions
-        lhs_ind = (0, 1)
-        # on `b`/RHS -2 dimension is "contracted" with the last dimension
-        # of `a`, last dimension of `b` is `b` specific
-        rhs_ind = (1, 2)
-
         out = da.core.blockwise(
-            partial(_matmul2, op, meta.dtype),
+            partial(_matmul2, op, meta.dtype, at, bt),
             out_ind,
             a,
             lhs_ind,
             b,
             rhs_ind,
-            adjust_chunks={lhs_ind[-1]: 1},
+            adjust_chunks={1: 1},
             dtype=np.result_type(a, b),
             concatenate=False,
             meta=FakeInnerTensor(sum_meta.value)
@@ -522,14 +555,24 @@ def _update_expr_full(method_name, updating, accum, mask, mask_type, replace, x,
     return updating
 
 
-def _matmul(op, dtype, not_updating, no_mask, mask_type, accum, *args, computing_meta=None):
+def _check_transpose(x, xt):
+    if xt:
+        return x.value.T
+    return x.value
+
+
+def _matmul(op, at, bt, dtype, not_updating, no_mask, mask_type, accum, *args, computing_meta=None):
     if computing_meta:
         return np.empty(0, dtype=dtype)
 
     if not_updating:
         a_blocks, b_blocks = args
-        vals = [op(a.value @ b.value).new(dtype=dtype)
-                for a, b in zip(a_blocks, b_blocks)]
+        vals = [
+            op(
+                _check_transpose(a, at) @ _check_transpose(b, bt)
+            ).new(dtype=dtype)
+            for a, b in zip(a_blocks, b_blocks)
+        ]
         return wrap_inner(reduce(lambda x, y: x.ewise_add(y, op.monoid).new(),
                                  vals))
     else:
@@ -540,8 +583,12 @@ def _matmul(op, dtype, not_updating, no_mask, mask_type, accum, *args, computing
             u, mask, a_blocks, b_blocks = args
             mask = mask_type(mask.value)
 
-        vals = [op(a.value @ b.value).new(dtype=dtype)
-                for a, b in zip(a_blocks, b_blocks)]
+        vals = [
+            op(
+                _check_transpose(a, at) @ _check_transpose(b, bt)
+            ).new(dtype=dtype)
+            for a, b in zip(a_blocks, b_blocks)
+        ]
         gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(),
                         vals)
         u.value(mask=mask, accum=accum) << gb_obj
@@ -597,11 +644,10 @@ def asVector(matrix):
         raise NotImplementedError()
 
 
-def _matmul2(op, dtype, a, b, computing_meta=None):
-    if computing_meta:
-        return np.empty(0, dtype=dtype)
-
-    return FakeInnerTensor(op(a.value @ b.value).new(dtype=dtype))
+def _matmul2(op, dtype, at, bt, a, b, computing_meta=None):
+    left = _check_transpose(a, at)
+    right = _check_transpose(b, bt)
+    return FakeInnerTensor(op(left @ right).new(dtype=dtype))
 
 
 def _sum_by_monoid(monoid, a, axis=None, keepdims=None):

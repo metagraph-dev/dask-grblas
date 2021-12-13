@@ -145,8 +145,8 @@ class Vector(BaseType):
         return GbDelayed(self, 'ewise_mult', other, op, meta=meta)
 
     def vxm(self, other, op=semiring.plus_times):
-        from .matrix import Matrix
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
+        from .matrix import Matrix, TransposedMatrix
+        assert type(other) in (Matrix, TransposedMatrix)
         meta = self._meta.vxm(other._meta, op=op)
         return GbDelayed(self, 'vxm', other, op, meta=meta)
 

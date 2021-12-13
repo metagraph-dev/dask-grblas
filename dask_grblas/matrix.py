@@ -25,6 +25,9 @@ class InnerMatrix(InnerBaseType):
 
 
 class Matrix(BaseType):
+
+    _is_transposed = False
+
     @classmethod
     def from_delayed(cls, matrix, dtype, nrows, ncols, *, name=None):
         if not isinstance(matrix, Delayed):
@@ -114,7 +117,7 @@ class Matrix(BaseType):
         return GbDelayed(self, 'mxv', other, op, meta=meta)
 
     def mxm(self, other, op=semiring.plus_times):
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
+        assert type(other) in (Matrix, TransposedMatrix)
         meta = self._meta.mxm(other._meta, op=op)
         return GbDelayed(self, 'mxm', other, op, meta=meta)
 
@@ -165,6 +168,9 @@ class Matrix(BaseType):
 
 
 class TransposedMatrix:
+
+    _is_transposed = True
+
     def __init__(self, matrix):
         assert type(matrix) is Matrix
         self._matrix = matrix

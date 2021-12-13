@@ -71,6 +71,66 @@ def sms():
 
 
 @pytest.fixture
+def vms_Matrix():
+    val_mask = gb.Matrix.from_values([0, 1, 3, 4, 6],
+                                     [2, 5, 3, 2, 6],
+                                     [True, True, True, True, True],
+                                     nrows=7, ncols=7)
+    dvm0 = dgb.Matrix.from_matrix(val_mask)
+    dvm1 = dgb.row_stack([
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([0, 1, 3],
+                                  [2, 5, 3],
+                                  [True, True, True],
+                                  ncols=7)),
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([0, 2],
+                                  [2, 6],
+                                  [True, True]))])
+    dvm2 = dgb.column_stack([
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([0, 3, 4],
+                                  [2, 3, 2],
+                                  [True, True, True],
+                                  nrows = 7)),
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([1, 6],
+                                  [1, 2],
+                                  [True, True]))])
+    return val_mask, (dvm0, dvm1, dvm2)
+
+
+@pytest.fixture
+def sms_Matrix():
+    struct_mask = gb.Matrix.from_values([0, 1, 3, 4, 6],
+                                        [2, 5, 3, 2, 6],
+                                        [True, False, True, False, False],
+                                        nrows=7, ncols=7)
+    dsm0 = dgb.Matrix.from_matrix(struct_mask)
+    dsm1 = dgb.row_stack([
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([0, 1, 3],
+                                  [2, 5, 3],
+                                  [True, False, True],
+                                  ncols=7)),
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([0, 2],
+                                  [2, 6],
+                                  [False, False]))])
+    dsm2 = dgb.column_stack([
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([0, 3, 4],
+                                  [2, 3, 2],
+                                  [True, True, False],
+                                  nrows = 7)),
+        dgb.Matrix.from_matrix(
+            gb.Matrix.from_values([1, 6],
+                                  [1, 2],
+                                  [False, False]))])
+    return struct_mask, (dsm0, dsm1, dsm2)
+
+
+@pytest.fixture
 def As():
     #    0 1 2 3 4 5 6
     # 0 [- 2 - 3 - - -]
@@ -485,7 +545,7 @@ def test_update(As, Cs):
 
 
 @pytest.mark.slow
-def test_matmult(As, vs, ws, vms, sms):
+def test_matmul_mxv_vxm(As, vs, ws, vms, sms):
     def f0(method_name, z, x, y):
         z << getattr(x, method_name)(y)
         return z
@@ -498,11 +558,11 @@ def test_matmult(As, vs, ws, vms, sms):
         z(accum=gb.binary.plus) << getattr(x, method_name)(y)
         return z
 
-    def f3(method_name,z, m, x, y):
+    def f3(method_name, z, m, x, y):
         z(mask=m, accum=gb.binary.plus) << getattr(x, method_name)(y)
         return z
 
-    def f4(method_name,z, m, x, y):
+    def f4(method_name, z, m, x, y):
         z(mask=m) << getattr(x, method_name)(y)
         return z
 
@@ -512,68 +572,243 @@ def test_matmult(As, vs, ws, vms, sms):
     for dA in dAs:
         for dv in dvs:
             for method_name in ['mxv', 'vxm']:
-                if method_name == 'mxv':
-                    gb_args = (A, v)
-                    dgb_args = (dA, dv)
-                else:
-                    gb_args = (v, A)
-                    dgb_args = (dv, dA)
-
-                compare(lambda x, y: getattr(x, method_name)(y).new(), gb_args, dgb_args)
-                compare(lambda x, y: getattr(x, method_name)(y, gb.semiring.min_second).new(), gb_args, dgb_args)
-                compare(lambda x, y: getattr(x, method_name)(y).new(dtype=dtypes.FP64), gb_args, dgb_args)
-                compare(lambda x, y: getattr(x, method_name)(y, gb.binary.plus).new(), gb_args, dgb_args, errors=True)
-                for func in [f0, f1, f2]:
-                    f = partial(func, method_name)
-                    v1 = gb.Vector.new(int, 7)
-                    dv1 = dgb.Vector.from_vector(v1.dup())
-                    compare(f, (v1, *gb_args), (dv1, *dgb_args))
-
-                    v1 = gb.Vector.new(float, 7)
-                    dv1 = dgb.Vector.from_vector(v1.dup())
-                    compare(f, (v1, *gb_args), (dv1, *dgb_args))
-
-                    v0, dv0s = vs
-                    for dv0 in dv0s:
-                        v1 = v0.dup()
-                        dv1 = dv0.dup()
+                for transpose in [False, True]:
+                    if method_name == 'mxv':
+                        if transpose:
+                            gb_args = (A.T, v)
+                            dgb_args = (dA.T, dv)
+                        else:
+                            gb_args = (A, v)
+                            dgb_args = (dA, dv)
+                    else:
+                        if transpose:
+                            gb_args = (v, A.T)
+                            dgb_args = (dv, dA.T)
+                        else:
+                            gb_args = (v, A)
+                            dgb_args = (dv, dA)
+    
+                    compare(lambda x, y: getattr(x, method_name)(y).new(), gb_args, dgb_args)
+                    compare(lambda x, y: getattr(x, method_name)(y, gb.semiring.min_second).new(), gb_args, dgb_args)
+                    compare(lambda x, y: getattr(x, method_name)(y).new(dtype=dtypes.FP64), gb_args, dgb_args)
+                    compare(lambda x, y: getattr(x, method_name)(y, gb.binary.plus).new(), gb_args, dgb_args, errors=True)
+                    for func in [f0, f1, f2]:
+                        f = partial(func, method_name)
+                        v1 = gb.Vector.new(int, 7)
+                        dv1 = dgb.Vector.from_vector(v1.dup())
                         compare(f, (v1, *gb_args), (dv1, *dgb_args))
-
-                    w0, dw0s = ws
-                    for dw0 in dw0s:
-                        w1 = w0.dup()
-                        dw1 = dw0.dup()
-                        compare(f, (w1, *gb_args), (dw1, *dgb_args))
-
-                for f in [partial(f3, method_name), partial(f4, method_name)]:
-                    for attr, mask, dmasks in [('V', *vms), ('S', *sms)]:
-                        for dmask in dmasks:
-                            gb_mask = getattr(mask, attr)
-                            dgb_mask = getattr(dmask, attr)
-
-                            v1 = gb.Vector.new(int, 7)
-                            dv1 = dgb.Vector.from_vector(v1.dup())
-                            compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
-                            compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
-
-                            v1 = gb.Vector.new(float, 7)
-                            dv1 = dgb.Vector.from_vector(v1.dup())
-                            compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
-                            compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
-
-                            v0, dv0s = vs
-                            for dv0 in dv0s:
-                                v1 = v0.dup()
-                                dv1 = dv0.dup()
+    
+                        v1 = gb.Vector.new(float, 7)
+                        dv1 = dgb.Vector.from_vector(v1.dup())
+                        compare(f, (v1, *gb_args), (dv1, *dgb_args))
+    
+                        v0, dv0s = vs
+                        for dv0 in dv0s:
+                            v1 = v0.dup()
+                            dv1 = dv0.dup()
+                            compare(f, (v1, *gb_args), (dv1, *dgb_args))
+    
+                        w0, dw0s = ws
+                        for dw0 in dw0s:
+                            w1 = w0.dup()
+                            dw1 = dw0.dup()
+                            compare(f, (w1, *gb_args), (dw1, *dgb_args))
+    
+                    for f in [partial(f3, method_name), partial(f4, method_name)]:
+                        for attr, mask, dmasks in [('V', *vms), ('S', *sms)]:
+                            for dmask in dmasks:
+                                gb_mask = getattr(mask, attr)
+                                dgb_mask = getattr(dmask, attr)
+    
+                                v1 = gb.Vector.new(int, 7)
+                                dv1 = dgb.Vector.from_vector(v1.dup())
                                 compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
                                 compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
+    
+                                v1 = gb.Vector.new(float, 7)
+                                dv1 = dgb.Vector.from_vector(v1.dup())
+                                compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
+                                compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
+    
+                                v0, dv0s = vs
+                                for dv0 in dv0s:
+                                    v1 = v0.dup()
+                                    dv1 = dv0.dup()
+                                    compare(f, (v1, gb_mask, *gb_args), (dv1, dgb_mask, *dgb_args))
+                                    compare(f, (v1, ~gb_mask, *gb_args), (dv1, ~dgb_mask, *dgb_args))
+    
+                                w0, dw0s = ws
+                                for dw0 in dw0s:
+                                    w1 = w0.dup()
+                                    dw1 = dw0.dup()
+                                    compare(f, (w1, gb_mask, *gb_args), (dw1, dgb_mask, *dgb_args))
+                                    compare(f, (w1, ~gb_mask, *gb_args), (dw1, ~dgb_mask, *dgb_args))
 
-                            w0, dw0s = ws
-                            for dw0 in dw0s:
-                                w1 = w0.dup()
-                                dw1 = dw0.dup()
-                                compare(f, (w1, gb_mask, *gb_args), (dw1, dgb_mask, *dgb_args))
-                                compare(f, (w1, ~gb_mask, *gb_args), (dw1, ~dgb_mask, *dgb_args))
+
+@pytest.mark.slow
+def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
+    def f0(z, x, y):
+        z << x.mxm(y)
+        return z
+
+    def g0(z, x, y):
+        z << x.T.mxm(y)
+        return z
+
+    def h0(z, x, y):
+        z << x.mxm(y.T)
+        return z
+
+    def i0(z, x, y):
+        z << x.T.mxm(y.T)
+        return z
+
+    def f1(z, x, y):
+        z() << x.mxm(y)
+        return z
+
+    def g1(z, x, y):
+        z() << x.T.mxm(y)
+        return z
+
+    def h1(z, x, y):
+        z() << x.mxm(y.T)
+        return z
+
+    def i1(z, x, y):
+        z() << x.T.mxm(y.T)
+        return z
+
+    def f2(z, x, y):
+        z(accum=gb.binary.plus) << x.mxm(y)
+        return z
+
+    def g2(z, x, y):
+        z(accum=gb.binary.plus) << x.T.mxm(y)
+        return z
+
+    def h2(z, x, y):
+        z(accum=gb.binary.plus) << x.mxm(y.T)
+        return z
+
+    def i2(z, x, y):
+        z(accum=gb.binary.plus) << x.T.mxm(y.T)
+        return z
+
+    def f3(z, m, x, y):
+        z(mask=m, accum=gb.binary.plus) << x.mxm(y)
+        return z
+
+    def g3(z, m, x, y):
+        z(mask=m, accum=gb.binary.plus) << x.T.mxm(y)
+        return z
+
+    def h3(z, m, x, y):
+        z(mask=m, accum=gb.binary.plus) << x.mxm(y.T)
+        return z
+
+    def i3(z, m, x, y):
+        z(mask=m, accum=gb.binary.plus) << x.T.mxm(y.T)
+        return z
+
+    def f4(z, m, x, y):
+        z(mask=m) << x.mxm(y)
+        return z
+
+    def g4(z, m, x, y):
+        z(mask=m) << x.T.mxm(y)
+        return z
+
+    def h4(z, m, x, y):
+        z(mask=m) << x.mxm(y.T)
+        return z
+
+    def i4(z, m, x, y):
+        z(mask=m) << x.T.mxm(y.T)
+        return z
+
+    A, dAs = As
+    B, dBs = As
+
+    for dA in dAs:
+        for dB in dAs:
+            gb_args = (A, B)
+            dgb_args = (dA, dB)
+
+            compare(lambda x, y: x.mxm(y).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.T.mxm(y).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.mxm(y.T).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.T.mxm(y.T).new(), gb_args, dgb_args)
+
+            compare(lambda x, y: x.mxm(y, gb.semiring.min_second).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.T.mxm(y, gb.semiring.min_second).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.mxm(y.T, gb.semiring.min_second).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.T.mxm(y.T, gb.semiring.min_second).new(), gb_args, dgb_args)
+
+            compare(lambda x, y: x.mxm(y).new(dtype=dtypes.FP64), gb_args, dgb_args)
+            compare(lambda x, y: x.T.mxm(y).new(dtype=dtypes.FP64), gb_args, dgb_args)
+            compare(lambda x, y: x.mxm(y.T).new(dtype=dtypes.FP64), gb_args, dgb_args)
+            compare(lambda x, y: x.T.mxm(y.T).new(dtype=dtypes.FP64), gb_args, dgb_args)
+
+            compare(lambda x, y: x.mxm(y, gb.binary.plus).new(), gb_args, dgb_args, errors=True)
+            compare(lambda x, y: x.T.mxm(y, gb.binary.plus).new(), gb_args, dgb_args, errors=True)
+            compare(lambda x, y: x.mxm(y.T, gb.binary.plus).new(), gb_args, dgb_args, errors=True)
+            compare(lambda x, y: x.T.mxm(y.T, gb.binary.plus).new(), gb_args, dgb_args, errors=True)
+
+            for f in [f0, f1, f2,
+                      g0, g1, g2, h0, h1, h2, i0, i1, i2
+                     ]:
+                M1 = gb.Matrix.new(int, 7, 7)
+                dM1 = dgb.Matrix.from_matrix(M1.dup())
+                compare(f, (M1, *gb_args), (dM1, *dgb_args))
+
+                M1 = gb.Matrix.new(float, 7, 7)
+                dM1 = dgb.Matrix.from_matrix(M1.dup())
+                compare(f, (M1, *gb_args), (dM1, *dgb_args))
+
+                M0, dM0s = As
+                for dM0 in dM0s:
+                    M1 = M0.dup()
+                    dM1 = dM0.dup()
+                    compare(f, (M1, *gb_args), (dM1, *dgb_args))
+
+                P0, dP0s = As
+                for dP0 in dP0s:
+                    P1 = P0.dup()
+                    dP1 = dP0.dup()
+                    compare(f, (P1, *gb_args), (dP1, *dgb_args))
+
+            for f in [f3, f4, 
+                      g3, g4, h3, h4, i3, i4
+                     ]:
+                for attr, mask, dmasks in [('V', *vms_Matrix), ('S', *sms_Matrix)]:
+                    for dmask in dmasks:
+                        gb_mask = getattr(mask, attr)
+                        dgb_mask = getattr(dmask, attr)
+
+                        M1 = gb.Matrix.new(int, 7, 7)
+                        dM1 = dgb.Matrix.from_matrix(M1.dup())
+                        compare(f, (M1, gb_mask, *gb_args), (dM1, dgb_mask, *dgb_args))
+                        compare(f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args))
+
+                        M1 = gb.Matrix.new(float, 7, 7)
+                        dM1 = dgb.Matrix.from_matrix(M1.dup())
+                        compare(f, (M1, gb_mask, *gb_args), (dM1, dgb_mask, *dgb_args))
+                        compare(f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args))
+
+                        M0, dM0s = As
+                        for dM0 in dM0s:
+                            M1 = M0.dup()
+                            dM1 = dM0.dup()
+                            compare(f, (M1, gb_mask, *gb_args), (dM1, dgb_mask, *dgb_args))
+                            compare(f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args))
+
+                        P0, dP0s = As
+                        for dP0 in dP0s:
+                            P1 = P0.dup()
+                            dP1 = dP0.dup()
+                            compare(f, (P1, gb_mask, *gb_args), (dP1, dgb_mask, *dgb_args))
+                            compare(f, (P1, ~gb_mask, *gb_args), (dP1, ~dgb_mask, *dgb_args))
 
 
 @pytest.mark.xfail
