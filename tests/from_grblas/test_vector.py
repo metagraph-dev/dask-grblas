@@ -156,10 +156,10 @@ def test_vxm(v, A):
     assert w.isequal(result)
 
 
-### def test_vxm_transpose(v, A):
-###     w = v.vxm(A.T, semiring.plus_times).new()
-###     result = Vector.from_values([0, 1, 6], [5, 16, 13])
-###     assert w.isequal(result)
+def test_vxm_transpose(v, A):
+    w = v.vxm(A.T, semiring.plus_times).new()
+    result = Vector.from_values([0, 1, 6], [5, 16, 13])
+    assert w.isequal(result)
 
 
 def test_vxm_nonsquare(v):
@@ -172,8 +172,8 @@ def test_vxm_nonsquare(v):
     assert w1.isequal(u)
     # Test the transpose case
     v2 = Vector.from_values([0, 1], [1, 2])
-###     w2 = v2.vxm(A.T, semiring.min_plus).new()
-###     assert w2.size == 7
+    w2 = v2.vxm(A.T, semiring.min_plus).new()
+    assert w2.size == 7
 
 
 def test_vxm_mask(v, A):

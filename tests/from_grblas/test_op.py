@@ -347,9 +347,9 @@ def test_semiring_udf():
     A = Matrix.from_values([0, 0, 0, 0, 3, 3, 3, 3],
                            [0, 1, 2, 3, 0, 1, 2, 3],
                            [2, 3, 4, 5, 6, 7, 8, 9], dtype=dtypes.INT32)
-    ### w = v.vxm(A, semiring.extra_twos).new()
-    ### result = Vector.from_values([0, 1, 2, 3], [9, 11, 13, 15], dtype=dtypes.INT32)
-    ### assert w.isequal(result)
+    w = v.vxm(A, semiring.extra_twos).new()
+    result = Vector.from_values([0, 1, 2, 3], [9, 11, 13, 15], dtype=dtypes.INT32)
+    assert w.isequal(result)
 
 
 def test_binary_updates():
