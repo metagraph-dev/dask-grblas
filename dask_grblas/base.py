@@ -174,7 +174,28 @@ class BaseType:
             self.update(expr)
             return
         typ = type(expr)
-        if typ is GbDelayed:
+        if typ is AmbiguousAssignOrExtract:
+            # Extract (w(accum=accum) << v[index])
+            delayed = self._optional_dup()
+            expr_delayed = expr.new(dtype=self.dtype)._delayed
+            self._meta(mask=get_meta(mask), accum=accum, replace=replace)
+            if mask is not None:
+                delayed_mask = mask.mask._delayed
+                grblas_mask_type = get_grblas_type(mask)
+            else:
+                delayed_mask = None
+                grblas_mask_type = None
+            self._delayed = da.core.elemwise(
+                _update_assign,
+                delayed,
+                accum,
+                delayed_mask,
+                grblas_mask_type,
+                replace,
+                expr_delayed,
+                dtype=np_dtype(self._meta.dtype),
+            )
+        elif typ is GbDelayed:
             # v(mask=mask) << left.ewise_mult(right)
             # Meta check handled in Updater
             expr._update(self, mask=mask, accum=accum, replace=replace)
