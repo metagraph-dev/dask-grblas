@@ -72,44 +72,43 @@ class GbDelayed:
         right_operand = self.args[0]
         # out_ind includes all dimensions to prevent full contraction
         # in the blockwise below
-        # axis `1` is chosen to be the "contraction" axis
-        out_ind = (0, 1, 2)
 
-        # lhs_ind includes LHS dimensions
-        if (len(left_operand.shape) == 2) and left_operand._is_transposed:
-            a = left_operand._matrix._delayed
-            at = True
-            lhs_ind = (1, 0)
+        a_ndim = len(left_operand.shape)
+        if a_ndim == 2:
+            out_ind = (0, 1, 2)
+            compress_axis = 1
+            if left_operand._is_transposed:
+                a = left_operand._matrix._delayed
+                at = True
+                lhs_ind = (1, 0)
+            else:
+                a = left_operand._delayed
+                at = False
+                lhs_ind = (0, 1)
         else:
+            compress_axis = 0
+            out_ind = (0, 1)
             a = left_operand._delayed
+            lhs_ind = (0,)
             at = False
-            lhs_ind = (0, 1)
 
-        # rhs_ind includes RHS dimensions
-        if (len(right_operand.shape) == 2) and right_operand._is_transposed:
-            b = right_operand._matrix._delayed
-            bt = True
-            rhs_ind = (2, 1)
+        if len(right_operand.shape) == 2:
+            if right_operand._is_transposed:
+                b = right_operand._matrix._delayed
+                bt = True
+                rhs_ind = (a_ndim, a_ndim - 1)
+            else:
+                b = right_operand._delayed
+                bt = False
+                rhs_ind = (a_ndim - 1, a_ndim)
         else:
+            out_ind = out_ind[:-1]
             b = right_operand._delayed
+            rhs_ind = (a_ndim - 1,)
             bt = False
-            rhs_ind = (1, 2)
 
         op = self.args[1]
-        a_is_1d = False
-        if a.ndim == 1:
-            a_is_1d = True
-            a = a.map_blocks(asOneRowMatrix, new_axis=0, meta=asOneRowMatrix(wrap_inner(meta)))
-            sum_meta = asOneRowMatrix(wrap_inner(meta))
-
-        b_is_1d = False
-        if b.ndim == 1:
-            b_is_1d = True
-            b = b.map_blocks(asOneColMatrix, new_axis=1, meta=asOneColMatrix(wrap_inner(meta)))
-            sum_meta = asOneColMatrix(wrap_inner(meta))
-        elif not a_is_1d:
-            sum_meta = wrap_inner(meta)
-
+        sum_meta = wrap_inner(meta)
         out = da.core.blockwise(
             partial(_matmul2, op, meta.dtype, at, bt),
             out_ind,
@@ -117,18 +116,14 @@ class GbDelayed:
             lhs_ind,
             b,
             rhs_ind,
-            adjust_chunks={1: 1},
+            adjust_chunks={compress_axis: 1},
             dtype=np.result_type(a, b),
             concatenate=False,
-            meta=FakeInnerTensor(sum_meta.value)
+            meta=FakeInnerTensor(meta, compress_axis)
         )
 
-        # out is 3D (a slab or a bar)
-        out = sum_by_monoid(op.monoid, out, axis=-2, meta=sum_meta) # 2D
-        if a_is_1d:
-            out = out[..., 0, :]    # 1D
-        if b_is_1d:
-            out = out[..., 0]   #1D
+        # out has an extra dimension (a slab or a bar), and now reduce along it
+        out = sum_by_monoid(op.monoid, out, axis=compress_axis, meta=sum_meta)
         return out
 
     def _reduce_along_axis(self, axis, dtype):
@@ -432,15 +427,15 @@ class AmbiguousAssignOrExtract:
 
 
 class FakeInnerTensor(InnerBaseType):
-    ndim = 3
-    # Class to help in efficient dask computation of mxv, vxm
-    # and mxm methods.
+    # Class to help in efficient dask computation of mxv, vxm and mxm methods.
 
-    def __init__(self, grblas_matrix):
-        assert type(grblas_matrix) is gb.Matrix
-        self.dtype = np_dtype(grblas_matrix.dtype)
-        self.value = grblas_matrix
-        self.shape = (grblas_matrix.shape[0], 1, grblas_matrix.shape[1])
+    def __init__(self, value, compress_axis):
+        assert type(value) in {gb.Matrix, gb.Vector}
+        self.dtype = np_dtype(value.dtype)
+        self.value = value
+        self.shape = value.shape[:compress_axis] + (1,) + value.shape[compress_axis:]
+        self.ndim = len(value.shape) + 1
+        self.compress_axis = compress_axis
 
 
 def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
@@ -589,76 +584,24 @@ def _matmul(op, at, bt, dtype, not_updating, no_mask, mask_type, accum, *args, c
             ).new(dtype=dtype)
             for a, b in zip(a_blocks, b_blocks)
         ]
-        gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(),
-                        vals)
+        gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(), vals)
         u.value(mask=mask, accum=accum) << gb_obj
         return u
-
-
-def asOneColMatrix(inner_vector):
-    vector = inner_vector.value
-    contents = vector.ss.export(format='sparse', raw=True, give_ownership=False)
-    return wrap_inner(gb.Matrix.ss.import_csc(
-        nrows=contents['size'],
-        ncols=1,
-        indptr=np.array([0, contents['nvals']], dtype=contents['indices'].dtype),
-        values=contents['values'],
-        row_indices=contents['indices'],
-        is_iso=contents['is_iso'],
-        take_ownership=False
-    ))
-
-
-def asOneRowMatrix(inner_vector):
-    vector = inner_vector.value
-    contents = vector.ss.export(format='sparse', raw=True, give_ownership=False)
-    return wrap_inner(gb.Matrix.ss.import_csr(
-        ncols=contents['size'],
-        nrows=1,
-        indptr=np.array([0, contents['nvals']], dtype=contents['indices'].dtype),
-        values=contents['values'],
-        col_indices=contents['indices'],
-        is_iso=contents['is_iso'],
-        take_ownership=False
-    ))
-
-
-def asVector(matrix):
-    if matrix.nrows == 1:
-        contents = matrix.ss.unpack(format='csr', raw=True)
-        return gb.Vector.ss.import_sparse(
-            size=contents['ncols'],
-            indices=contents['col_indices'],
-            values=contents['values'],
-            take_ownership=True
-        )
-    elif matrix.ncols == 1:
-        contents = matrix.ss.unpack(format='csc', raw=True)
-        return gb.Vector.ss.import_sparse(
-            size=contents['nrows'],
-            indices=contents['row_indices'],
-            values=contents['values'],
-            take_ownership=True
-        )
-    else:
-        raise NotImplementedError()
 
 
 def _matmul2(op, dtype, at, bt, a, b, computing_meta=None):
     left = _check_transpose(a, at)
     right = _check_transpose(b, bt)
-    return FakeInnerTensor(op(left @ right).new(dtype=dtype))
+    return op(left @ right).new(dtype=dtype)
 
 
 def _sum_by_monoid(monoid, a, axis=None, keepdims=None):
     if type(a) is not list:
         out = a
     else:
-        vals = [x.value for x in a]
-        out = reduce(lambda x, y: x.ewise_add(y, monoid).new(), vals)
-        out = FakeInnerTensor(out)
+        out = reduce(lambda x, y: x.ewise_add(y, monoid).new(), a)
     if not keepdims:
-        out = wrap_inner(out.value)
+        out = wrap_inner(out)
     return out
 
 
