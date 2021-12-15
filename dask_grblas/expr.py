@@ -183,12 +183,16 @@ class GbDelayed:
         elif self.method_name == 'reduce_columnwise':
             delayed = self._reduce_along_axis(0, meta.dtype)
         elif self.method_name in {'apply', 'ewise_add', 'ewise_mult'}:
+            self_kwargs = {key: (self.kwargs[key]._delayed
+                            if isinstance(self.kwargs[key], BaseType)
+                            else self.kwargs[key])
+                      for key in self.kwargs}
             delayed = da.core.elemwise(
                 _expr_new,
                 self.method_name,
                 dtype,
                 grblas_mask_type,
-                self.kwargs,
+                self_kwargs,
                 self.parent._delayed,
                 delayed_mask,
                 *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
@@ -255,13 +259,17 @@ class GbDelayed:
                 )
         elif self.method_name in {'apply', 'ewise_add', 'ewise_mult'}:
             delayed = updating._optional_dup()
+            self_kwargs = {key: (self.kwargs[key]._delayed
+                            if isinstance(self.kwargs[key], BaseType)
+                            else self.kwargs[key])
+                      for key in self.kwargs}
             if mask is None and accum is None:
                 delayed = da.core.elemwise(
                     _update_expr,
                     self.method_name,
                     delayed,
                     self.parent._delayed,
-                    self.kwargs,
+                    self_kwargs,
                     *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
                     dtype=np_dtype(meta.dtype),
                 )
@@ -281,7 +289,7 @@ class GbDelayed:
                     grblas_mask_type,
                     replace,
                     self.parent._delayed,
-                    self.kwargs,
+                    self_kwargs,
                     *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
                     dtype=np_dtype(meta.dtype),
                 )
@@ -346,7 +354,7 @@ def _extractor_new(x, dtype, mask, mask_type):
         mask = mask_type(mask.value)
     if len(indices) == 0:
         # Is there some way we can avoid this dup here?
-        # This likely comes from a slice sich as v[:] or v[:10]
+        # This likely comes from a slice such as v[:] or v[:10]
         # Ideally, we would use `_optional_dup` in the DAG
         value = inner.value.dup(dtype=dtype, mask=mask)
     elif len(indices) == 1:
@@ -364,7 +372,7 @@ class Extractor:
         self.inner = inner
         self.index = index
         self.dtype = inner.dtype
-        self.ndim = inner.dtype
+        self.ndim = inner.ndim
 
     def __getitem__(self, index):
         return Extractor(self, index)
@@ -441,6 +449,10 @@ class FakeInnerTensor(InnerBaseType):
 def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
     # expr.new(...)
     args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
+    kwargs = {key: (kwargs[key].value
+                    if isinstance(kwargs[key], InnerBaseType)
+                    else kwargs[key])
+              for key in kwargs}
     expr = getattr(x.value, method_name)(*args, **kwargs)
     if mask is not None:
         mask = grblas_mask_type(mask.value)
@@ -534,6 +546,10 @@ def _reduce_axis_accum(output, reduced, accum):
 def _update_expr(method_name, updating, x, kwargs, *args):
     # v << left.ewise_mult(right)
     args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
+    kwargs = {key: (kwargs[key].value
+                    if isinstance(kwargs[key], InnerBaseType)
+                    else kwargs[key])
+              for key in kwargs}
     expr = getattr(x.value, method_name)(*args, **kwargs)
     updating.value << expr
     return updating
@@ -543,6 +559,10 @@ def _update_expr(method_name, updating, x, kwargs, *args):
 def _update_expr_full(method_name, updating, accum, mask, mask_type, replace, x, kwargs, *args):
     # v(mask=mask) << left.ewise_mult(right)
     args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
+    kwargs = {key: (kwargs[key].value
+                    if isinstance(kwargs[key], InnerBaseType)
+                    else kwargs[key])
+              for key in kwargs}
     expr = getattr(x.value, method_name)(*args, **kwargs)
     if mask is not None:
         mask = mask_type(mask.value)
