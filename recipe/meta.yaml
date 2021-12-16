@@ -1,0 +1,36 @@
+package:
+  name: "dask-grblas"
+  version: "0.0.1"
+
+source:
+  path: ../
+
+build:
+  noarch: python
+  number: 0
+  script: "{{ PYTHON }} -m pip install . -vv"
+
+requirements:
+  host:
+    - python
+    - pip
+    - setuptools
+  run:
+    - python
+    - grblas
+    - dask
+
+about:
+  home: https://github.com/metagraph-dev/dask-grblas
+  license: Apache-2.0
+  license_family: Apache
+  license_file: LICENSE
+  summary: 'Distributed GraphBLAS using grblas'
+  description: |
+    Distributed implementation of GraphBLAS using the grblas library for most tasks
+  dev_url: https://github.com/metagraph-dev/dask-grblas
+
+extra:
+  recipe-maintainers:
+    - eriknw
+    - jim22k
