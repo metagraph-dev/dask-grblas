@@ -109,18 +109,35 @@ class GbDelayed:
 
         op = self.args[1]
         sum_meta = wrap_inner(meta)
-        out = da.core.blockwise(
-            partial(_matmul2, op, meta.dtype, at, bt),
-            out_ind,
-            a,
-            lhs_ind,
-            b,
-            rhs_ind,
-            adjust_chunks={compress_axis: 1},
-            dtype=np.result_type(a, b),
-            concatenate=False,
-            meta=FakeInnerTensor(meta, compress_axis)
-        )
+        if mask is None:
+            out = da.core.blockwise(
+                partial(_matmul2, op, meta.dtype, at, bt),
+                out_ind,
+                a,
+                lhs_ind,
+                b,
+                rhs_ind,
+                adjust_chunks={compress_axis: 1},
+                dtype=np.result_type(a, b),
+                concatenate=False,
+                meta=FakeInnerTensor(meta, compress_axis)
+            )
+        else:
+            mask_ind = tuple(list(out_ind).remove(compress_axis))
+            out = da.core.blockwise(
+                partial(_matmul2_masked, op, meta.dtype, at, bt),
+                out_ind,
+                mask,
+                mask_ind,
+                a,
+                lhs_ind,
+                b,
+                rhs_ind,
+                adjust_chunks={compress_axis: 1},
+                dtype=np.result_type(a, b),
+                concatenate=False,
+                meta=FakeInnerTensor(meta, compress_axis)
+            )
 
         # out has an extra dimension (a slab or a bar), and now reduce along it
         out = sum_by_monoid(op.monoid, out, axis=compress_axis, meta=sum_meta)
@@ -570,7 +587,7 @@ def _update_expr_full(method_name, updating, accum, mask, mask_type, replace, x,
     return updating
 
 
-def _check_transpose(x, xt):
+def _transpose_if(x, xt):
     if xt:
         return x.value.T
     return x.value
@@ -584,7 +601,7 @@ def _matmul(op, at, bt, dtype, not_updating, no_mask, mask_type, accum, *args, c
         a_blocks, b_blocks = args
         vals = [
             op(
-                _check_transpose(a, at) @ _check_transpose(b, bt)
+                _transpose_if(a, at) @ _transpose_if(b, bt)
             ).new(dtype=dtype)
             for a, b in zip(a_blocks, b_blocks)
         ]
@@ -600,7 +617,7 @@ def _matmul(op, at, bt, dtype, not_updating, no_mask, mask_type, accum, *args, c
 
         vals = [
             op(
-                _check_transpose(a, at) @ _check_transpose(b, bt)
+                _transpose_if(a, at) @ _transpose_if(b, bt)
             ).new(dtype=dtype)
             for a, b in zip(a_blocks, b_blocks)
         ]
@@ -610,9 +627,17 @@ def _matmul(op, at, bt, dtype, not_updating, no_mask, mask_type, accum, *args, c
 
 
 def _matmul2(op, dtype, at, bt, a, b, computing_meta=None):
-    left = _check_transpose(a, at)
-    right = _check_transpose(b, bt)
+    left = _transpose_if(a, at)
+    right = _transpose_if(b, bt)
     return op(left @ right).new(dtype=dtype)
+
+
+def _matmul2_masked(op, dtype, at, bt, mask, a, b, computing_meta=None):
+    left = _transpose_if(a, at)
+    right = _transpose_if(b, bt)
+    C = type(mask).new(dtype)
+    C(mask=mask) << op(left @ right)
+    return C
 
 
 def _sum_by_monoid(monoid, a, axis=None, keepdims=None):
