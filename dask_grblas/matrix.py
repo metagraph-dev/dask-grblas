@@ -126,7 +126,7 @@ class Matrix(BaseType):
         meta = self._meta.kronecker(other._meta, op=op)
         return GbDelayed(self, 'kronecker', other, op, meta=meta)
 
-    def apply(self, op, left=None, right=None):
+    def apply(self, op, right=None, *, left=None):
         from .scalar import Scalar
 
         left_meta = left

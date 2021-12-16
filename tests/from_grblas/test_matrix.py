@@ -423,16 +423,16 @@ def test_apply_binary(A):
                                       [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
                                       [1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1], dtype=bool)
     w_right = A.apply(binary.gt, right=1).new()
-    ### w_right2 = A.apply(binary.gt, right=Scalar.from_value(1)).new()
+    w_right2 = A.apply(binary.gt, right=Scalar.from_value(1)).new()
     assert w_right.isequal(result_right)
-    ### assert w_right2.isequal(result_right)
+    assert w_right2.isequal(result_right)
     result_left = Matrix.from_values([3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
                                      [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
                                      [5, 6, 5, 7, 3, 5, 1, 0, 5, 7, 1, 4])
     w_left = A.apply(binary.minus, left=8).new()
-    ### w_left2 = A.apply(binary.minus, left=Scalar.from_value(8)).new()
+    w_left2 = A.apply(binary.minus, left=Scalar.from_value(8)).new()
     assert w_left.isequal(result_left)
-    ### assert w_left2.isequal(result_left)
+    assert w_left2.isequal(result_left)
 
 
 def test_reduce_row(A):

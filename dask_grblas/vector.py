@@ -150,7 +150,7 @@ class Vector(BaseType):
         meta = self._meta.vxm(other._meta, op=op)
         return GbDelayed(self, 'vxm', other, op, meta=meta)
 
-    def apply(self, op, left=None, right=None):
+    def apply(self, op, right=None, *, left=None):
         from .scalar import Scalar
 
         left_meta = left
