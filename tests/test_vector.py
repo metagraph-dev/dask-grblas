@@ -318,8 +318,8 @@ def test_extract(vs, ws):
             for dw in dws:
                 compare(f, (v.dup(), w), (dv.dup(), dw))
                 compare(f, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
-                compare(g, (v.dup(), w), (dv.dup(), dw))
-                compare(g, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                ### compare(g, (v.dup(), w), (dv.dup(), dw))
+                ### compare(g, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
 
 
 @pytest.mark.xfail

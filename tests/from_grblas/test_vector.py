@@ -355,17 +355,17 @@ def test_apply(v):
     assert w.isequal(result)
 
 
-### def test_apply_binary(v):
-###     result_right = Vector.from_values([1, 3, 4, 6], [False, False, True, False])
-###     w_right = v.apply(binary.gt, right=1).new()
-###     w_right2 = v.apply(binary.gt, right=Scalar.from_value(1)).new()
-###     assert w_right.isequal(result_right)
-###     assert w_right2.isequal(result_right)
-###     result_left = Vector.from_values([1, 3, 4, 6], [1, 1, 0, 2])
-###     w_left = v.apply(binary.minus, left=2).new()
-###     w_left2 = v.apply(binary.minus, left=Scalar.from_value(2)).new()
-###     assert w_left.isequal(result_left)
-###     assert w_left2.isequal(result_left)
+def test_apply_binary(v):
+    result_right = Vector.from_values([1, 3, 4, 6], [False, False, True, False])
+    w_right = v.apply(binary.gt, right=1).new()
+    w_right2 = v.apply(binary.gt, right=Scalar.from_value(1)).new()
+    assert w_right.isequal(result_right)
+    assert w_right2.isequal(result_right)
+    result_left = Vector.from_values([1, 3, 4, 6], [1, 1, 0, 2])
+    w_left = v.apply(binary.minus, left=2).new()
+    w_left2 = v.apply(binary.minus, left=Scalar.from_value(2)).new()
+    assert w_left.isequal(result_left)
+    assert w_left2.isequal(result_left)
 
 
 def test_reduce(v):

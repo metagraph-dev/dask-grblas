@@ -124,10 +124,9 @@ def test_binaryop_parameterized():
     x = x.ewise_mult(x, op(1)).new()
     assert v.isequal(x)
 
-    # TODO: when GraphBLAS 1.3 is supported
-    # v11 = v.apply(op(1), left=10)
-    # r11 = Vector.from_values([0, 1, 3], [12, 13, 7], dtype=dtypes.INT32)
-    # assert v11.isequal(r11, check_dtype=True)
+    v11 = v.apply(op(1), left=10)
+    r11 = Vector.from_values([0, 1, 3], [12, 13, 7], dtype=dtypes.INT32)
+    assert v11.isequal(r11, check_dtype=True)
 
 
 @pytest.mark.slow
@@ -282,9 +281,8 @@ def test_semiring_parameterized():
 
     with pytest.raises(TypeError, match='Monoid'):
         A.reduce_scalar(bin_op).new()
-    # TODO: uncomment once GraphBLAS 1.3 is supported
-    # B = A.kronecker(A, bin_op).new()
-    # assert B.isequal(A.kronecker(A, binary.plus).new())
+    B = A.kronecker(A, bin_op).new()
+    assert B.isequal(A.kronecker(A, binary.plus).new())
 
 
 def test_unaryop_udf_bool_result():
