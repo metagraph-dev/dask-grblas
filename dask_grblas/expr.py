@@ -123,11 +123,15 @@ class GbDelayed:
                 meta=FakeInnerTensor(meta, compress_axis)
             )
         else:
-            mask_ind = tuple(list(out_ind).remove(compress_axis))
+            m = mask.mask._delayed
+            grblas_mask_type = get_grblas_type(mask)
+            mask_ind = list(out_ind)
+            mask_ind.remove(compress_axis)
+            mask_ind = tuple(mask_ind)
             out = da.core.blockwise(
-                partial(_matmul2_masked, op, meta.dtype, at, bt),
+                partial(_matmul2_masked, op, meta.dtype, at, bt, grblas_mask_type),
                 out_ind,
-                mask,
+                m,
                 mask_ind,
                 a,
                 lhs_ind,
@@ -201,9 +205,9 @@ class GbDelayed:
             delayed = self._reduce_along_axis(0, meta.dtype)
         elif self.method_name in {'apply', 'ewise_add', 'ewise_mult'}:
             self_kwargs = {key: (self.kwargs[key]._delayed
-                            if isinstance(self.kwargs[key], BaseType)
-                            else self.kwargs[key])
-                      for key in self.kwargs}
+                                 if isinstance(self.kwargs[key], BaseType)
+                                 else self.kwargs[key])
+                           for key in self.kwargs}
             delayed = da.core.elemwise(
                 _expr_new,
                 self.method_name,
@@ -277,9 +281,9 @@ class GbDelayed:
         elif self.method_name in {'apply', 'ewise_add', 'ewise_mult'}:
             delayed = updating._optional_dup()
             self_kwargs = {key: (self.kwargs[key]._delayed
-                            if isinstance(self.kwargs[key], BaseType)
-                            else self.kwargs[key])
-                      for key in self.kwargs}
+                                 if isinstance(self.kwargs[key], BaseType)
+                                 else self.kwargs[key])
+                           for key in self.kwargs}
             if mask is None and accum is None:
                 delayed = da.core.elemwise(
                     _update_expr,
@@ -311,7 +315,7 @@ class GbDelayed:
                     dtype=np_dtype(meta.dtype),
                 )
         elif self.method_name in {'vxm', 'mxv', 'mxm'}:
-            delayed = self._matmul2(meta)
+            delayed = self._matmul2(meta, mask=mask)
             updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
             return
         else:
@@ -615,10 +619,15 @@ def _matmul(op, at, bt, dtype, not_updating, no_mask, mask_type, accum, *args, c
             u, mask, a_blocks, b_blocks = args
             mask = mask_type(mask.value)
 
-        vals = [
-            op(
+        def mask_matmul(a, b):
+            C = mask.mask.empty_like(dtype)
+            C << op(
                 _transpose_if(a, at) @ _transpose_if(b, bt)
-            ).new(dtype=dtype)
+            )
+            return C
+
+        vals = [
+            mask_matmul(a, b)
             for a, b in zip(a_blocks, b_blocks)
         ]
         gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(), vals)
@@ -632,10 +641,11 @@ def _matmul2(op, dtype, at, bt, a, b, computing_meta=None):
     return op(left @ right).new(dtype=dtype)
 
 
-def _matmul2_masked(op, dtype, at, bt, mask, a, b, computing_meta=None):
+def _matmul2_masked(op, dtype, at, bt, mask_type, mask, a, b, computing_meta=None):
     left = _transpose_if(a, at)
     right = _transpose_if(b, bt)
-    C = type(mask).new(dtype)
+    mask = mask_type(mask.value)
+    C = mask.mask.empty_like(dtype)
     C(mask=mask) << op(left @ right)
     return C
 
