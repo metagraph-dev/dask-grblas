@@ -126,8 +126,18 @@ class Matrix(BaseType):
         meta = self._meta.kronecker(other._meta, op=op)
         return GbDelayed(self, 'kronecker', other, op, meta=meta)
 
-    def apply(self, op, left=None, right=None):
-        meta = self._meta.apply(op=op, left=left, right=right)
+    def apply(self, op, right=None, *, left=None):
+        from .scalar import Scalar
+
+        left_meta = left
+        right_meta = right
+
+        if type(left) is Scalar:
+            left_meta = left.dtype.np_type(0)
+        if type(right) is Scalar:
+            right_meta = right.dtype.np_type(0)
+
+        meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
         return GbDelayed(self, 'apply', op, right, meta=meta, left=left)
 
     def reduce_rowwise(self, op=monoid.plus):
