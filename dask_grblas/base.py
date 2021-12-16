@@ -5,16 +5,20 @@ from .mask import Mask
 from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
 
 
+_expect_type = gb.base._expect_type
+
 class InnerBaseType:
     def astype(self, dtype):
-        return wrap_inner(self.value.new(dtype=dtype))
+        return wrap_inner(self.value.dup(dtype))
 
 
 class BaseType:
+    _expect_type = _expect_type
+
     def isequal(self, other, *, check_dtype=False):
         from .scalar import PythonScalar
-        if type(other) is not type(self):
-            raise TypeError(f'Argument of isequal must be of type {type(self).__name__}')
+        # if type(other) is not type(self):
+        #     raise TypeError(f'Argument of isequal must be of type {type(self).__name__}')
         if not self._meta.isequal(other._meta):
             return PythonScalar.from_value(False)
         """
@@ -47,8 +51,8 @@ class BaseType:
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         from .scalar import PythonScalar
-        if type(other) is not type(self):
-            raise TypeError(f'Argument of isclose must be of type {type(self).__name__}')
+        # if type(other) is not type(self):
+        #     raise TypeError(f'Argument of isclose must be of type {type(self).__name__}')
         if not self._meta.isequal(other._meta):
             return PythonScalar.from_value(False)
         delayed = da.core.elemwise(
@@ -77,7 +81,7 @@ class BaseType:
             dtype=np_dtype(self.dtype),
         )
 
-    def dup(self, *, dtype=None, mask=None):
+    def dup(self, dtype=None, *, mask=None):
         if mask is not None:
             if not isinstance(mask, Mask):
                 self._meta.dup(dtype=dtype, mask=mask)  # should raise
@@ -99,11 +103,23 @@ class BaseType:
         self.update(delayed)
 
     def __call__(self, *optional_mask_and_accum, mask=None, accum=None, replace=False):
+        accum_arg = None
         for arg in optional_mask_and_accum:
             if isinstance(arg, Mask):
                 mask = arg
             else:
-                accum, _ = gb.ops.find_opclass(arg)
+                if accum_arg is not None:
+                    raise TypeError("Got multiple values for argument 'accum'")
+                accum_arg, _ = gb.operator.find_opclass(arg)
+        if accum_arg is not None:
+            if accum is not None:
+                raise TypeError("Got multiple values for argument 'accum'")
+            accum = accum_arg
+        if accum is not None:
+            # Normalize accumulator
+            accum = gb.operator.get_typed_op(accum, self.dtype, kind="binary")
+            if accum.opclass == "Monoid":
+                accum = accum.binaryop
         return Updater(self, mask=mask, accum=accum, replace=replace)
 
     def _optional_dup(self):
@@ -158,7 +174,28 @@ class BaseType:
             self.update(expr)
             return
         typ = type(expr)
-        if typ is GbDelayed:
+        if typ is AmbiguousAssignOrExtract:
+            # Extract (w(accum=accum) << v[index])
+            delayed = self._optional_dup()
+            expr_delayed = expr.new(dtype=self.dtype)._delayed
+            self._meta(mask=get_meta(mask), accum=accum, replace=replace)
+            if mask is not None:
+                delayed_mask = mask.mask._delayed
+                grblas_mask_type = get_grblas_type(mask)
+            else:
+                delayed_mask = None
+                grblas_mask_type = None
+            self._delayed = da.core.elemwise(
+                _update_assign,
+                delayed,
+                accum,
+                delayed_mask,
+                grblas_mask_type,
+                replace,
+                expr_delayed,
+                dtype=np_dtype(self._meta.dtype),
+            )
+        elif typ is GbDelayed:
             # v(mask=mask) << left.ewise_mult(right)
             # Meta check handled in Updater
             expr._update(self, mask=mask, accum=accum, replace=replace)

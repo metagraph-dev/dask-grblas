@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 from dask_grblas import Matrix, Vector, Scalar
 from grblas import unary, binary, monoid, semiring
 from grblas import dtypes
@@ -83,10 +84,10 @@ def test_from_values():
     with pytest.raises(IndexOutOfBound):
         # Specified ncols can't hold provided indexes
         Matrix.from_values([0, 1, 3], [1, 1, 2], [12.3, 12.4, 12.5], nrows=17, ncols=2)
-    with pytest.raises(ValueError, match='No values provided. Unable to determine type'):
+    with pytest.raises(ValueError):
         Matrix.from_values([], [], [])
-    with pytest.raises(ValueError, match='No values provided. Unable to determine type'):
-        Matrix.from_values([], [], [], nrows=3, ncols=4)
+    # with pytest.raises(ValueError, match='No values provided. Unable to determine type'):
+    #     Matrix.from_values([], [], [], nrows=3, ncols=4)
     with pytest.raises(ValueError, match='Unable to infer'):
         Matrix.from_values([], [], [], dtype=dtypes.INT64)
     C4 = Matrix.from_values([], [], [],  nrows=3, ncols=4, dtype=dtypes.INT64)
@@ -146,13 +147,13 @@ def test_build(A):
 
 def test_extract_values(A):
     rows, cols, vals = A.to_values()
-    assert rows == (0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 6)
-    assert cols == (1, 3, 4, 6, 5, 0, 2, 5, 2, 2, 3, 4)
-    assert vals == (2, 3, 8, 4, 1, 3, 3, 7, 1, 5, 7, 3)
+    assert (rows == np.array([0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 6])).all()
+    assert (cols == np.array([1, 3, 4, 6, 5, 0, 2, 5, 2, 2, 3, 4])).all()
+    assert (vals == np.array([2, 3, 8, 4, 1, 3, 3, 7, 1, 5, 7, 3])).all()
     Trows, Tcols, Tvals = A.T.to_values()
-    assert rows == Tcols
-    assert cols == Trows
-    assert vals == Tvals
+    assert (rows == Tcols).all()
+    assert (cols == Trows).all()
+    assert (vals == Tvals).all()
 
 
 def test_extract_element(A):
@@ -179,87 +180,87 @@ def test_set_element(A):
 ###         del A[3:5, 3]
 
 
-### def test_mxm(A):
-###     C = A.mxm(A, semiring.plus_times).new()
-###     result = Matrix.from_values(
-###         [0, 0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 4, 5, 6, 6, 6],
-###         [0, 2, 4, 6, 2, 3, 4, 5, 2, 1, 3, 5, 2, 5, 0, 2, 5],
-###         [9, 9, 16, 8, 20, 28, 12, 56, 1, 6, 9, 3, 7, 1, 21, 21, 26])
-###     assert C.isequal(result)
+def test_mxm(A):
+    C = A.mxm(A, semiring.plus_times).new()
+    result = Matrix.from_values(
+        [0, 0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 3, 4, 5, 6, 6, 6],
+        [0, 2, 4, 6, 2, 3, 4, 5, 2, 1, 3, 5, 2, 5, 0, 2, 5],
+        [9, 9, 16, 8, 20, 28, 12, 56, 1, 6, 9, 3, 7, 1, 21, 21, 26])
+    assert C.isequal(result)
 
 
-### def test_mxm_transpose(A):
-###     C = A.dup()
-###     C << A.mxm(A.T, semiring.plus_times)
-###     result = Matrix.from_values(
-###         [0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6, 6, 6],
-###         [0, 6, 1, 6, 2, 4, 3, 5, 6, 2, 4, 3, 5, 6, 0, 1, 3, 5, 6],
-###         [13, 21, 80, 24, 1, 7, 18, 3, 15, 7, 49, 3, 1, 5, 21, 24, 15, 5, 83])
-###     assert C.isequal(result)
-###     C << A.T.mxm(A, semiring.plus_times)
-###     result2 = Matrix.from_values(
-###         [0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6],
-###         [0, 2, 1, 3, 0, 2, 3, 4, 1, 2, 3, 4, 2, 3, 4, 6, 5, 4, 6],
-###         [9, 9, 4, 6, 9, 35, 35, 15, 6, 35, 58, 21, 15, 21, 73, 32, 50, 32, 16])
-###     assert C.isequal(result2)
+def test_mxm_transpose(A):
+    C = A.dup()
+    C << A.mxm(A.T, semiring.plus_times)
+    result = Matrix.from_values(
+        [0, 0, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6, 6, 6],
+        [0, 6, 1, 6, 2, 4, 3, 5, 6, 2, 4, 3, 5, 6, 0, 1, 3, 5, 6],
+        [13, 21, 80, 24, 1, 7, 18, 3, 15, 7, 49, 3, 1, 5, 21, 24, 15, 5, 83])
+    assert C.isequal(result)
+    C << A.T.mxm(A, semiring.plus_times)
+    result2 = Matrix.from_values(
+        [0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6],
+        [0, 2, 1, 3, 0, 2, 3, 4, 1, 2, 3, 4, 2, 3, 4, 6, 5, 4, 6],
+        [9, 9, 4, 6, 9, 35, 35, 15, 6, 35, 58, 21, 15, 21, 73, 32, 50, 32, 16])
+    assert C.isequal(result2)
 
 
-### def test_mxm_nonsquare():
-###     A = Matrix.from_values([0, 0, 0], [0, 2, 4], [1, 2, 3], nrows=1, ncols=5)
-###     B = Matrix.from_values([0, 2, 4], [0, 0, 0], [10, 20, 30], nrows=5, ncols=1)
-###     C = Matrix.new(A.dtype, nrows=1, ncols=1)
-###     C << A.mxm(B, semiring.max_plus)
-###     assert C[0, 0].value == 33
-###     C1 = A.mxm(B, semiring.max_plus).new()
-###     assert C1.isequal(C)
-###     C2 = A.T.mxm(B.T, semiring.max_plus).new()
-###     assert C2.nrows == 5
-###     assert C2.ncols == 5
+def test_mxm_nonsquare():
+    A = Matrix.from_values([0, 0, 0], [0, 2, 4], [1, 2, 3], nrows=1, ncols=5)
+    B = Matrix.from_values([0, 2, 4], [0, 0, 0], [10, 20, 30], nrows=5, ncols=1)
+    C = Matrix.new(A.dtype, nrows=1, ncols=1)
+    C << A.mxm(B, semiring.max_plus)
+    assert C[0, 0].value == 33
+    C1 = A.mxm(B, semiring.max_plus).new()
+    assert C1.isequal(C)
+    C2 = A.T.mxm(B.T, semiring.max_plus).new()
+    assert C2.nrows == 5
+    assert C2.ncols == 5
 
 
-### def test_mxm_mask(A):
-###     val_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7)
-###     struct_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [1, 0, 0], nrows=7, ncols=7)
-###     C = A.dup()
-###     C(val_mask.V) << A.mxm(A, semiring.plus_times)
-###     result = Matrix.from_values(
-###         [0, 0, 0, 1, 1, 2, 3, 3, 3, 4, 4, 5, 6, 6, 6],
-###         [1, 2, 3, 4, 6, 5, 0, 2, 3, 2, 5, 2, 2, 3, 4],
-###         [2, 9, 3, 8, 4, 1, 3, 3, 9, 7, 7, 1, 5, 7, 3])
-###     assert C.isequal(result)
-###     C = A.dup()
-###     C(~val_mask.V) << A.mxm(A, semiring.plus_times)
-###     result2 = Matrix.from_values(
-###         [0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 5, 6, 6, 6],
-###         [0, 4, 6, 2, 3, 4, 5, 2, 1, 5, 5, 0, 2, 5],
-###         [9, 16, 8, 20, 28, 12, 56, 1, 6, 3, 1, 21, 21, 26])
-###     assert C.isequal(result2)
-###     C = A.dup()
-###     C(struct_mask.S, replace=True).update(A.mxm(A, semiring.plus_times))
-###     result3 = Matrix.from_values(
-###         [0, 3, 4],
-###         [2, 3, 2],
-###         [9, 9, 7], nrows=7, ncols=7)
-###     assert C.isequal(result3)
-###     C2 = A.mxm(A, semiring.plus_times).new(mask=struct_mask.S)
+def test_mxm_mask(A):
+    val_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7)
+    struct_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [1, 0, 0], nrows=7, ncols=7)
+    C = A.dup()
+    C(val_mask.V) << A.mxm(A, semiring.plus_times)
+    result = Matrix.from_values(
+        [0, 0, 0, 1, 1, 2, 3, 3, 3, 4, 4, 5, 6, 6, 6],
+        [1, 2, 3, 4, 6, 5, 0, 2, 3, 2, 5, 2, 2, 3, 4],
+        [2, 9, 3, 8, 4, 1, 3, 3, 9, 7, 7, 1, 5, 7, 3])
+    assert C.isequal(result)
+    C = A.dup()
+    C(~val_mask.V) << A.mxm(A, semiring.plus_times)
+    result2 = Matrix.from_values(
+        [0, 0, 0, 1, 1, 1, 1, 2, 3, 3, 5, 6, 6, 6],
+        [0, 4, 6, 2, 3, 4, 5, 2, 1, 5, 5, 0, 2, 5],
+        [9, 16, 8, 20, 28, 12, 56, 1, 6, 3, 1, 21, 21, 26])
+    assert C.isequal(result2)
+    C = A.dup()
+    C(struct_mask.S, replace=True).update(A.mxm(A, semiring.plus_times))
+    result3 = Matrix.from_values(
+        [0, 3, 4],
+        [2, 3, 2],
+        [9, 9, 7], nrows=7, ncols=7)
+    assert C.isequal(result3)
+    C2 = A.mxm(A, semiring.plus_times).new(mask=struct_mask.S)
 ###     assert C2.isequal(result3)
 ###     with pytest.raises(TypeError, match="Mask must indicate"):
 ###         A.mxm(A).new(mask=struct_mask)
 
 
-### def test_mxm_accum(A):
-###     A(binary.plus) << A.mxm(A, semiring.plus_times)
-###     result = Matrix.from_values(
-###         [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 6, 6],
-###         [0, 1, 2, 3, 4, 6, 2, 3, 4, 5, 6, 2, 5, 0, 1, 2, 3, 5, 2, 5, 2, 5, 0, 2, 3, 4, 5],
-###         [9, 2, 9, 3, 16, 8, 20, 28, 20, 56, 4, 1, 1, 3, 6, 3, 9, 3, 7, 7, 1, 1, 21, 26, 7, 3, 26])
-###     assert A.isequal(result)
+def test_mxm_accum(A):
+    A(binary.plus) << A.mxm(A, semiring.plus_times)
+    result = Matrix.from_values(
+        [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 6, 6],
+        [0, 1, 2, 3, 4, 6, 2, 3, 4, 5, 6, 2, 5, 0, 1, 2, 3, 5, 2, 5, 2, 5, 0, 2, 3, 4, 5],
+        [9, 2, 9, 3, 16, 8, 20, 28, 20, 56, 4, 1, 1, 3, 6, 3, 9, 3, 7, 7, 1, 1, 21, 26, 7, 3, 26])
+    assert A.isequal(result)
 
 
-### def test_mxv(A, v):
-###     w = A.mxv(v, semiring.plus_times).new()
-###     result = Vector.from_values([0, 1, 6], [5, 16, 13])
-###     assert w.isequal(result)
+def test_mxv(A, v):
+    w = A.mxv(v, semiring.plus_times).new()
+    result = Vector.from_values([0, 1, 6], [5, 16, 13])
+    assert w.isequal(result)
 
 
 def test_ewise_mult(A):
@@ -270,7 +271,7 @@ def test_ewise_mult(A):
     assert C.isequal(result)
     C() << A.ewise_mult(B, monoid.times)
     assert C.isequal(result)
-    C << A.ewise_mult(B, semiring.plus_times)
+    C << A.ewise_mult(B, semiring.plus_times.binaryop)
     assert C.isequal(result)
 
 
@@ -289,7 +290,7 @@ def test_ewise_add(A):
     assert C.isequal(result)
     C << A.ewise_add(B, monoid.max)
     assert C.isequal(result)
-    C << A.ewise_add(B, semiring.max_minus)
+    C << A.ewise_add(B, semiring.max_minus.monoid)
     assert C.isequal(result)
 
 
@@ -417,64 +418,64 @@ def test_apply(A):
     assert C.isequal(result)
 
 
-### def test_apply_binary(A):
-###     result_right = Matrix.from_values([3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-###                                       [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-###                                       [1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1], dtype=bool)
-###     w_right = A.apply(binary.gt, right=1).new()
-###     w_right2 = A.apply(binary.gt, right=Scalar.from_value(1)).new()
-###     assert w_right.isequal(result_right)
-###     assert w_right2.isequal(result_right)
-###     result_left = Matrix.from_values([3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-###                                      [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-###                                      [5, 6, 5, 7, 3, 5, 1, 0, 5, 7, 1, 4])
-###     w_left = A.apply(binary.minus, left=8).new()
-###     w_left2 = A.apply(binary.minus, left=Scalar.from_value(8)).new()
-###     assert w_left.isequal(result_left)
-###     assert w_left2.isequal(result_left)
+def test_apply_binary(A):
+    result_right = Matrix.from_values([3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                                      [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                                      [1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1], dtype=bool)
+    w_right = A.apply(binary.gt, right=1).new()
+    w_right2 = A.apply(binary.gt, right=Scalar.from_value(1)).new()
+    assert w_right.isequal(result_right)
+    assert w_right2.isequal(result_right)
+    result_left = Matrix.from_values([3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                                     [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                                     [5, 6, 5, 7, 3, 5, 1, 0, 5, 7, 1, 4])
+    w_left = A.apply(binary.minus, left=8).new()
+    w_left2 = A.apply(binary.minus, left=Scalar.from_value(8)).new()
+    assert w_left.isequal(result_left)
+    assert w_left2.isequal(result_left)
 
 
-### def test_reduce_row(A):
-###     result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
-###     w = A.reduce_rows(monoid.plus).new()
-###     assert w.isequal(result)
+def test_reduce_row(A):
+    result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
+    w = A.reduce_rowwise(monoid.plus).new()
+    assert w.isequal(result)
 
 
-### def test_reduce_column(A):
-###     result = Vector.from_values([0, 1, 2, 3, 4, 5, 6],  [3, 2, 9, 10, 11, 8, 4])
-###     w = A.reduce_columns(monoid.plus).new()
-###     assert w.isequal(result)
+def test_reduce_column(A):
+    result = Vector.from_values([0, 1, 2, 3, 4, 5, 6],  [3, 2, 9, 10, 11, 8, 4])
+    w = A.reduce_columnwise(monoid.plus).new()
+    assert w.isequal(result)
 
 
-### def test_reduce_scalar(A):
-###     s = A.reduce_scalar(monoid.plus).new()
-###     assert s == 47
-###     # test dtype coercion
-###     assert A.dtype == dtypes.INT64
-###     s = A.reduce_scalar().new(dtype=float)
-###     assert s == 47.0
-###     assert s.dtype == dtypes.FP64
-###     t = Scalar.new(float)
-###     t << A.reduce_scalar(monoid.plus)
-###     assert t == 47.0
-###     t = Scalar.new(float)
-###     t() << A.reduce_scalar(monoid.plus)
-###     assert t == 47.0
-###     t(accum=binary.times) << A.reduce_scalar(monoid.plus)
-###     assert t == 47 * 47
-###     assert A.reduce_scalar(monoid.plus[dtypes.UINT64]).value == 47
+def test_reduce_scalar(A):
+    s = A.reduce_scalar(monoid.plus).new()
+    assert s == 47
+    # test dtype coercion
+    assert A.dtype == dtypes.INT64
+    s = A.reduce_scalar().new(dtype=float)
+    assert s == 47.0
+    assert s.dtype == dtypes.FP64
+    t = Scalar.new(float)
+    t << A.reduce_scalar(monoid.plus)
+    assert t == 47.0
+    t = Scalar.new(float)
+    t() << A.reduce_scalar(monoid.plus)
+    assert t == 47.0
+    t(accum=binary.times) << A.reduce_scalar(monoid.plus)
+    assert t == 47 * 47
+    assert A.reduce_scalar(monoid.plus[dtypes.UINT64]).value == 47
 
 
-def test_transpose(A):
-    # C << A.T
-    rows, cols, vals = A.to_values()
-    result = Matrix.from_values(cols, rows, vals)
-    C = Matrix.new(A.dtype, A.ncols, A.nrows)
-    ### C << A.T
-    ### assert C.isequal(result)
-    ### C2 = A.T.new()
-    ### assert C2.isequal(result)
-    assert A.T.T is A
+### def test_transpose(A):
+###     # C << A.T
+###     rows, cols, vals = A.to_values()
+###     result = Matrix.from_values(cols, rows, vals)
+###     C = Matrix.new(A.dtype, A.ncols, A.nrows)
+###     C << A.T
+###     assert C.isequal(result)
+###     C2 = A.T.new()
+###     assert C2.isequal(result)
+###     assert A.T.T is A
 
 
 ### def test_kronecker():

@@ -145,14 +145,24 @@ class Vector(BaseType):
         return GbDelayed(self, 'ewise_mult', other, op, meta=meta)
 
     def vxm(self, other, op=semiring.plus_times):
-        from .matrix import Matrix
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
+        from .matrix import Matrix, TransposedMatrix
+        assert type(other) in (Matrix, TransposedMatrix)
         meta = self._meta.vxm(other._meta, op=op)
         return GbDelayed(self, 'vxm', other, op, meta=meta)
 
-    def apply(self, op, left=None, right=None):
-        meta = self._meta.apply(op=op, left=left, right=right)
-        return GbDelayed(self, 'apply', op, left, right, meta=meta)
+    def apply(self, op, right=None, *, left=None):
+        from .scalar import Scalar
+
+        left_meta = left
+        right_meta = right
+
+        if type(left) is Scalar:
+            left_meta = left.dtype.np_type(0)
+        if type(right) is Scalar:
+            right_meta = right.dtype.np_type(0)
+
+        meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
+        return GbDelayed(self, 'apply', op, right, meta=meta, left=left)
 
     def reduce(self, op=monoid.plus):
         meta = self._meta.reduce(op)
@@ -169,6 +179,14 @@ class Vector(BaseType):
     def to_values(self):
         # TODO: make this lazy; can we do something smart with this?
         return self.compute().to_values()
+
+    def isequal(self, other, *, check_dtype=False):
+        other = self._expect_type(other, Vector, within="isequal", argname="other")
+        return super().isequal(other, check_dtype=check_dtype)
+
+    def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
+        other = self._expect_type(other, Vector, within="isclose", argname="other")
+        return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
 
 @da.core.concatenate_lookup.register(InnerVector)

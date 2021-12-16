@@ -35,12 +35,12 @@ def compare(func, gb_args, dgb_args, gb_kwargs={}, dgb_kwargs={}, *, compute=Non
                 raise
             dgb_result = exc
     assert type(gb_result) == type(dgb_result), f'{type(gb_result)} - {type(dgb_result)}'
-    if isinstance(gb_result, gb.base.GbContainer):
+    if isinstance(gb_result, gb.base.BaseType):
         assert gb_result.dtype == dgb_result.dtype, f'{gb_result.dtype} - {dgb_result.dtype}'
         if not gb_result.isequal(dgb_result, check_dtype=True):
-            print(gb_result.show())
+            print(gb_result)
             print('!=')
-            print(dgb_result.show())
+            print(dgb_result)
             assert False
     elif isinstance(gb_result, Exception):
         assert str(gb_result) == str(dgb_result)

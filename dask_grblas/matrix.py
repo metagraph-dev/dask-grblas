@@ -25,6 +25,9 @@ class InnerMatrix(InnerBaseType):
 
 
 class Matrix(BaseType):
+
+    _is_transposed = False
+
     @classmethod
     def from_delayed(cls, matrix, dtype, nrows, ncols, *, name=None):
         if not isinstance(matrix, Delayed):
@@ -114,7 +117,7 @@ class Matrix(BaseType):
         return GbDelayed(self, 'mxv', other, op, meta=meta)
 
     def mxm(self, other, op=semiring.plus_times):
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
+        assert type(other) in (Matrix, TransposedMatrix)
         meta = self._meta.mxm(other._meta, op=op)
         return GbDelayed(self, 'mxm', other, op, meta=meta)
 
@@ -123,17 +126,27 @@ class Matrix(BaseType):
         meta = self._meta.kronecker(other._meta, op=op)
         return GbDelayed(self, 'kronecker', other, op, meta=meta)
 
-    def apply(self, op, left=None, right=None):
-        meta = self._meta.apply(op=op, left=left, right=right)
-        return GbDelayed(self, 'apply', op, left, right, meta=meta)
+    def apply(self, op, right=None, *, left=None):
+        from .scalar import Scalar
 
-    def reduce_rows(self, op=monoid.plus):
-        meta = self._meta.reduce_rows(op)
-        return GbDelayed(self, 'reduce_rows', op, meta=meta)
+        left_meta = left
+        right_meta = right
 
-    def reduce_columns(self, op=monoid.plus):
-        meta = self._meta.reduce_columns(op)
-        return GbDelayed(self, 'reduce_columns', op, meta=meta)
+        if type(left) is Scalar:
+            left_meta = left.dtype.np_type(0)
+        if type(right) is Scalar:
+            right_meta = right.dtype.np_type(0)
+
+        meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
+        return GbDelayed(self, 'apply', op, right, meta=meta, left=left)
+
+    def reduce_rowwise(self, op=monoid.plus):
+        meta = self._meta.reduce_rowwise(op)
+        return GbDelayed(self, 'reduce_rowwise', op, meta=meta)
+
+    def reduce_columnwise(self, op=monoid.plus):
+        meta = self._meta.reduce_columnwise(op)
+        return GbDelayed(self, 'reduce_columnwise', op, meta=meta)
 
     def reduce_scalar(self, op=monoid.plus):
         meta = self._meta.reduce_scalar(op)
@@ -151,8 +164,23 @@ class Matrix(BaseType):
         # TODO: make this lazy; can we do something smart with this?
         return self.compute().to_values()
 
+    def isequal(self, other, *, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isequal", argname="other"
+        )
+        return super().isequal(other, check_dtype=check_dtype)
+
+    def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isclose", argname="other"
+        )
+        return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+
 
 class TransposedMatrix:
+
+    _is_transposed = True
+
     def __init__(self, matrix):
         assert type(matrix) is Matrix
         self._matrix = matrix
@@ -187,8 +215,8 @@ class TransposedMatrix:
     mxm = Matrix.mxm
     kronecker = Matrix.kronecker
     apply = Matrix.apply
-    reduce_rows = Matrix.reduce_rows
-    reduce_columns = Matrix.reduce_columns
+    reduce_rows = Matrix.reduce_rowwise
+    reduce_columns = Matrix.reduce_columnwise
     reduce_scalar = Matrix.reduce_scalar
 
     # Misc.

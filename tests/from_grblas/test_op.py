@@ -2,9 +2,9 @@ import pytest
 import numpy as np
 from grblas import lib
 from grblas import unary, binary, monoid, semiring
-from grblas import dtypes, ops, exceptions
+from grblas import dtypes, operator as ops, exceptions
 from dask_grblas import Vector, Matrix
-from grblas.ops import UnaryOp, BinaryOp, Monoid, Semiring
+from grblas.operator import UnaryOp, BinaryOp, Monoid, Semiring
 
 
 def test_unaryop():
@@ -18,13 +18,13 @@ def test_binaryop():
 
 
 def test_monoid():
-    assert monoid.max['INT32'].gb_obj == lib.GxB_MAX_INT32_MONOID
-    assert monoid.max[dtypes.UINT16].gb_obj == lib.GxB_MAX_UINT16_MONOID
+    assert monoid.max['INT32'].gb_obj == lib.GrB_MAX_MONOID_INT32
+    assert monoid.max[dtypes.UINT16].gb_obj == lib.GrB_MAX_MONOID_UINT16
 
 
 def test_semiring():
-    assert semiring.min_plus['INT32'].gb_obj == lib.GxB_MIN_PLUS_INT32
-    assert semiring.min_plus[dtypes.UINT16].gb_obj == lib.GxB_MIN_PLUS_UINT16
+    assert semiring.min_plus['INT32'].gb_obj == lib.GrB_MIN_PLUS_SEMIRING_INT32
+    assert semiring.min_plus[dtypes.UINT16].gb_obj == lib.GrB_MIN_PLUS_SEMIRING_UINT16
 
 
 def test_find_opclass_unaryop():
@@ -124,10 +124,9 @@ def test_binaryop_parameterized():
     x = x.ewise_mult(x, op(1)).new()
     assert v.isequal(x)
 
-    # TODO: when GraphBLAS 1.3 is supported
-    # v11 = v.apply(op(1), left=10)
-    # r11 = Vector.from_values([0, 1, 3], [12, 13, 7], dtype=dtypes.INT32)
-    # assert v11.isequal(r11, check_dtype=True)
+    v11 = v.apply(op(1), left=10)
+    r11 = Vector.from_values([0, 1, 3], [12, 13, 7], dtype=dtypes.INT32)
+    assert v11.isequal(r11, check_dtype=True)
 
 
 @pytest.mark.slow
@@ -159,8 +158,8 @@ def test_monoid_parameterized():
 
     assert v.reduce(monoid).value == -1
     assert v.reduce(monoid(1)).value == 1
-    with pytest.raises(TypeError, match='BinaryOp'):
-        Vector.from_values([0, 0, 1, 3], [1, 0, 2, -4], dtype=dtypes.INT32, dup_op=monoid)
+    # with pytest.raises(TypeError, match='BinaryOp'):
+    Vector.from_values([0, 0, 1, 3], [1, 0, 2, -4], dtype=dtypes.INT32, dup_op=monoid)
 
     # identity may be a value
     def logaddexp(base):
@@ -282,9 +281,8 @@ def test_semiring_parameterized():
 
     with pytest.raises(TypeError, match='Monoid'):
         A.reduce_scalar(bin_op).new()
-    # TODO: uncomment once GraphBLAS 1.3 is supported
-    # B = A.kronecker(A, bin_op).new()
-    # assert B.isequal(A.kronecker(A, binary.plus).new())
+    B = A.kronecker(A, bin_op).new()
+    assert B.isequal(A.kronecker(A, binary.plus).new())
 
 
 def test_unaryop_udf_bool_result():
@@ -347,9 +345,9 @@ def test_semiring_udf():
     A = Matrix.from_values([0, 0, 0, 0, 3, 3, 3, 3],
                            [0, 1, 2, 3, 0, 1, 2, 3],
                            [2, 3, 4, 5, 6, 7, 8, 9], dtype=dtypes.INT32)
-    ### w = v.vxm(A, semiring.extra_twos).new()
-    ### result = Vector.from_values([0, 1, 2, 3], [9, 11, 13, 15], dtype=dtypes.INT32)
-    ### assert w.isequal(result)
+    w = v.vxm(A, semiring.extra_twos).new()
+    result = Vector.from_values([0, 1, 2, 3], [9, 11, 13, 15], dtype=dtypes.INT32)
+    assert w.isequal(result)
 
 
 def test_binary_updates():
