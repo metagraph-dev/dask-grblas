@@ -1,6 +1,6 @@
 package:
   name: "dask-grblas"
-  version: "0.0.1"
+  version: "0.0.0"
 
 source:
   path: ../
