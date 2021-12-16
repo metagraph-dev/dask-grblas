@@ -13,7 +13,6 @@ for dgb_type, inner_type, gb_type in [
     (Scalar, scalar.InnerScalar, grblas.Scalar),
     (Vector, vector.InnerVector, grblas.Vector),
     (Matrix, matrix.InnerMatrix, grblas.Matrix),
-
 ]:
     utils._grblas_types[dgb_type] = gb_type
     utils._grblas_types[gb_type] = gb_type
