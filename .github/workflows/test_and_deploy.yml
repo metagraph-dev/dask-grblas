@@ -37,14 +37,9 @@ jobs:
           black --version
           black dask_grblas/ --check --diff
       - name: Pytest
-        run: |
-          pytest
+        run: pytest
       - name: Conda Build
-        run: |
-          conda build -c defaults -c conda-forge --python 3.9 recipe
-          # This doesn't rebuild, but simply computes the name of the file that was previously built
-          OUTPUT=$(conda build --output -c defaults -c conda-forge --python 3.8 continuous_integration/conda)
-          echo $OUTPUT
+        run: conda build -c defaults -c conda-forge --python 3.9 recipe
       - name: Determine label
         if: contains(github.ref, 'refs/tags/')
         run: |
@@ -54,6 +49,6 @@ jobs:
         run: |
           conda install -q anaconda-client
           # This doesn't rebuild, but simply computes the name of the file that was previously built
-          OUTPUT=$(conda build --output -c defaults -c conda-forge --python 3.8 continuous_integration/conda)
+          OUTPUT=$(conda build --output -c defaults -c conda-forge --python 3.9 recipe)
           echo "Uploading $OUTPUT with label=${{ env.AC_LABEL }}"
           $CONDA/bin/anaconda -t ${{ secrets.ANACONDA_ORG_TOKEN }} upload -u metagraph ${{ env.AC_LABEL }} --no-progress --force $OUTPUT
