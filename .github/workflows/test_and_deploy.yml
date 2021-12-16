@@ -1,0 +1,59 @@
+name: Test and Deploy
+
+on:
+  # Run this workflow every time a PR is opened or a new commit is pushed to the PR
+  pull_request:
+  # Run this workflow every time a PR is merged to main or a release tag is added
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+
+jobs:
+  test_build_deploy:
+    runs-on: ubuntu-latest
+    env:
+      AC_LABEL: -l dev
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Create env
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: 3.9
+      - name: Update env
+        run: |
+          conda install -q -c defaults -c conda-forge conda-build grblas 'black=21.11b1'
+          pip install -e .
+      - name: Lint with Black
+        run: |
+          black --version
+          black *.py --check --diff
+      - name: Pytest
+        run: |
+          pytest
+      - name: Conda Build
+        run: |
+          conda build -c defaults -c conda-forge --python 3.9 recipe
+          # This doesn't rebuild, but simply computes the name of the file that was previously built
+          OUTPUT=$(conda build --output -c defaults -c conda-forge --python 3.8 continuous_integration/conda)
+          echo $OUTPUT
+      - name: Determine label
+        if: contains(github.ref, 'refs/tags/')
+        run: |
+          echo "AC_LABEL=-l main -l dev" >> $GITHUB_ENV
+      - name: Deploy to Anaconda Cloud
+        if: (github.ref == 'refs/heads/main') || contains(github.ref, 'refs/tags/')
+        run: |
+          conda install -q anaconda-client
+          # This doesn't rebuild, but simply computes the name of the file that was previously built
+          OUTPUT=$(conda build --output -c defaults -c conda-forge --python 3.8 continuous_integration/conda)
+          echo "Uploading $OUTPUT with label=${{ env.AC_LABEL }}"
+          $CONDA/bin/anaconda -t ${{ secrets.ANACONDA_ORG_TOKEN }} upload -u metagraph ${{ env.AC_LABEL }} --no-progress --force $OUTPUT
