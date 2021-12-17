@@ -124,8 +124,8 @@ def test_binaryop_parameterized():
     x = x.ewise_mult(x, op(1)).new()
     assert v.isequal(x)
 
-    v11 = v.apply(op(1), left=10)
-    r11 = Vector.from_values([0, 1, 3], [12, 13, 7], dtype=dtypes.INT32)
+    v11 = v.apply(op(1), left=10).new()
+    r11 = Vector.from_values([0, 1, 3], [30, 46, -50], dtype=dtypes.INT32)
     assert v11.isequal(r11, check_dtype=True)
 
 
