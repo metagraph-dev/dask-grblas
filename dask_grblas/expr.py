@@ -15,7 +15,7 @@ class GbDelayed:
         self.kwargs = kwargs
         self._meta = meta
 
-    def _matmul(self, meta, updating=None, mask=None, accum=None):
+    def _matmul(self, meta, mask=None):
         left_operand = self.parent
         right_operand = self.args[0]
         op = self.args[1]
@@ -43,31 +43,24 @@ class GbDelayed:
         else:
             out_ind = 'k' if (len(rhs_ind) == 2) else ''
 
-        not_updating = updating is None
         no_mask = mask is None
         grblas_mask_type = None
-        if not_updating:
+        if no_mask:
             args = [a, lhs_ind, b, rhs_ind]
-        elif no_mask:
-            args = [updating, out_ind,
-                    a, lhs_ind, b, rhs_ind]
         else:
             grblas_mask_type = get_grblas_type(mask)
-            args = [updating, out_ind,
-                    mask.mask._delayed, out_ind,
+            args = [mask.mask._delayed, out_ind,
                     a, lhs_ind, b, rhs_ind]
 
         return da.core.blockwise(
             partial(_matmul, op, at, bt, meta.dtype,
-                    not_updating,
-                    no_mask, grblas_mask_type,
-                    accum),
+                    no_mask, grblas_mask_type),
             out_ind,
             *args,
             meta=wrap_inner(meta)
         )
 
-    def _matmul2(self, meta, updating=None, mask=None, accum=None):
+    def _matmul2(self, meta, mask=None):
         left_operand = self.parent
         right_operand = self.args[0]
         # out_ind includes all dimensions to prevent full contraction
@@ -109,18 +102,39 @@ class GbDelayed:
 
         op = self.args[1]
         sum_meta = wrap_inner(meta)
-        out = da.core.blockwise(
-            partial(_matmul2, op, meta.dtype, at, bt),
-            out_ind,
-            a,
-            lhs_ind,
-            b,
-            rhs_ind,
-            adjust_chunks={compress_axis: 1},
-            dtype=np.result_type(a, b),
-            concatenate=False,
-            meta=FakeInnerTensor(meta, compress_axis)
-        )
+        if mask is None:
+            out = da.core.blockwise(
+                partial(_matmul2, op, meta.dtype, at, bt),
+                out_ind,
+                a,
+                lhs_ind,
+                b,
+                rhs_ind,
+                adjust_chunks={compress_axis: 1},
+                dtype=np.result_type(a, b),
+                concatenate=False,
+                meta=FakeInnerTensor(meta, compress_axis)
+            )
+        else:
+            m = mask.mask._delayed
+            grblas_mask_type = get_grblas_type(mask)
+            mask_ind = list(out_ind)
+            mask_ind.remove(compress_axis)
+            mask_ind = tuple(mask_ind)
+            out = da.core.blockwise(
+                partial(_matmul2_masked, op, meta.dtype, at, bt, grblas_mask_type),
+                out_ind,
+                m,
+                mask_ind,
+                a,
+                lhs_ind,
+                b,
+                rhs_ind,
+                adjust_chunks={compress_axis: 1},
+                dtype=np.result_type(a, b),
+                concatenate=False,
+                meta=FakeInnerTensor(meta, compress_axis)
+            )
 
         # out has an extra dimension (a slab or a bar), and now reduce along it
         out = sum_by_monoid(op.monoid, out, axis=compress_axis, meta=sum_meta)
@@ -184,9 +198,9 @@ class GbDelayed:
             delayed = self._reduce_along_axis(0, meta.dtype)
         elif self.method_name in {'apply', 'ewise_add', 'ewise_mult'}:
             self_kwargs = {key: (self.kwargs[key]._delayed
-                            if isinstance(self.kwargs[key], BaseType)
-                            else self.kwargs[key])
-                      for key in self.kwargs}
+                                 if isinstance(self.kwargs[key], BaseType)
+                                 else self.kwargs[key])
+                           for key in self.kwargs}
             delayed = da.core.elemwise(
                 _expr_new,
                 self.method_name,
@@ -200,7 +214,7 @@ class GbDelayed:
             )
         elif self.method_name in {'vxm', 'mxv', 'mxm'}:
             # TODO: handle dtype and mask
-            delayed = self._matmul2(meta)
+            delayed = self._matmul2(meta, mask=mask)
         else:
             raise ValueError(self.method_name)
         return get_return_type(meta)(delayed)
@@ -260,9 +274,9 @@ class GbDelayed:
         elif self.method_name in {'apply', 'ewise_add', 'ewise_mult'}:
             delayed = updating._optional_dup()
             self_kwargs = {key: (self.kwargs[key]._delayed
-                            if isinstance(self.kwargs[key], BaseType)
-                            else self.kwargs[key])
-                      for key in self.kwargs}
+                                 if isinstance(self.kwargs[key], BaseType)
+                                 else self.kwargs[key])
+                           for key in self.kwargs}
             if mask is None and accum is None:
                 delayed = da.core.elemwise(
                     _update_expr,
@@ -294,7 +308,7 @@ class GbDelayed:
                     dtype=np_dtype(meta.dtype),
                 )
         elif self.method_name in {'vxm', 'mxv', 'mxm'}:
-            delayed = self._matmul2(meta)
+            delayed = self._matmul2(meta, mask=mask)
             updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
             return
         else:
@@ -459,6 +473,34 @@ def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
     return wrap_inner(expr.new(dtype=dtype, mask=mask))
 
 
+# This mutates the value in `updating`
+def _update_expr(method_name, updating, x, kwargs, *args):
+    # v << left.ewise_mult(right)
+    args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
+    kwargs = {key: (kwargs[key].value
+                    if isinstance(kwargs[key], InnerBaseType)
+                    else kwargs[key])
+              for key in kwargs}
+    expr = getattr(x.value, method_name)(*args, **kwargs)
+    updating.value << expr
+    return updating
+
+
+# This mutates the value in `updating`
+def _update_expr_full(method_name, updating, accum, mask, mask_type, replace, x, kwargs, *args):
+    # v(mask=mask) << left.ewise_mult(right)
+    args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
+    kwargs = {key: (kwargs[key].value
+                    if isinstance(kwargs[key], InnerBaseType)
+                    else kwargs[key])
+              for key in kwargs}
+    expr = getattr(x.value, method_name)(*args, **kwargs)
+    if mask is not None:
+        mask = mask_type(mask.value)
+    updating.value(accum=accum, mask=mask, replace=replace) << expr
+    return updating
+
+
 def _reduce_axis(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
     """ Call reduce_rowwise or reduce_columnwise on each chunk"""
     if computing_meta:
@@ -542,77 +584,45 @@ def _reduce_axis_accum(output, reduced, accum):
     return wrap_inner(result)
 
 
-# This mutates the value in `updating`
-def _update_expr(method_name, updating, x, kwargs, *args):
-    # v << left.ewise_mult(right)
-    args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
-    kwargs = {key: (kwargs[key].value
-                    if isinstance(kwargs[key], InnerBaseType)
-                    else kwargs[key])
-              for key in kwargs}
-    expr = getattr(x.value, method_name)(*args, **kwargs)
-    updating.value << expr
-    return updating
-
-
-# This mutates the value in `updating`
-def _update_expr_full(method_name, updating, accum, mask, mask_type, replace, x, kwargs, *args):
-    # v(mask=mask) << left.ewise_mult(right)
-    args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
-    kwargs = {key: (kwargs[key].value
-                    if isinstance(kwargs[key], InnerBaseType)
-                    else kwargs[key])
-              for key in kwargs}
-    expr = getattr(x.value, method_name)(*args, **kwargs)
-    if mask is not None:
-        mask = mask_type(mask.value)
-    updating.value(accum=accum, mask=mask, replace=replace) << expr
-    return updating
-
-
-def _check_transpose(x, xt):
+def _transpose_if(x, xt):
     if xt:
         return x.value.T
     return x.value
 
 
-def _matmul(op, at, bt, dtype, not_updating, no_mask, mask_type, accum, *args, computing_meta=None):
+def _matmul(op, at, bt, dtype, no_mask, mask_type, *args, computing_meta=None):
     if computing_meta:
         return np.empty(0, dtype=dtype)
 
-    if not_updating:
+    if no_mask:
         a_blocks, b_blocks = args
-        vals = [
-            op(
-                _check_transpose(a, at) @ _check_transpose(b, bt)
-            ).new(dtype=dtype)
-            for a, b in zip(a_blocks, b_blocks)
-        ]
-        return wrap_inner(reduce(lambda x, y: x.ewise_add(y, op.monoid).new(),
-                                 vals))
+        mask = None
     else:
-        if no_mask:
-            u, a_blocks, b_blocks = args
-            mask = None
-        else:
-            u, mask, a_blocks, b_blocks = args
-            mask = mask_type(mask.value)
+        mask, a_blocks, b_blocks = args
+        mask = mask_type(mask.value)
 
-        vals = [
-            op(
-                _check_transpose(a, at) @ _check_transpose(b, bt)
-            ).new(dtype=dtype)
-            for a, b in zip(a_blocks, b_blocks)
-        ]
-        gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(), vals)
-        u.value(mask=mask, accum=accum) << gb_obj
-        return u
+    vals = [
+        op(
+            _transpose_if(a, at) @ _transpose_if(b, bt)
+        ).new(mask=mask, dtype=dtype)
+        for a, b in zip(a_blocks, b_blocks)
+    ]
+    gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(), vals)
+
+    return wrap_inner(gb_obj)
 
 
 def _matmul2(op, dtype, at, bt, a, b, computing_meta=None):
-    left = _check_transpose(a, at)
-    right = _check_transpose(b, bt)
+    left = _transpose_if(a, at)
+    right = _transpose_if(b, bt)
     return op(left @ right).new(dtype=dtype)
+
+
+def _matmul2_masked(op, dtype, at, bt, mask_type, mask, a, b, computing_meta=None):
+    left = _transpose_if(a, at)
+    right = _transpose_if(b, bt)
+    mask = mask_type(mask.value)
+    return op(left @ right).new(dtype=dtype, mask=mask)
 
 
 def _sum_by_monoid(monoid, a, axis=None, keepdims=None):

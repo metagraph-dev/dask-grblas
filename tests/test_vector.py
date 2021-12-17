@@ -35,6 +35,39 @@ def ws():
     return w, (dw0, dw1)
 
 
+@pytest.fixture
+def vms():
+    val_mask = gb.Vector.from_values(
+        [0, 1, 2, 3, 4, 5],
+        [True, False, False, True, True, False],
+        size=6)
+    dvm0 = dgb.Vector.from_vector(val_mask)
+    dvm1 = dgb.concat_vectors([
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([0, 1], [True, False])),
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([0, 1, 2, 3], [False, True, True, False], size=4)),
+    ])
+    return val_mask, (dvm0, dvm1)
+
+
+@pytest.fixture
+def sms():
+    struct_mask = gb.Vector.from_values(
+        [0, 3, 4],
+        [False, False, False],
+        size=6)
+
+    dsm0 = dgb.Vector.from_vector(struct_mask)
+    dsm1 = dgb.concat_vectors([
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([0], [False], size=2)),
+        dgb.Vector.from_vector(
+            gb.Vector.from_values([1, 2], [False, False], size=4)),
+    ])
+    return struct_mask, (dsm0, dsm1)
+
+
 def test_new():
     v = gb.Vector.new(int)
     dv = dgb.Vector.new(int)
@@ -289,9 +322,11 @@ def test_update(vs, ws):
                 compare(f, (v.dup(dtype=float), w.dup()), (dv.dup(dtype=float), dw.dup()))
 
 
-def test_extract(vs, ws):
+def test_extract(vs, ws, vms, sms):
     v, dvs = vs
     w, dws = ws
+    vm, dvms = vms
+    sm, dsms = sms
 
     for index in [
         [0, 3, 1, 4, 2, 5],
@@ -308,7 +343,11 @@ def test_extract(vs, ws):
             x(accum=gb.binary.plus) << y[index]
             return x
 
-        def h(x, y):
+        def h(m, x, y):
+            x(mask=m, accum=gb.binary.plus) << y[index]
+            return x
+
+        def i(x, y):
             x[index] << y
             return x
 
@@ -318,8 +357,15 @@ def test_extract(vs, ws):
             for dw in dws:
                 compare(f, (v.dup(), w), (dv.dup(), dw))
                 compare(f, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
-                ### compare(g, (v.dup(), w), (dv.dup(), dw))
-                ### compare(g, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(g, (v.dup(), w), (dv.dup(), dw))
+                compare(g, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                for dvm in dvms:
+                    compare(h, (vm.V, v.dup(), w), (dvm.V, dv.dup(), dw))
+                    compare(h, (vm.V, v.dup(dtype=float), w), (dvm.V, dv.dup(dtype=float), dw))
+                for dsm in dsms:
+                    compare(h, (vm.S, v.dup(), w), (dvm.S, dv.dup(), dw))
+                    compare(h, (vm.S, v.dup(dtype=float), w), (dvm.S, dv.dup(dtype=float), dw))
+                    
 
 
 @pytest.mark.xfail

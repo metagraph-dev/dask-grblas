@@ -501,11 +501,81 @@ def test_apply(As):
         y << x.apply(gb.unary.abs)
         return y
 
+    def g(x, scalar=1):
+        y = type(x).new(x.dtype, nrows=x.nrows, ncols=x.ncols)
+        y << x.apply(gb.binary.gt, right=scalar)
+        return y
+
+    def h(x, scalar=2):
+        y = type(x).new(x.dtype, nrows=x.nrows, ncols=x.ncols)
+        y << x.apply(gb.binary.minus, left=scalar)
+        return y
+
+    def i(x, scalar=1):
+        y = type(x).new(x.dtype, nrows=x.nrows, ncols=x.ncols)
+        y << x.apply(gb.binary.plus, left=scalar)
+        return y
+
+    def j(x, scalar=1):
+        y = type(x).new(x.dtype, nrows=x.nrows, ncols=x.ncols)
+        y << x.apply(gb.monoid.plus, left=scalar)
+        return y
+
+    def k(x, scalar=1):
+        y = type(x).new(x.dtype, nrows=x.nrows, ncols=x.ncols)
+        y << x.apply(gb.monoid.plus, right=scalar)
+        return y
+
     for dA in dAs:
         compare(lambda x: x.apply(gb.unary.abs).new(), A, dA)
         compare(lambda x: x.apply(gb.unary.abs).new(dtype=float), A, dA)
         compare(lambda x: x.apply(gb.binary.plus).new(), A, dA, errors=True)
         compare(f, A.dup(), dA.dup())
+
+        compare(lambda x: x.apply(gb.binary.gt, right=1).new(), A, dA)
+        compare(lambda x: x.apply(gb.binary.gt, right=1).new(dtype=float), A, dA)
+        compare(g, A.dup(), dA.dup())
+        s = gb.Scalar.from_value(1)
+        ds = dgb.Scalar.from_value(s)
+        compare(lambda x, s: x.apply(gb.binary.gt, right=s).new(dtype=float),
+                (A, s), (dA, ds))
+        compare(g, (A.dup(), s), (dA.dup(), ds))
+
+        compare(lambda x: x.apply(gb.binary.minus, left=2).new(), A, dA)
+        compare(lambda x: x.apply(gb.binary.minus, left=2).new(dtype=float), A, dA)
+        compare(h, A.dup(), dA.dup())
+        s = gb.Scalar.from_value(2)
+        ds = dgb.Scalar.from_value(s)
+        compare(lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
+                (A, s), (dA, ds))
+        compare(h, (A.dup(), s), (dA.dup(), ds))
+
+        compare(lambda x: x.apply(gb.binary.plus, left=1).new(), A, dA)
+        compare(lambda x: x.apply(gb.binary.plus, left=1).new(dtype=float), A, dA)
+        compare(i, A.dup(), dA.dup())
+        s = gb.Scalar.from_value(1)
+        ds = dgb.Scalar.from_value(s)
+        compare(lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
+                (A, s), (dA, ds))
+        compare(i, (A.dup(), s), (dA.dup(), ds))
+
+        compare(lambda x: x.apply(gb.monoid.plus, left=1).new(), A, dA)
+        compare(lambda x: x.apply(gb.monoid.plus, left=1).new(dtype=float), A, dA)
+        compare(j, A.dup(), dA.dup())
+        s = gb.Scalar.from_value(1)
+        ds = dgb.Scalar.from_value(s)
+        compare(lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
+                (A, s), (dA, ds))
+        compare(j, (A.dup(), s), (dA.dup(), ds))
+
+        compare(lambda x: x.apply(gb.monoid.plus, right=1).new(), A, dA)
+        compare(lambda x: x.apply(gb.monoid.plus, right=1).new(dtype=float), A, dA)
+        compare(k, A.dup(), dA.dup())
+        s = gb.Scalar.from_value(1)
+        ds = dgb.Scalar.from_value(s)
+        compare(lambda x, s: x.apply(gb.binary.minus, right=s).new(dtype=float),
+                (A, s), (dA, ds))
+        compare(k, (A.dup(), s), (dA.dup(), ds))
 
 
 @pytest.mark.slow
