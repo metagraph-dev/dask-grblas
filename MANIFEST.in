@@ -1,0 +1,7 @@
+recursive-include dask_grblas *.py
+include setup.py
+include README.md
+include LICENSE
+include MANIFEST.in
+include versioneer.py
+include dask_grblas/_version.py

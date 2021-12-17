@@ -1,8 +1,10 @@
 from setuptools import setup
+import versioneer
 
 setup(
     name="dask-grblas",
-    version="0.0.0",
+    version=versioneer.get_version(),
+    cmdclass=versioneer.get_cmdclass(),
     description="Python interface to GraphBLAS and distributed via Dask",
     author="Erik Welch",
     url="https://github.com/eriknw/dask-grblas",

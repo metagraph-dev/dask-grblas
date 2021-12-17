@@ -4,6 +4,7 @@ from .scalar import Scalar
 from .vector import Vector
 from .matrix import Matrix
 from .construction import row_stack, column_stack, concat_vectors  # noqa
+from . import _version
 
 for dgb_type, inner_type, gb_type in [
     (mask.StructuralMask, None, grblas.mask.StructuralMask),
@@ -26,3 +27,5 @@ for dgb_type, inner_type, gb_type in [
     utils._return_types[gb_type] = dgb_type
 
 del dgb_type, inner_type, gb_type
+
+__version__ = _version.get_versions()["version"]
