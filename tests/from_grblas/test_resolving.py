@@ -7,11 +7,11 @@ from grblas import dtypes
 
 def test_from_values_dtype_resolving():
     u = Vector.from_values([0, 1, 2], [1, 2, 3], dtype=dtypes.INT32)
-    assert u.dtype == 'INT32'
-    u = Vector.from_values([0, 1, 2], [1, 2, 3], dtype='INT32')
+    assert u.dtype == "INT32"
+    u = Vector.from_values([0, 1, 2], [1, 2, 3], dtype="INT32")
     assert u.dtype == dtypes.INT32
     M = Matrix.from_values([0, 1, 2], [2, 0, 1], [0, 2, 3], dtype=dtypes.UINT8)
-    assert M.dtype == 'UINT8'
+    assert M.dtype == "UINT8"
     M = Matrix.from_values([0, 1, 2], [2, 0, 1], [0, 2, 3], dtype=float)
     assert M.dtype == dtypes.FP64
 
@@ -24,10 +24,10 @@ def test_from_values_invalid_dtype():
 def test_resolve_ops_using_common_dtype():
     # C << A.ewise_mult(B, binary.plus) <-- PLUS should use FP64 because unify(INT64, FP64) -> FP64
     u = Vector.from_values([0, 1, 3], [1, 2, 3], dtype=dtypes.INT64)
-    v = Vector.from_values([0, 1, 3], [0.1, 0.1, 0.1], dtype='FP64')
-    w = Vector.new('FP32', u.size)
+    v = Vector.from_values([0, 1, 3], [0.1, 0.1, 0.1], dtype="FP64")
+    w = Vector.new("FP32", u.size)
     w << u.ewise_mult(v, binary.plus)
-    result = Vector.from_values([0, 1, 3], [1.1, 2.1, 3.1], dtype='FP32')
+    result = Vector.from_values([0, 1, 3], [1.1, 2.1, 3.1], dtype="FP32")
     assert w.isclose(result, check_dtype=True)
 
 
@@ -61,7 +61,7 @@ def test_order_of_updater_params_does_not_matter():
 def test_already_resolved_ops_allowed_in_updater():
     # C(binary.plus['FP64']) << ...
     u = Vector.from_values([0, 1, 3], [1, 2, 3])
-    u(binary.plus['INT64']) << u.ewise_mult(u, binary.times['INT64'])
+    u(binary.plus["INT64"]) << u.ewise_mult(u, binary.times["INT64"])
     result = Vector.from_values([0, 1, 3], [2, 6, 12])
     assert u.isequal(result)
 

@@ -8,7 +8,9 @@ from .utils import np_dtype, get_meta
 
 def from_delayed(cls, scalar, dtype, *, name=None):
     if not isinstance(scalar, Delayed):
-        raise TypeError('Value is not a dask delayed object.  Please use dask.delayed to create a grblas.Scalar')
+        raise TypeError(
+            "Value is not a dask delayed object.  Please use dask.delayed to create a grblas.Scalar"
+        )
     inner = delayed(InnerScalar)(scalar)
     value = da.from_delayed(inner, (), dtype=np_dtype(dtype), name=name)
     return cls(value)
@@ -120,7 +122,9 @@ class Scalar(BaseType):
             self._meta.isclose(get_meta(other))
             other = Scalar.from_value(other)
             check_dtype = False
-        return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+        return super().isclose(
+            other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype
+        )
 
     @property
     def is_empty(self):
