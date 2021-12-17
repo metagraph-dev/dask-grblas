@@ -1,15 +1,25 @@
 name: Test and Deploy
 
+# Run whenever:
+# - PR is opened
+# - new commit is pushed to the PR
+# - PR is merged to main
+# - tag is added
 on:
-  # Run this workflow every time a PR is opened or a new commit is pushed to the PR
   pull_request:
-  # Run this workflow every time a PR is merged to main or a release tag is added
   push:
     branches:
       - main
     tags:
       - '*'
 
+# Always check formatting and run tests
+# Always build conda package
+# If merging to main:
+#   - upload to anaconda.org on the dev channel
+# If tagging a release:
+#   - upload to anaconda.org on both the dev and main channel
+#   - upload to PyPI
 jobs:
   test_build_deploy:
     runs-on: ubuntu-latest
@@ -51,4 +61,13 @@ jobs:
           # This doesn't rebuild, but simply computes the name of the file that was previously built
           OUTPUT=$(conda build --output -c defaults -c conda-forge --python 3.9 recipe)
           echo "Uploading $OUTPUT with label=${{ env.AC_LABEL }}"
-          anaconda -t ${{ secrets.ANACONDA_ORG_TOKEN }} upload -u metagraph ${{ env.AC_LABEL }} --no-progress --force $OUTPUT
+          anaconda -t ${{ secrets.ANACONDA_ORG_TOKEN }} upload -u metagraph ${{ env.AC_LABEL }} --no-progress --force --no-register $OUTPUT
+      - name: Build wheel
+        if: contains(github.ref, 'refs/tags/')
+        run: python setup.py sdist bdist_wheel
+      - name: Publish to PyPI
+        if: contains(github.ref, 'refs/tags/')
+        uses: pypa/gh-action-pypi-publish@master
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_TOKEN }}
