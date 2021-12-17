@@ -10,17 +10,23 @@ from .utils import compare
 def vs():
     v = gb.Vector.from_values([0, 1, 2, 4, 5], [0, -20, 30, 40, 50])
     dv0 = dgb.Vector.from_vector(v)
-    dv1 = dgb.concat_vectors([
-        dgb.Vector.from_vector(gb.Vector.from_values([0, 1, 2], [0, -20, 30])),
-        dgb.Vector.from_vector(gb.Vector.from_values([1, 2], [40, 50])),
-    ])
-    dv2 = dgb.concat_vectors([
-        dgb.concat_vectors([
-            dgb.Vector.from_vector(gb.Vector.from_values([0], [0])),
-            dgb.Vector.from_vector(gb.Vector.from_values([0, 1], [-20, 30])),
-        ]),
-        dgb.Vector.from_vector(gb.Vector.from_values([1, 2], [40, 50])),
-    ])
+    dv1 = dgb.concat_vectors(
+        [
+            dgb.Vector.from_vector(gb.Vector.from_values([0, 1, 2], [0, -20, 30])),
+            dgb.Vector.from_vector(gb.Vector.from_values([1, 2], [40, 50])),
+        ]
+    )
+    dv2 = dgb.concat_vectors(
+        [
+            dgb.concat_vectors(
+                [
+                    dgb.Vector.from_vector(gb.Vector.from_values([0], [0])),
+                    dgb.Vector.from_vector(gb.Vector.from_values([0, 1], [-20, 30])),
+                ]
+            ),
+            dgb.Vector.from_vector(gb.Vector.from_values([1, 2], [40, 50])),
+        ]
+    )
     return v, (dv0, dv1, dv2)
 
 
@@ -28,43 +34,45 @@ def vs():
 def ws():
     w = gb.Vector.from_values([0, 1, 3, 4, 5], [1.0, 2.0, 3.0, -4.0, 0.0])
     dw0 = dgb.Vector.from_vector(w)
-    dw1 = dgb.concat_vectors([
-        dgb.Vector.from_vector(gb.Vector.from_values([0, 1], [1.0, 2.0])),
-        dgb.Vector.from_vector(gb.Vector.from_values([1, 2, 3], [3.0, -4.0, 0.0])),
-    ])
+    dw1 = dgb.concat_vectors(
+        [
+            dgb.Vector.from_vector(gb.Vector.from_values([0, 1], [1.0, 2.0])),
+            dgb.Vector.from_vector(gb.Vector.from_values([1, 2, 3], [3.0, -4.0, 0.0])),
+        ]
+    )
     return w, (dw0, dw1)
 
 
 @pytest.fixture
 def vms():
     val_mask = gb.Vector.from_values(
-        [0, 1, 2, 3, 4, 5],
-        [True, False, False, True, True, False],
-        size=6)
+        [0, 1, 2, 3, 4, 5], [True, False, False, True, True, False], size=6
+    )
     dvm0 = dgb.Vector.from_vector(val_mask)
-    dvm1 = dgb.concat_vectors([
-        dgb.Vector.from_vector(
-            gb.Vector.from_values([0, 1], [True, False])),
-        dgb.Vector.from_vector(
-            gb.Vector.from_values([0, 1, 2, 3], [False, True, True, False], size=4)),
-    ])
+    dvm1 = dgb.concat_vectors(
+        [
+            dgb.Vector.from_vector(gb.Vector.from_values([0, 1], [True, False])),
+            dgb.Vector.from_vector(
+                gb.Vector.from_values([0, 1, 2, 3], [False, True, True, False], size=4)
+            ),
+        ]
+    )
     return val_mask, (dvm0, dvm1)
 
 
 @pytest.fixture
 def sms():
-    struct_mask = gb.Vector.from_values(
-        [0, 3, 4],
-        [False, False, False],
-        size=6)
+    struct_mask = gb.Vector.from_values([0, 3, 4], [False, False, False], size=6)
 
     dsm0 = dgb.Vector.from_vector(struct_mask)
-    dsm1 = dgb.concat_vectors([
-        dgb.Vector.from_vector(
-            gb.Vector.from_values([0], [False], size=2)),
-        dgb.Vector.from_vector(
-            gb.Vector.from_values([1, 2], [False, False], size=4)),
-    ])
+    dsm1 = dgb.concat_vectors(
+        [
+            dgb.Vector.from_vector(gb.Vector.from_values([0], [False], size=2)),
+            dgb.Vector.from_vector(
+                gb.Vector.from_values([1, 2], [False, False], size=4)
+            ),
+        ]
+    )
     return struct_mask, (dsm0, dsm1)
 
 
@@ -98,7 +106,7 @@ def test_dup(vs):
 @pytest.mark.slow
 def test_isequal_isclose(vs, ws):
     o = object()
-    for method_name in ['isequal', 'isclose']:
+    for method_name in ["isequal", "isclose"]:
         v = vs[0]
         w = ws[0]
         for dv in vs[1]:
@@ -118,7 +126,6 @@ def test_nvals(vs):
 
 
 def test_clear(vs):
-
     def f(x):
         x.clear()
         return x
@@ -132,7 +139,7 @@ def test_ewise(vs, ws):
     w = ws[0]
     binfunc = lambda x, y: getattr(x, method_name)(y, op, require_monoid=False).new()
     for op in [gb.monoid.plus, gb.binary.plus]:
-        for method_name in ['ewise_add', 'ewise_mult']:
+        for method_name in ["ewise_add", "ewise_mult"]:
 
             def f(w, x, y):
                 w << getattr(x, method_name)(y, op)
@@ -152,16 +159,34 @@ def test_ewise(vs, ws):
             for dv in vs[1]:
                 for index, func in enumerate(funcs):
                     compare(func, (v, v), (dv, dv), errors=errors, compute=compute)
-                if method_name == 'ewise_add':
+                if method_name == "ewise_add":
                     compare(binfunc, (v, v), (dv, dv))
-                compare(f, (v.dup(), v, v), (dv.dup(), dv, dv), errors=errors, compute=compute)
+                compare(
+                    f,
+                    (v.dup(), v, v),
+                    (dv.dup(), dv, dv),
+                    errors=errors,
+                    compute=compute,
+                )
                 for dw in ws[1]:
                     for func in funcs:
                         compare(func, (v, w), (dv, dw), errors=errors, compute=compute)
-                    if method_name == 'ewise_add':
+                    if method_name == "ewise_add":
                         compare(binfunc, (v, v), (dv, dv))
-                    compare(f, (v.dup(), v, w), (dv.dup(), dv, dw), errors=errors, compute=compute)
-                    compare(f, (w.dup(), v, w), (dw.dup(), dv, dw), errors=errors, compute=compute)
+                    compare(
+                        f,
+                        (v.dup(), v, w),
+                        (dv.dup(), dv, dw),
+                        errors=errors,
+                        compute=compute,
+                    )
+                    compare(
+                        f,
+                        (w.dup(), v, w),
+                        (dw.dup(), dv, dw),
+                        errors=errors,
+                        compute=compute,
+                    )
 
 
 def test_reduce(vs):
@@ -246,8 +271,11 @@ def test_apply(vs):
         compare(g, v.dup(), dv.dup())
         s = gb.Scalar.from_value(1)
         ds = dgb.Scalar.from_value(s)
-        compare(lambda x, s: x.apply(gb.binary.gt, right=s).new(dtype=float),
-                (v, s), (dv, ds))
+        compare(
+            lambda x, s: x.apply(gb.binary.gt, right=s).new(dtype=float),
+            (v, s),
+            (dv, ds),
+        )
         compare(g, (v.dup(), s), (dv.dup(), ds))
 
         compare(lambda x: x.apply(gb.binary.minus, left=2).new(), v, dv)
@@ -255,8 +283,11 @@ def test_apply(vs):
         compare(h, v.dup(), dv.dup())
         s = gb.Scalar.from_value(2)
         ds = dgb.Scalar.from_value(s)
-        compare(lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
-                (v, s), (dv, ds))
+        compare(
+            lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
+            (v, s),
+            (dv, ds),
+        )
         compare(h, (v.dup(), s), (dv.dup(), ds))
 
         compare(lambda x: x.apply(gb.binary.plus, left=1).new(), v, dv)
@@ -264,8 +295,11 @@ def test_apply(vs):
         compare(i, v.dup(), dv.dup())
         s = gb.Scalar.from_value(1)
         ds = dgb.Scalar.from_value(s)
-        compare(lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
-                (v, s), (dv, ds))
+        compare(
+            lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
+            (v, s),
+            (dv, ds),
+        )
         compare(i, (v.dup(), s), (dv.dup(), ds))
 
         compare(lambda x: x.apply(gb.monoid.plus, left=1).new(), v, dv)
@@ -273,8 +307,11 @@ def test_apply(vs):
         compare(j, v.dup(), dv.dup())
         s = gb.Scalar.from_value(1)
         ds = dgb.Scalar.from_value(s)
-        compare(lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
-                (v, s), (dv, ds))
+        compare(
+            lambda x, s: x.apply(gb.binary.minus, left=s).new(dtype=float),
+            (v, s),
+            (dv, ds),
+        )
         compare(j, (v.dup(), s), (dv.dup(), ds))
 
         compare(lambda x: x.apply(gb.monoid.plus, right=1).new(), v, dv)
@@ -282,8 +319,11 @@ def test_apply(vs):
         compare(k, v.dup(), dv.dup())
         s = gb.Scalar.from_value(1)
         ds = dgb.Scalar.from_value(s)
-        compare(lambda x, s: x.apply(gb.binary.minus, right=s).new(dtype=float),
-                (v, s), (dv, ds))
+        compare(
+            lambda x, s: x.apply(gb.binary.minus, right=s).new(dtype=float),
+            (v, s),
+            (dv, ds),
+        )
         compare(k, (v.dup(), s), (dv.dup(), ds))
 
 
@@ -319,7 +359,9 @@ def test_update(vs, ws):
         for dv in dvs:
             for dw in dws:
                 compare(f, (v.dup(), w.dup()), (dv.dup(), dw.dup()))
-                compare(f, (v.dup(dtype=float), w.dup()), (dv.dup(dtype=float), dw.dup()))
+                compare(
+                    f, (v.dup(dtype=float), w.dup()), (dv.dup(dtype=float), dw.dup())
+                )
 
 
 def test_extract(vs, ws, vms, sms):
@@ -335,6 +377,7 @@ def test_extract(vs, ws, vms, sms):
         slice(None, None, -1),
         [0] * 6,
     ]:
+
         def f(x, y):
             x << y[index]
             return x
@@ -361,11 +404,18 @@ def test_extract(vs, ws, vms, sms):
                 compare(g, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 for dvm in dvms:
                     compare(h, (vm.V, v.dup(), w), (dvm.V, dv.dup(), dw))
-                    compare(h, (vm.V, v.dup(dtype=float), w), (dvm.V, dv.dup(dtype=float), dw))
+                    compare(
+                        h,
+                        (vm.V, v.dup(dtype=float), w),
+                        (dvm.V, dv.dup(dtype=float), dw),
+                    )
                 for dsm in dsms:
                     compare(h, (vm.S, v.dup(), w), (dvm.S, dv.dup(), dw))
-                    compare(h, (vm.S, v.dup(dtype=float), w), (dvm.S, dv.dup(dtype=float), dw))
-                    
+                    compare(
+                        h,
+                        (vm.S, v.dup(dtype=float), w),
+                        (dvm.S, dv.dup(dtype=float), dw),
+                    )
 
 
 @pytest.mark.xfail
@@ -373,11 +423,23 @@ def test_attrs(vs):
     v, dvs = vs
     dv = dvs[0]
     assert set(dir(v)) - set(dir(dv)) == {
-        '__del__',  # TODO
-        '_assign_element', '_extract_element', '_is_scalar', '_prep_for_assign',
-        '_prep_for_extract', '_delete_element', 'gb_obj', 'show',
+        "__del__",  # TODO
+        "_assign_element",
+        "_extract_element",
+        "_is_scalar",
+        "_prep_for_assign",
+        "_prep_for_extract",
+        "_delete_element",
+        "gb_obj",
+        "show",
     }
     assert set(dir(dv)) - set(dir(v)) == {
-        '_delayed', '_meta', '_optional_dup',
-        'compute', 'from_vector', 'from_delayed', 'persist', 'visualize',
+        "_delayed",
+        "_meta",
+        "_optional_dup",
+        "compute",
+        "from_vector",
+        "from_delayed",
+        "persist",
+        "visualize",
     }

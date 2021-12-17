@@ -6,7 +6,7 @@ def np_dtype(dtype):
 
 
 def get_meta(val):
-    return getattr(val, '_meta', val)
+    return getattr(val, "_meta", val)
 
 
 def get_grblas_type(val):

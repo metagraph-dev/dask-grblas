@@ -4,6 +4,7 @@ from .utils import get_grblas_type
 class Mask:
     def __init__(self, mask):
         from . import matrix, vector
+
         assert type(mask) in {vector.Vector, matrix.Matrix}
         self.mask = mask
         self._meta = get_grblas_type(self)(mask._meta)

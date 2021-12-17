@@ -7,6 +7,7 @@ from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
 
 _expect_type = gb.base._expect_type
 
+
 class InnerBaseType:
     def astype(self, dtype):
         return wrap_inner(self.value.dup(dtype))
@@ -17,6 +18,7 @@ class BaseType:
 
     def isequal(self, other, *, check_dtype=False):
         from .scalar import PythonScalar
+
         # if type(other) is not type(self):
         #     raise TypeError(f'Argument of isequal must be of type {type(self).__name__}')
         if not self._meta.isequal(other._meta):
@@ -51,6 +53,7 @@ class BaseType:
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         from .scalar import PythonScalar
+
         # if type(other) is not type(self):
         #     raise TypeError(f'Argument of isclose must be of type {type(self).__name__}')
         if not self._meta.isequal(other._meta):
@@ -85,7 +88,7 @@ class BaseType:
         if mask is not None:
             if not isinstance(mask, Mask):
                 self._meta.dup(dtype=dtype, mask=mask)  # should raise
-                raise TypeError('Use dask_grblas mask, not a mask from grblas')
+                raise TypeError("Use dask_grblas mask, not a mask from grblas")
             meta = self._meta.dup(dtype=dtype, mask=mask._meta)
         else:
             meta = self._meta.dup(dtype=dtype)
@@ -133,6 +136,7 @@ class BaseType:
     @property
     def nvals(self):
         from .scalar import PythonScalar
+
         delayed = da.core.elemwise(
             _nvals,
             self._delayed,
@@ -164,7 +168,7 @@ class BaseType:
         elif typ is GbDelayed:
             expr._update(self)
         elif typ is TransposedMatrix:
-            raise NotImplementedError('C << A.T')
+            raise NotImplementedError("C << A.T")
         else:
             # Anything else we need to handle?
             raise TypeError()
@@ -220,7 +224,7 @@ class BaseType:
                 dtype=np_dtype(self._meta.dtype),
             )
         else:
-            raise NotImplementedError(f'{typ}')
+            raise NotImplementedError(f"{typ}")
 
     def compute(self, *args, **kwargs):
         # kwargs['scheduler'] = 'synchronous'
@@ -247,7 +251,9 @@ def _dup(x, mask, dtype, mask_type):
 
 
 def _isclose(x, y, rel_tol, abs_tol, check_dtype):
-    val = x.value.isclose(y.value, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+    val = x.value.isclose(
+        y.value, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype
+    )
     return _reduction_value(x, val)
 
 
@@ -266,7 +272,7 @@ def _optional_dup(x):
 
 
 def _reduction_value(x, val):
-    """ Helper function used when reducing objects to scalars such as for `isclose`"""
+    """Helper function used when reducing objects to scalars such as for `isclose`"""
     if x.ndim == 0:
         return wrap_inner(gb.Scalar.from_value(val))
     elif x.ndim == 1:

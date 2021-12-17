@@ -44,11 +44,14 @@ def test_isequal_isclose():
         (gb.Scalar.from_value(5), gb.Scalar.from_value(5.0)),
         (gb.Scalar.from_value(None, dtype=int), gb.Scalar.from_value(5)),
         (gb.Scalar.from_value(None, dtype=int), gb.Scalar.from_value(None, dtype=int)),
-        (gb.Scalar.from_value(None, dtype=int), gb.Scalar.from_value(None, dtype=float)),
+        (
+            gb.Scalar.from_value(None, dtype=int),
+            gb.Scalar.from_value(None, dtype=float),
+        ),
     ]
     o = object()
     for s, t in values:
-        for method_name in ['isequal', 'isclose']:
+        for method_name in ["isequal", "isclose"]:
             ds = dgb.Scalar.from_value(s)
             dt = dgb.Scalar.from_value(t)
             compare(
@@ -150,7 +153,6 @@ def test_is_empty():
 
 
 def test_update():
-
     def f1(x, y):
         x.update(y)
         return x
@@ -179,10 +181,21 @@ def test_attrs():
     s = gb.Scalar.from_value(3)
     ds = dgb.Scalar.from_value(s)
     assert set(dir(s)) - set(dir(ds)) == {
-        '_is_empty', '_assign_element', '_extract_element', '_is_scalar', '_prep_for_assign',
-        '_prep_for_extract', 'gb_obj', 'show',
+        "_is_empty",
+        "_assign_element",
+        "_extract_element",
+        "_is_scalar",
+        "_prep_for_assign",
+        "_prep_for_extract",
+        "gb_obj",
+        "show",
     }
     assert set(dir(ds)) - set(dir(s)) == {
-        '_delayed', '_meta', '_optional_dup',
-        'compute', 'from_delayed', 'persist', 'visualize',
+        "_delayed",
+        "_meta",
+        "_optional_dup",
+        "compute",
+        "from_delayed",
+        "persist",
+        "visualize",
     }
