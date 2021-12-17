@@ -51,4 +51,4 @@ jobs:
           # This doesn't rebuild, but simply computes the name of the file that was previously built
           OUTPUT=$(conda build --output -c defaults -c conda-forge --python 3.9 recipe)
           echo "Uploading $OUTPUT with label=${{ env.AC_LABEL }}"
-          $CONDA/bin/anaconda -t ${{ secrets.ANACONDA_ORG_TOKEN }} upload -u metagraph ${{ env.AC_LABEL }} --no-progress --force $OUTPUT
+          anaconda -t ${{ secrets.ANACONDA_ORG_TOKEN }} upload -u metagraph ${{ env.AC_LABEL }} --no-progress --force $OUTPUT
