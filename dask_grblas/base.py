@@ -175,7 +175,7 @@ class BaseType:
             return
         typ = type(expr)
         if typ is AmbiguousAssignOrExtract:
-            # Extract (w(accum=accum) << v[index])
+            # Extract (w(mask=mask, accum=accum) << v[index])
             delayed = self._optional_dup()
             expr_delayed = expr.new(dtype=self.dtype)._delayed
             self._meta(mask=get_meta(mask), accum=accum, replace=replace)
