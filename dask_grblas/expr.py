@@ -1,3 +1,4 @@
+from dask import is_dask_collection
 import dask.array as da
 import grblas as gb
 import numpy as np
@@ -351,9 +352,18 @@ class Updater:
         return AmbiguousAssignOrExtract(self, keys)
 
     def __setitem__(self, keys, obj):
-        raise NotImplementedError()
-        self._meta[keys] = obj
-        self.parent._meta.clear()  # XXX: test to see if this is necessary
+        # raise NotImplementedError()
+        keys_meta = keys
+        if is_dask_collection(keys_meta):
+            keys_meta = np.empty_like(keys)
+        self._meta[keys_meta] = obj._meta
+        (
+            AmbiguousAssignOrExtract(self, keys).update(
+                mask=self.mask, accum=self.accum, replace=self.replace
+            )
+            << obj
+        )
+        # self.parent._meta.clear()  # XXX: test to see if this is necessary
 
     def __lshift__(self, delayed):
         # Occurs when user calls C(params) << delayed
@@ -392,11 +402,16 @@ def _extractor_new(x, dtype, mask, mask_type):
         # This likely comes from a slice such as v[:] or v[:10]
         # Ideally, we would use `_optional_dup` in the DAG
         value = inner.value.dup(dtype=dtype, mask=mask)
-    elif len(indices) == 1:
-        index = indices[0]
-        if type(index) is tuple and len(index) == 1:
-            index = index[0]
-        value = inner.value[index].new(dtype=dtype, mask=mask)
+    elif len(indices) > 0:
+        value = inner.value
+        last_item_no = len(indices) - 1
+        for item_no, index in enumerate(indices[::-1]):
+            if type(index) is tuple and len(index) == 1:
+                ind = index[0]
+            if item_no < last_item_no:
+                value = value[ind].new(dtype=dtype)
+            else:
+                value = value[ind].new(dtype=dtype, mask=mask)
     else:
         raise NotImplementedError(f"indices: {indices}")
     return wrap_inner(value)
@@ -457,8 +472,43 @@ class AmbiguousAssignOrExtract:
         updater = self.parent(*args, **kwargs)
         return updater[self.index]
 
-    def update(self, obj):
+    def update(self, obj, dtype=None, mask=None, accum=None, replace=False):
         self.parent[self.index] = obj
+        if mask is not None:
+            assert isinstance(mask, Mask)
+            assert self.parent._meta.nvals == 0
+            meta = self._meta.new(dtype=dtype, mask=mask._meta)
+            delayed_mask = mask.mask._delayed
+            grblas_mask_type = get_grblas_type(mask)
+        else:
+            meta = self._meta.new(dtype=dtype)
+            delayed_mask = None
+            grblas_mask_type = None
+
+        # indices = gb.base.IndexerResolver(self.parent._meta, self.index, raw=False).indices
+        if len(self.parent.shape) == 1 and type(self.index) is not tuple:
+            indices = (self.index,)
+        else:
+            indices = self.index
+        if len(indices) == 1 or len(indices) == 2:
+            delayed = self.parent._delayed.map_blocks(
+                Extractor,
+                dtype=np_dtype(meta.dtype),
+            )
+            delayed = delayed[indices]
+            delayed = da.core.elemwise(
+                _extractor_update,
+                delayed,
+                dtype,
+                delayed_mask,
+                grblas_mask_type,
+                accum,
+                replace,
+                obj._delayed,
+                dtype=np_dtype(meta.dtype),
+            )
+            return
+        raise NotImplementedError()
 
     def __lshift__(self, obj):
         self.update(obj)
