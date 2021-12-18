@@ -1,11 +1,14 @@
-import pytest
+from builtins import getattr
+from functools import partial
+
 import grblas as gb
-import dask_grblas as dgb
+import pytest
 from grblas import dtypes
 from pytest import raises
+
+import dask_grblas as dgb
+
 from .utils import compare
-from functools import partial
-from builtins import getattr
 
 
 @pytest.fixture
@@ -47,16 +50,12 @@ def ws():
 
 @pytest.fixture
 def vms():
-    val_mask = gb.Vector.from_values(
-        [0, 1, 2, 3, 4], [True, False, False, True, True], size=7
-    )
+    val_mask = gb.Vector.from_values([0, 1, 2, 3, 4], [True, False, False, True, True], size=7)
     dvm0 = dgb.Vector.from_vector(val_mask)
     dvm1 = dgb.concat_vectors(
         [
             dgb.Vector.from_vector(gb.Vector.from_values([0, 1], [True, False])),
-            dgb.Vector.from_vector(
-                gb.Vector.from_values([0, 1, 2], [False, True, True], size=5)
-            ),
+            dgb.Vector.from_vector(gb.Vector.from_values([0, 1, 2], [False, True, True], size=5)),
         ]
     )
     return val_mask, (dvm0, dvm1)
@@ -70,9 +69,7 @@ def sms():
     dsm1 = dgb.concat_vectors(
         [
             dgb.Vector.from_vector(gb.Vector.from_values([0], [False], size=2)),
-            dgb.Vector.from_vector(
-                gb.Vector.from_values([1, 2], [False, False], size=5)
-            ),
+            dgb.Vector.from_vector(gb.Vector.from_values([1, 2], [False, False], size=5)),
         ]
     )
     return struct_mask, (dsm0, dsm1)
@@ -120,25 +117,17 @@ def sms_Matrix():
     dsm1 = dgb.row_stack(
         [
             dgb.Matrix.from_matrix(
-                gb.Matrix.from_values(
-                    [0, 1, 3], [2, 5, 3], [True, False, True], ncols=7
-                )
+                gb.Matrix.from_values([0, 1, 3], [2, 5, 3], [True, False, True], ncols=7)
             ),
-            dgb.Matrix.from_matrix(
-                gb.Matrix.from_values([0, 2], [2, 6], [False, False])
-            ),
+            dgb.Matrix.from_matrix(gb.Matrix.from_values([0, 2], [2, 6], [False, False])),
         ]
     )
     dsm2 = dgb.column_stack(
         [
             dgb.Matrix.from_matrix(
-                gb.Matrix.from_values(
-                    [0, 3, 4], [2, 3, 2], [True, True, False], nrows=7
-                )
+                gb.Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, False], nrows=7)
             ),
-            dgb.Matrix.from_matrix(
-                gb.Matrix.from_values([1, 6], [1, 2], [False, False])
-            ),
+            dgb.Matrix.from_matrix(gb.Matrix.from_values([1, 6], [1, 2], [False, False])),
         ]
     )
     return struct_mask, (dsm0, dsm1, dsm2)
@@ -170,9 +159,7 @@ def As():
                 )
             ),
             dgb.Matrix.from_matrix(
-                gb.Matrix.from_values(
-                    [1, 2, 2, 2, 0], [2, 2, 3, 4, 5], [1, 5, 7, 3, 7], ncols=7
-                )
+                gb.Matrix.from_values([1, 2, 2, 2, 0], [2, 2, 3, 4, 5], [1, 5, 7, 3, 7], ncols=7)
             ),
         ]
     )
@@ -190,9 +177,7 @@ def As():
                 ]
             ),
             dgb.Matrix.from_matrix(
-                gb.Matrix.from_values(
-                    [1, 2, 2, 2, 0], [2, 2, 3, 4, 5], [1, 5, 7, 3, 7], ncols=7
-                )
+                gb.Matrix.from_values([1, 2, 2, 2, 0], [2, 2, 3, 4, 5], [1, 5, 7, 3, 7], ncols=7)
             ),
         ]
     )
@@ -214,13 +199,9 @@ def As():
         [
             dgb.column_stack(
                 [
+                    dgb.Matrix.from_matrix(gb.Matrix.from_values([3, 0], [0, 1], [3, 2], nrows=7)),
                     dgb.Matrix.from_matrix(
-                        gb.Matrix.from_values([3, 0], [0, 1], [3, 2], nrows=7)
-                    ),
-                    dgb.Matrix.from_matrix(
-                        gb.Matrix.from_values(
-                            [3, 5, 6, 0, 6], [0, 0, 0, 1, 1], [3, 1, 5, 3, 7]
-                        )
+                        gb.Matrix.from_values([3, 5, 6, 0, 6], [0, 0, 0, 1, 1], [3, 1, 5, 3, 7])
                     ),
                 ]
             ),
@@ -244,12 +225,8 @@ def As():
             ),
             dgb.column_stack(
                 [
-                    dgb.Matrix.from_matrix(
-                        gb.Matrix.from_values([1, 2, 2], [2, 2, 3], [1, 5, 7])
-                    ),
-                    dgb.Matrix.from_matrix(
-                        gb.Matrix.from_values([2, 0], [0, 1], [3, 7], ncols=3)
-                    ),
+                    dgb.Matrix.from_matrix(gb.Matrix.from_values([1, 2, 2], [2, 2, 3], [1, 5, 7])),
+                    dgb.Matrix.from_matrix(gb.Matrix.from_values([2, 0], [0, 1], [3, 7], ncols=3)),
                 ]
             ),
         ]
@@ -284,9 +261,7 @@ def Cs():
                 )
             ),
             dgb.Matrix.from_matrix(
-                gb.Matrix.from_values(
-                    [1, 2, 2, 2, 0], [2, 2, 3, 4, 5], [1, 5, 7, 3, 7], ncols=7
-                )
+                gb.Matrix.from_values([1, 2, 2, 2, 0], [2, 2, 3, 4, 5], [1, 5, 7, 3, 7], ncols=7)
             ),
         ]
     )
@@ -300,9 +275,7 @@ def Cs():
                     [3, 2, 3, 1, 5, 3, 7, 4],
                 )
             ),
-            dgb.Matrix.from_matrix(
-                gb.Matrix.from_values([6, 2, 4, 1], [0, 1, 1, 2], [3, 1, 7, 4])
-            ),
+            dgb.Matrix.from_matrix(gb.Matrix.from_values([6, 2, 4, 1], [0, 1, 1, 2], [3, 1, 7, 4])),
         ]
     )
 
@@ -344,9 +317,7 @@ def Bs():
                 )
             ),
             dgb.Matrix.from_matrix(
-                gb.Matrix.from_values(
-                    [2, 2, 0, 1, 3, 4], [10, 11, 6, 6, 9, 9], [1.0] * 6
-                )
+                gb.Matrix.from_values([2, 2, 0, 1, 3, 4], [10, 11, 6, 6, 9, 9], [1.0] * 6)
             ),
         ]
     )
@@ -362,9 +333,7 @@ def Bs():
                 )
             ),
             dgb.Matrix.from_matrix(
-                gb.Matrix.from_values(
-                    [10, 11, 6, 6, 9, 9], [2, 2, 0, 1, 3, 4], [1.0] * 6
-                )
+                gb.Matrix.from_values([10, 11, 6, 6, 9, 9], [2, 2, 0, 1, 3, 4], [1.0] * 6)
             ),
         ]
     )
@@ -706,9 +675,7 @@ def test_update(As, Cs):
         for dA in dAs:
             for dC in dCs:
                 compare(f, (A.dup(), C.dup()), (dA.dup(), dC.dup()))
-                compare(
-                    f, (A.dup(dtype=float), C.dup()), (dA.dup(dtype=float), dC.dup())
-                )
+                compare(f, (A.dup(dtype=float), C.dup()), (dA.dup(dtype=float), dC.dup()))
 
 
 @pytest.mark.veryslow
@@ -755,13 +722,9 @@ def test_matmul_mxv_vxm(As, vs, ws, vms, sms):
                             gb_args = (v, A)
                             dgb_args = (dv, dA)
 
+                    compare(lambda x, y: getattr(x, method_name)(y).new(), gb_args, dgb_args)
                     compare(
-                        lambda x, y: getattr(x, method_name)(y).new(), gb_args, dgb_args
-                    )
-                    compare(
-                        lambda x, y: getattr(x, method_name)(
-                            y, gb.semiring.min_second
-                        ).new(),
+                        lambda x, y: getattr(x, method_name)(y, gb.semiring.min_second).new(),
                         gb_args,
                         dgb_args,
                     )
@@ -956,15 +919,9 @@ def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
             compare(lambda x, y: x.mxm(y.T).new(), gb_args, dgb_args)
             compare(lambda x, y: x.T.mxm(y.T).new(), gb_args, dgb_args)
 
-            compare(
-                lambda x, y: x.mxm(y, gb.semiring.min_second).new(), gb_args, dgb_args
-            )
-            compare(
-                lambda x, y: x.T.mxm(y, gb.semiring.min_second).new(), gb_args, dgb_args
-            )
-            compare(
-                lambda x, y: x.mxm(y.T, gb.semiring.min_second).new(), gb_args, dgb_args
-            )
+            compare(lambda x, y: x.mxm(y, gb.semiring.min_second).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.T.mxm(y, gb.semiring.min_second).new(), gb_args, dgb_args)
+            compare(lambda x, y: x.mxm(y.T, gb.semiring.min_second).new(), gb_args, dgb_args)
             compare(
                 lambda x, y: x.T.mxm(y.T, gb.semiring.min_second).new(),
                 gb_args,
@@ -1031,38 +988,26 @@ def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
                         M1 = gb.Matrix.new(int, 7, 7)
                         dM1 = dgb.Matrix.from_matrix(M1.dup())
                         compare(f, (M1, gb_mask, *gb_args), (dM1, dgb_mask, *dgb_args))
-                        compare(
-                            f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args)
-                        )
+                        compare(f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args))
 
                         M1 = gb.Matrix.new(float, 7, 7)
                         dM1 = dgb.Matrix.from_matrix(M1.dup())
                         compare(f, (M1, gb_mask, *gb_args), (dM1, dgb_mask, *dgb_args))
-                        compare(
-                            f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args)
-                        )
+                        compare(f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args))
 
                         M0, dM0s = As
                         for dM0 in dM0s:
                             M1 = M0.dup()
                             dM1 = dM0.dup()
-                            compare(
-                                f, (M1, gb_mask, *gb_args), (dM1, dgb_mask, *dgb_args)
-                            )
-                            compare(
-                                f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args)
-                            )
+                            compare(f, (M1, gb_mask, *gb_args), (dM1, dgb_mask, *dgb_args))
+                            compare(f, (M1, ~gb_mask, *gb_args), (dM1, ~dgb_mask, *dgb_args))
 
                         P0, dP0s = As
                         for dP0 in dP0s:
                             P1 = P0.dup()
                             dP1 = dP0.dup()
-                            compare(
-                                f, (P1, gb_mask, *gb_args), (dP1, dgb_mask, *dgb_args)
-                            )
-                            compare(
-                                f, (P1, ~gb_mask, *gb_args), (dP1, ~dgb_mask, *dgb_args)
-                            )
+                            compare(f, (P1, gb_mask, *gb_args), (dP1, dgb_mask, *dgb_args))
+                            compare(f, (P1, ~gb_mask, *gb_args), (dP1, ~dgb_mask, *dgb_args))
 
 
 @pytest.mark.xfail

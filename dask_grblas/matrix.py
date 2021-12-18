@@ -2,6 +2,7 @@ import dask.array as da
 import grblas as gb
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
+
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
@@ -122,9 +123,7 @@ class Matrix(BaseType):
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
         assert type(other) is Matrix  # TODO: or TransposedMatrix
         meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
-        return GbDelayed(
-            self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta
-        )
+        return GbDelayed(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
 
     def ewise_mult(self, other, op=binary.times):
         assert type(other) is Matrix  # TODO: or TransposedMatrix
@@ -196,9 +195,7 @@ class Matrix(BaseType):
         other = self._expect_type(
             other, (Matrix, TransposedMatrix), within="isclose", argname="other"
         )
-        return super().isclose(
-            other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype
-        )
+        return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
 
 class TransposedMatrix:

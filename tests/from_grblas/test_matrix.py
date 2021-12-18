@@ -1,9 +1,9 @@
-import pytest
 import numpy as np
-from dask_grblas import Matrix, Vector, Scalar
-from grblas import unary, binary, monoid, semiring
-from grblas import dtypes
-from grblas.exceptions import IndexOutOfBound, DimensionMismatch, OutputNotEmpty
+import pytest
+from grblas import binary, dtypes, monoid, semiring, unary
+from grblas.exceptions import DimensionMismatch, IndexOutOfBound, OutputNotEmpty
+
+from dask_grblas import Matrix, Scalar, Vector
 
 
 @pytest.fixture
@@ -55,13 +55,9 @@ def test_dup(A):
         Matrix.from_values([0, 1], [0, 1], [0, 2], dtype=dtypes.INT64), check_dtype=True
     )
     E = D.dup(mask=D.V)
-    assert E.isequal(
-        Matrix.from_values([1], [1], [2.5], dtype=dtypes.FP64), check_dtype=True
-    )
+    assert E.isequal(Matrix.from_values([1], [1], [2.5], dtype=dtypes.FP64), check_dtype=True)
     E = D.dup(dtype=dtypes.INT64, mask=D.V)
-    assert E.isequal(
-        Matrix.from_values([1], [1], [2], dtype=dtypes.INT64), check_dtype=True
-    )
+    assert E.isequal(Matrix.from_values([1], [1], [2], dtype=dtypes.INT64), check_dtype=True)
 
 
 def test_from_values():
@@ -75,9 +71,7 @@ def test_from_values():
     assert C2.ncols == 3
     assert C2.nvals == 3
     assert C2.dtype == float
-    C3 = Matrix.from_values(
-        [0, 1, 1], [2, 1, 1], [1, 2, 3], nrows=10, dup_op=binary.times
-    )
+    C3 = Matrix.from_values([0, 1, 1], [2, 1, 1], [1, 2, 3], nrows=10, dup_op=binary.times)
     assert C3.nrows == 10
     assert C3.ncols == 3
     assert C3.nvals == 2  # duplicates were combined
@@ -227,9 +221,7 @@ def test_mxm_nonsquare():
 
 
 def test_mxm_mask(A):
-    val_mask = Matrix.from_values(
-        [0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7
-    )
+    val_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7)
     struct_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [1, 0, 0], nrows=7, ncols=7)
     C = A.dup()
     C(val_mask.V) << A.mxm(A, semiring.plus_times)

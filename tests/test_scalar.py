@@ -1,8 +1,10 @@
-import pytest
 import grblas as gb
-import dask_grblas as dgb
+import pytest
 from grblas import dtypes
 from pytest import raises
+
+import dask_grblas as dgb
+
 from .utils import compare
 
 

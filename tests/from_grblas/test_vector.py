@@ -1,9 +1,9 @@
-import pytest
 import numpy as np
-from dask_grblas import Matrix, Vector, Scalar
-from grblas import unary, binary, monoid, semiring
-from grblas import dtypes
+import pytest
+from grblas import binary, dtypes, monoid, semiring, unary
 from grblas.exceptions import IndexOutOfBound, OutputNotEmpty
+
+from dask_grblas import Matrix, Scalar, Vector
 
 
 @pytest.fixture
@@ -41,13 +41,9 @@ def test_dup(v):
     # extended functionality
     w = Vector.from_values([0, 1], [0, 2.5], dtype=dtypes.FP64)
     x = w.dup(dtype=dtypes.INT64)
-    assert x.isequal(
-        Vector.from_values([0, 1], [0, 2], dtype=dtypes.INT64), check_dtype=True
-    )
+    assert x.isequal(Vector.from_values([0, 1], [0, 2], dtype=dtypes.INT64), check_dtype=True)
     x = w.dup(mask=w.V)
-    assert x.isequal(
-        Vector.from_values([1], [2.5], dtype=dtypes.FP64), check_dtype=True
-    )
+    assert x.isequal(Vector.from_values([1], [2.5], dtype=dtypes.FP64), check_dtype=True)
     x = w.dup(dtype=dtypes.INT64, mask=w.V)
     assert x.isequal(Vector.from_values([1], [2], dtype=dtypes.INT64), check_dtype=True)
 
@@ -178,9 +174,7 @@ def test_vxm_nonsquare(v):
 
 
 def test_vxm_mask(v, A):
-    val_mask = Vector.from_values(
-        [0, 1, 2, 3, 4], [True, False, False, True, True], size=7
-    )
+    val_mask = Vector.from_values([0, 1, 2, 3, 4], [True, False, False, True, True], size=7)
     struct_mask = Vector.from_values([0, 3, 4], [False, False, False], size=7)
     u = v.dup()
     u(struct_mask.S) << v.vxm(A, semiring.plus_times)
