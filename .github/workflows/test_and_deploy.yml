@@ -40,14 +40,23 @@ jobs:
           python-version: 3.9
       - name: Update env
         run: |
-          conda install -q -c defaults -c conda-forge conda-build grblas dask pytest 'black=21.11b1'
+          conda install -q -c defaults -c conda-forge conda-build grblas dask pytest 'black=21.11b1' flake8 coverage coveralls
           pip install -e .
       - name: Lint with Black
         run: |
           black --version
           black dask_grblas/ --check --diff
+      - name: flake8 style check
+        run: flake8
       - name: Pytest
-        run: pytest
+        run: coverage run --branch -m pytest
+      - name: Coverage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COVERALLS_PARALLEL: true
+        run: |
+          coverage report --show-missing
+          coveralls --service=github
       - name: Conda Build
         run: conda build -c defaults -c conda-forge --python 3.9 recipe
       - name: Determine label
@@ -71,3 +80,23 @@ jobs:
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}
+
+  finish:
+    needs: test_build_deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - name: Create env
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: 3.9
+      - name: Update env
+        run: conda install -q -c defaults -c conda-forge coveralls
+      - name: Coveralls Finished
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          coveralls --finish

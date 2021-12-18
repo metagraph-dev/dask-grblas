@@ -711,7 +711,7 @@ def test_update(As, Cs):
                 )
 
 
-@pytest.mark.slow
+@pytest.mark.veryslow
 def test_matmul_mxv_vxm(As, vs, ws, vms, sms):
     def f0(method_name, z, x, y):
         z << getattr(x, method_name)(y)
@@ -861,7 +861,7 @@ def test_matmul_mxv_vxm(As, vs, ws, vms, sms):
                                     )
 
 
-@pytest.mark.slow
+@pytest.mark.veryslow
 def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
     def f0(z, x, y):
         z << x.mxm(y)

@@ -412,6 +412,7 @@ def test_semiring_udf():
     assert w.isequal(result)
 
 
+@pytest.mark.slow
 def test_binary_updates():
     assert not hasattr(binary, "div")
     assert binary.cdiv["INT64"].gb_obj == lib.GrB_DIV_INT64

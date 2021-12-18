@@ -364,6 +364,7 @@ def test_update(vs, ws):
                 )
 
 
+@pytest.mark.slow
 def test_extract(vs, ws, vms, sms):
     v, dvs = vs
     w, dws = ws
