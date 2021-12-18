@@ -2,6 +2,7 @@ from builtins import getattr
 from functools import partial
 
 import grblas as gb
+import itertools
 import pytest
 from grblas import dtypes
 from pytest import raises
@@ -703,125 +704,131 @@ def test_matmul_mxv_vxm(As, vs, ws, vms, sms):
     A, dAs = As
     v, dvs = vs
 
-    for dA in dAs:
-        for dv in dvs:
-            for method_name in ["mxv", "vxm"]:
-                for transpose in [False, True]:
-                    if method_name == "mxv":
-                        if transpose:
-                            gb_args = (A.T, v)
-                            dgb_args = (dA.T, dv)
-                        else:
-                            gb_args = (A, v)
-                            dgb_args = (dA, dv)
-                    else:
-                        if transpose:
-                            gb_args = (v, A.T)
-                            dgb_args = (dv, dA.T)
-                        else:
-                            gb_args = (v, A)
-                            dgb_args = (dv, dA)
+    for dA, dv, method_name, transpose in itertools.product(
+        dAs, dvs, ["mxv", "vxm"], [False, True]
+    ):
+        try:
+            if method_name == "mxv":
+                if transpose:
+                    gb_args = (A.T, v)
+                    dgb_args = (dA.T, dv)
+                else:
+                    gb_args = (A, v)
+                    dgb_args = (dA, dv)
+            else:
+                if transpose:
+                    gb_args = (v, A.T)
+                    dgb_args = (dv, dA.T)
+                else:
+                    gb_args = (v, A)
+                    dgb_args = (dv, dA)
 
-                    compare(lambda x, y: getattr(x, method_name)(y).new(), gb_args, dgb_args)
-                    compare(
-                        lambda x, y: getattr(x, method_name)(y, gb.semiring.min_second).new(),
-                        gb_args,
-                        dgb_args,
-                    )
-                    compare(
-                        lambda x, y: getattr(x, method_name)(y).new(dtype=dtypes.FP64),
-                        gb_args,
-                        dgb_args,
-                    )
-                    compare(
-                        lambda x, y: getattr(x, method_name)(y, gb.binary.plus).new(),
-                        gb_args,
-                        dgb_args,
-                        errors=True,
-                    )
-                    for func in [f0, f1, f2]:
-                        f = partial(func, method_name)
+            compare(lambda x, y: getattr(x, method_name)(y).new(), gb_args, dgb_args)
+            compare(
+                lambda x, y: getattr(x, method_name)(y, gb.semiring.min_second).new(),
+                gb_args,
+                dgb_args,
+            )
+            compare(
+                lambda x, y: getattr(x, method_name)(y).new(dtype=dtypes.FP64),
+                gb_args,
+                dgb_args,
+            )
+            compare(
+                lambda x, y: getattr(x, method_name)(y, gb.binary.plus).new(),
+                gb_args,
+                dgb_args,
+                errors=True,
+            )
+            for func in [f0, f1, f2]:
+                f = partial(func, method_name)
+                v1 = gb.Vector.new(int, 7)
+                dv1 = dgb.Vector.from_vector(v1.dup())
+                compare(f, (v1, *gb_args), (dv1, *dgb_args))
+
+                v1 = gb.Vector.new(float, 7)
+                dv1 = dgb.Vector.from_vector(v1.dup())
+                compare(f, (v1, *gb_args), (dv1, *dgb_args))
+
+                v0, dv0s = vs
+                for dv0 in dv0s:
+                    v1 = v0.dup()
+                    dv1 = dv0.dup()
+                    compare(f, (v1, *gb_args), (dv1, *dgb_args))
+
+                w0, dw0s = ws
+                for dw0 in dw0s:
+                    w1 = w0.dup()
+                    dw1 = dw0.dup()
+                    compare(f, (w1, *gb_args), (dw1, *dgb_args))
+
+            for f in [partial(f3, method_name), partial(f4, method_name)]:
+                for attr, mask, dmasks in [("V", *vms), ("S", *sms)]:
+                    for dmask in dmasks:
+                        gb_mask = getattr(mask, attr)
+                        dgb_mask = getattr(dmask, attr)
+
                         v1 = gb.Vector.new(int, 7)
                         dv1 = dgb.Vector.from_vector(v1.dup())
-                        compare(f, (v1, *gb_args), (dv1, *dgb_args))
+                        compare(
+                            f,
+                            (v1, gb_mask, *gb_args),
+                            (dv1, dgb_mask, *dgb_args),
+                        )
+                        compare(
+                            f,
+                            (v1, ~gb_mask, *gb_args),
+                            (dv1, ~dgb_mask, *dgb_args),
+                        )
 
                         v1 = gb.Vector.new(float, 7)
                         dv1 = dgb.Vector.from_vector(v1.dup())
-                        compare(f, (v1, *gb_args), (dv1, *dgb_args))
+                        compare(
+                            f,
+                            (v1, gb_mask, *gb_args),
+                            (dv1, dgb_mask, *dgb_args),
+                        )
+                        compare(
+                            f,
+                            (v1, ~gb_mask, *gb_args),
+                            (dv1, ~dgb_mask, *dgb_args),
+                        )
 
                         v0, dv0s = vs
                         for dv0 in dv0s:
                             v1 = v0.dup()
                             dv1 = dv0.dup()
-                            compare(f, (v1, *gb_args), (dv1, *dgb_args))
+                            compare(
+                                f,
+                                (v1, gb_mask, *gb_args),
+                                (dv1, dgb_mask, *dgb_args),
+                            )
+                            compare(
+                                f,
+                                (v1, ~gb_mask, *gb_args),
+                                (dv1, ~dgb_mask, *dgb_args),
+                            )
 
                         w0, dw0s = ws
                         for dw0 in dw0s:
                             w1 = w0.dup()
                             dw1 = dw0.dup()
-                            compare(f, (w1, *gb_args), (dw1, *dgb_args))
-
-                    for f in [partial(f3, method_name), partial(f4, method_name)]:
-                        for attr, mask, dmasks in [("V", *vms), ("S", *sms)]:
-                            for dmask in dmasks:
-                                gb_mask = getattr(mask, attr)
-                                dgb_mask = getattr(dmask, attr)
-
-                                v1 = gb.Vector.new(int, 7)
-                                dv1 = dgb.Vector.from_vector(v1.dup())
-                                compare(
-                                    f,
-                                    (v1, gb_mask, *gb_args),
-                                    (dv1, dgb_mask, *dgb_args),
-                                )
-                                compare(
-                                    f,
-                                    (v1, ~gb_mask, *gb_args),
-                                    (dv1, ~dgb_mask, *dgb_args),
-                                )
-
-                                v1 = gb.Vector.new(float, 7)
-                                dv1 = dgb.Vector.from_vector(v1.dup())
-                                compare(
-                                    f,
-                                    (v1, gb_mask, *gb_args),
-                                    (dv1, dgb_mask, *dgb_args),
-                                )
-                                compare(
-                                    f,
-                                    (v1, ~gb_mask, *gb_args),
-                                    (dv1, ~dgb_mask, *dgb_args),
-                                )
-
-                                v0, dv0s = vs
-                                for dv0 in dv0s:
-                                    v1 = v0.dup()
-                                    dv1 = dv0.dup()
-                                    compare(
-                                        f,
-                                        (v1, gb_mask, *gb_args),
-                                        (dv1, dgb_mask, *dgb_args),
-                                    )
-                                    compare(
-                                        f,
-                                        (v1, ~gb_mask, *gb_args),
-                                        (dv1, ~dgb_mask, *dgb_args),
-                                    )
-
-                                w0, dw0s = ws
-                                for dw0 in dw0s:
-                                    w1 = w0.dup()
-                                    dw1 = dw0.dup()
-                                    compare(
-                                        f,
-                                        (w1, gb_mask, *gb_args),
-                                        (dw1, dgb_mask, *dgb_args),
-                                    )
-                                    compare(
-                                        f,
-                                        (w1, ~gb_mask, *gb_args),
-                                        (dw1, ~dgb_mask, *dgb_args),
-                                    )
+                            compare(
+                                f,
+                                (w1, gb_mask, *gb_args),
+                                (dw1, dgb_mask, *dgb_args),
+                            )
+                            compare(
+                                f,
+                                (w1, ~gb_mask, *gb_args),
+                                (dw1, ~dgb_mask, *dgb_args),
+                            )
+        except Exception:  # pragma: no cover
+            print(
+                f"Failed! index(dA)={dAs.index(dA)}, index(dv)={dvs.index(dv)}, "
+                f"method_name={method_name}, transpose={transpose}"
+            )
+            raise
 
 
 @pytest.mark.veryslow
@@ -909,8 +916,8 @@ def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
     A, dAs = As
     B, dBs = As
 
-    for dA in dAs:
-        for dB in dAs:
+    for dA, dB in itertools.product(dAs, dBs):
+        try:
             gb_args = (A, B)
             dgb_args = (dA, dB)
 
@@ -1008,6 +1015,9 @@ def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
                             dP1 = dP0.dup()
                             compare(f, (P1, gb_mask, *gb_args), (dP1, dgb_mask, *dgb_args))
                             compare(f, (P1, ~gb_mask, *gb_args), (dP1, ~dgb_mask, *dgb_args))
+        except Exception:  # pragma: no cover
+            print(f"Failed! index(dA)={dAs.index(dA)}, index(dB)={dBs.index(dB)}")
+            raise
 
 
 @pytest.mark.xfail
