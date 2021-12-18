@@ -49,7 +49,7 @@ jobs:
       - name: flake8 style check
         run: flake8
       - name: Pytest
-        run: coverage run --branch -m pytest
+        run: coverage run --branch -m pytest --veryslow
       - name: Coverage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
