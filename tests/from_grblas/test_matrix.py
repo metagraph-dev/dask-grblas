@@ -244,103 +244,17 @@ def test_mxm_mask(A):
     result3 = Matrix.from_values([0, 3, 4], [2, 3, 2], [9, 9, 7], nrows=7, ncols=7)
     assert C.isequal(result3)
     C2 = A.mxm(A, semiring.plus_times).new(mask=struct_mask.S)
-
-
-###     assert C2.isequal(result3)
-###     with pytest.raises(TypeError, match="Mask must indicate"):
-###         A.mxm(A).new(mask=struct_mask)
+    assert C2.isequal(result3)
+    ### with pytest.raises(TypeError, match="Mask must indicate"):
+    ###     A.mxm(A).new(mask=struct_mask)
 
 
 def test_mxm_accum(A):
     A(binary.plus) << A.mxm(A, semiring.plus_times)
     result = Matrix.from_values(
-        [
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            1,
-            1,
-            1,
-            1,
-            1,
-            2,
-            2,
-            3,
-            3,
-            3,
-            3,
-            3,
-            4,
-            4,
-            5,
-            5,
-            6,
-            6,
-            6,
-            6,
-            6,
-        ],
-        [
-            0,
-            1,
-            2,
-            3,
-            4,
-            6,
-            2,
-            3,
-            4,
-            5,
-            6,
-            2,
-            5,
-            0,
-            1,
-            2,
-            3,
-            5,
-            2,
-            5,
-            2,
-            5,
-            0,
-            2,
-            3,
-            4,
-            5,
-        ],
-        [
-            9,
-            2,
-            9,
-            3,
-            16,
-            8,
-            20,
-            28,
-            20,
-            56,
-            4,
-            1,
-            1,
-            3,
-            6,
-            3,
-            9,
-            3,
-            7,
-            7,
-            1,
-            1,
-            21,
-            26,
-            7,
-            3,
-            26,
-        ],
+        [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 6, 6],
+        [0, 1, 2, 3, 4, 6, 2, 3, 4, 5, 6, 2, 5, 0, 1, 2, 3, 5, 2, 5, 2, 5, 0, 2, 3, 4, 5],
+        [9, 2, 9, 3, 16, 8, 20, 28, 20, 56, 4, 1, 1, 3, 6, 3, 9, 3, 7, 7, 1, 1, 21, 26, 7, 3, 26],
     )
     assert A.isequal(result)
 
@@ -636,20 +550,7 @@ def test_isequal(A, v):
     C4 = Matrix.from_values(
         [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
         [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-        [
-            3.0,
-            2.0,
-            3.0,
-            1.0,
-            5.0,
-            3.000000000000000001,
-            7.0,
-            8.0,
-            3.0,
-            1 - 1e-11,
-            7.0,
-            4.0,
-        ],
+        [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
     )
     assert not C4.isequal(A)
 
@@ -682,20 +583,7 @@ def test_isclose(A, v):
     C5 = Matrix.from_values(
         [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
         [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-        [
-            3.0,
-            2.0,
-            3.0,
-            1.0,
-            5.0,
-            3.000000000000000001,
-            7.0,
-            8.0,
-            3.0,
-            1 - 1e-11,
-            7.0,
-            4.0,
-        ],
+        [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
     )
     assert C5.isclose(A)
     C6 = Matrix.from_values(

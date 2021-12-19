@@ -195,9 +195,7 @@ def test_vxm_mask(v, A):
     u(replace=True, mask=~~val_mask.V) << v.vxm(A, semiring.plus_times)
     assert u.isequal(result3)
     w = v.vxm(A, semiring.plus_times).new(mask=val_mask.V)
-
-
-###     assert w.isequal(result3)
+    ### assert w.isequal(result3)
 
 
 def test_vxm_accum(v, A):

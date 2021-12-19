@@ -250,19 +250,8 @@ class TransposedMatrix:
 def _concat_matrix(seq, axis=0):
     if axis not in {0, 1}:
         raise ValueError(f"Can only concatenate for axis 0 or 1.  Got {axis}")
-    size = sum(x.shape[axis] for x in seq)
     if axis == 0:
-        value = gb.Matrix.new(seq[0].value.dtype, size, seq[0].shape[1])
-        start = end = 0
-        for x in seq:
-            end += x.shape[0]
-            value[start:end, :] = x.value
-            start = end
+        value = gb.ss.concat([[item.value] for item in seq])
     else:
-        value = gb.Matrix.new(seq[0].value.dtype, seq[0].shape[0], size)
-        start = end = 0
-        for x in seq:
-            end += x.shape[1]
-            value[:, start:end] = x.value
-            start = end
+        value = gb.ss.concat([[item.value for item in seq]])
     return InnerMatrix(value)

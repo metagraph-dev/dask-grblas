@@ -51,6 +51,7 @@ class InnerVector(InnerBaseType):
                     return InnerVector(value)
                 elif type(index) is slice and index == slice(None):
                     # [:, None]
+                    # matrix_value = self.value._as_matrix()  # TODO: grblas >=1.3.15
                     matrix_value = gb.Matrix.new(self.value.dtype, self.value.size, 1)
                     matrix_value[:, 0] = self.value
                 else:
@@ -208,6 +209,7 @@ class Vector(BaseType):
 def _concat_vector(seq, axis=0):
     if axis != 0:
         raise ValueError(f"Can only concatenate for axis 0.  Got {axis}")
+    # return InnerVector(gb.ss.concat([item.value for item in seq]))  # TODO: grblas >=1.3.15
     size = sum(x.size for x in seq)
     value = gb.Vector.new(seq[0].value.dtype, size)
     start = end = 0
