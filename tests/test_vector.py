@@ -680,6 +680,226 @@ def test_extract(vs, ws, vms, sms):
                     )
 
 
+def test_assign(vs, ws, vms, sms):
+
+    test_replace_true = True
+    v, dvs = vs
+    w, dws = ws
+    vm, dvms = vms
+    sm, dsms = sms
+
+    def inv_if(mask, is_inv=False):
+        if is_inv:
+            return ~mask
+        return mask
+
+    for index in [
+        [0, 3, 1, 4, 2, 5],
+        [0, 5, 5, 1, 2, 0],
+        slice(None),
+        slice(None, None, -1),
+        [0] * 6,
+    ]:
+
+        def f1(x, y):
+            x[index] << y
+            return x
+
+        def f2(x, y):
+            x()[index] << y
+            return x
+
+        def g1(m, x, y):
+            x(mask=m)[index] << y
+            return x
+
+        def g2(x, y):
+            x(accum=gb.binary.plus)[index] << y
+            return x
+
+        def g3(x, y):
+            x(replace=True)[index] << y
+            return x
+
+        def g4(x, y):
+            x(replace=False)[index] << y
+            return x
+
+        def h1(x, y):
+            x(accum=gb.binary.plus, replace=True)[index] << y
+            return x
+
+        def h2(x, y):
+            x(accum=gb.binary.plus, replace=False)[index] << y
+            return x
+
+        def h3(m, x, y):
+            x(mask=m, replace=test_replace_true)[index] << y
+            return x
+
+        def h4(m, x, y):
+            x(mask=m, replace=False)[index] << y
+            return x
+
+        def h5(m, x, y):
+            x(mask=m, accum=gb.binary.plus)[index] << y
+            return x
+
+        def i1(m, x, y):
+            x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[index] << y
+            return x
+
+        def i2(m, x, y):
+            x(mask=m, accum=gb.binary.plus, replace=False)[index] << y
+            return x
+
+        for dv in dvs:
+            for dw in dws:
+                compare(f1, (v.dup(), w), (dv.dup(), dw))
+                compare(f1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(f2, (v.dup(), w), (dv.dup(), dw))
+                compare(f2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(g2, (v.dup(), w), (dv.dup(), dw))
+                compare(g2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(g3, (v.dup(), w), (dv.dup(), dw), errors=True)
+                compare(
+                    g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
+                )
+                compare(g4, (v.dup(), w), (dv.dup(), dw))
+                compare(g4, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(h1, (v.dup(), w), (dv.dup(), dw), errors=True)
+                compare(
+                    h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
+                )
+                compare(h2, (v.dup(), w), (dv.dup(), dw))
+                compare(h2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                for is_inv in [False, True]:
+                    for dvm in dvms:
+                        compare(
+                            g1,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            g1,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        # print('Starting h3()')
+                        compare(
+                            h3,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        # print('Ended h3()')
+                        compare(
+                            h3,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                    for dsm in dsms:
+                        compare(
+                            g1,
+                            (inv_if(vm.S, is_inv), v.dup(), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            g1,
+                            (inv_if(vm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h3,
+                            (inv_if(vm.S, is_inv), v.dup(), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h3,
+                            (inv_if(vm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(vm.S, is_inv), v.dup(), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(vm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(vm.S, is_inv), v.dup(), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(vm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(vm.S, is_inv), v.dup(), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(vm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(vm.S, is_inv), v.dup(), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(vm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+
+
 @pytest.mark.xfail
 def test_attrs(vs):
     v, dvs = vs
