@@ -12,6 +12,7 @@ from .utils import (
     get_grblas_type,
     wrap_inner,
 )
+from builtins import isinstance
 
 
 class GbDelayed:
@@ -416,7 +417,7 @@ def _extractor_new(x, dtype, mask, mask_type):
     return wrap_inner(value)
 
 
-def _extractor_update(x, dtype, mask_type, accum, obj):
+def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
     # `inner` is of Extractor type
     indices = []
     inner = x
@@ -430,27 +431,39 @@ def _extractor_update(x, dtype, mask_type, accum, obj):
         inner = inner.inner
     # Extractor level 0 has the full InnerVector chunk:
     inner = inner.inner
-    if mask is not None:
-        mask = mask_type(mask.value)
-    if len(indices) == 0:
-        inner.value(mask=mask, accum=accum, replace=replace) << obj.value
-    elif len(indices) > 0:
-        value = inner.value
-        resolved_indices = _resolve_indices(value, indices)
-        if mask_level == 2:
-            # mask_level == 2 means that during blockwise(), dask extracted
-            # part  of the  InnerVector chunk at Extractor level 1
-            # to match grblas.Mask chunk size at Extractor level 2
-            # Now we expand the mask to the size of the InnerVector
-            # so that we can update the grblas.Vector chunk directly
-            # and not a copy of it
-            mask_indices = np.arange(value.size)[indices[-mask_level + 1][0]]
-            mask = _expand_mask_to_fit(value, mask_indices, mask, mask_type)
-
-        value(mask=mask, accum=accum)[resolved_indices] << obj.value
+    # if len(indices) == 0:
+    #     inner.value(mask=mask, accum=accum, replace=replace) << obj.value
+    if len(indices) > 0:
+        chunk = inner.value
+        resolved_indices = _resolve_indices(chunk, indices)
+        if isinstance(obj, InnerBaseType):
+            obj_value = obj.value
+        else:
+            obj_value = obj
+        if subassign:
+            mask, replace = args
+            if mask is not None:
+                mask = mask_type(mask.value)
+            chunk[resolved_indices](
+                mask=mask, accum=accum, replace=replace
+            ) << obj_value
+        else:
+            if mask is not None:
+                mask = mask_type(mask.value)
+            if mask_level == 2:
+                # mask_level == 2 means that during blockwise(), dask extracted
+                # part  of the  InnerVector chunk at Extractor level 1
+                # to match grblas.Mask chunk size at Extractor level 2
+                # Now we expand the mask to the size of the InnerVector
+                # so that we can update the grblas.Vector chunk directly
+                # and not a copy of it
+                mask_range = np.arange(chunk.size)[indices[-mask_level + 1][0]]
+                mask = _expand_mask_to_fit(chunk, mask_range, mask, mask_type)
+    
+            chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
+        return wrap_inner(gb.Vector.new(dtype, size=len(resolved_indices)))
     else:
         raise NotImplementedError(f"indices: {indices}")
-    return wrap_inner(gb.Vector.new(dtype=dtype, size=obj.value.size))
 
 
 def _get_expanded_mask_indices(mask, mask_range):
@@ -551,8 +564,7 @@ class AmbiguousAssignOrExtract:
         raise NotImplementedError()
 
     def __call__(self, *args, **kwargs):
-        updater = self.parent(*args, **kwargs)
-        return updater[self.index]
+        return Assigner(Updater(self.parent, **kwargs), self.index, subassign=True)
 
     def update(self, obj):
         Assigner(Updater(self.parent), self.index).update(obj)
@@ -599,30 +611,38 @@ def _clear_mask_final_step(a, axis=None, keepdims=None):
         return wrap_inner(s)
 
 
-def _uniquify(index, obj):
+def _uniquify(index, obj, mask=None):
     # here we follow the SuiteSparse:GraphBLAS specification for
     # duplicate index entries: ignore all but the last unique entry
     rev_index = np.array(index)[::-1]
     unique_indices, obj_indices = np.unique(rev_index, return_index=True)
     if unique_indices.size < rev_index.size:
-        obj = obj[::-1].new()
-        obj = obj[obj_indices].new()
+        if isinstance(obj, BaseType):
+            obj = obj[::-1].new()
+            obj = obj[obj_indices].new()
+        if mask:
+            mask = mask[::-1].new()
+            mask = mask[obj_indices].new()
         index = unique_indices
-    return index, obj
+    return index, obj, mask
 
 
 class Assigner:
-    def __init__(self, updater, index):
+    def __init__(self, updater, index, subassign=False):
         self.updater = updater
         self.parent = updater.parent
         self.index = index
         self._meta = updater.parent._meta[index]
+        self.subassign = subassign
 
     def update(self, obj):
+        parent = self.parent
         mask = self.updater.mask
+        replace = self.updater.replace
+        subassign = self.subassign
         if mask is not None:
             assert isinstance(mask, Mask)
-            assert self.parent._meta.nvals == 0
+            assert parent._meta.nvals == 0
             meta = self._meta.new(mask=mask._meta)
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
@@ -631,14 +651,20 @@ class Assigner:
             delayed_mask = None
             grblas_mask_type = None
 
-        if len(self.parent.shape) == 1 and type(self.index) is not tuple:
+        if len(parent.shape) == 1 and type(self.index) is not tuple:
             if type(self.index) in {list, np.ndarray}:
-                self.index, obj = _uniquify(self.index, obj)
+                if subassign and mask:
+                    self.index, obj, submask = _uniquify(
+                        self.index, obj, mask=mask.mask)
+                    mask.mask = submask
+                    delayed_mask = submask._delayed
+                else:
+                    self.index, obj, _ = _uniquify(self.index, obj)
             indices = (self.index,)
         else:
             indices = self.index
         if len(indices) == 1 or len(indices) == 2:
-            delayed_dup = self.parent._optional_dup()
+            delayed_dup = parent._optional_dup()
             # Extractor level 0:
             delayed0 = delayed_dup.map_blocks(
                 Extractor,
@@ -647,9 +673,9 @@ class Assigner:
             # Extractor level 1 (and possibly 2):
             # We use blockwise here to enable chunk alignment between
             # `delayed_mask` and `delayed_dup`
-            if mask is not None:
+            if (not subassign) and mask:
                 args = [delayed0, "i", delayed_mask, "i"]
-                if self.updater.replace:
+                if replace:
                     # when replace=True we use this branch to
                     # clear all masked data from the chunks
                     replaced = da.core.blockwise(
@@ -685,24 +711,29 @@ class Assigner:
             # `delayed_dup` but returns a dask.array of zeros
             # since it is difficult to return the updated
             # `delayed_dup` directly:
+            args = []
+            if subassign:
+                args = [delayed_mask, replace]
             delayed = da.core.elemwise(
-                _extractor_update,
+                _assigner_update,
                 delayed,
                 np_dtype(meta.dtype),
                 grblas_mask_type,
                 self.updater.accum,
-                obj._delayed,
+                obj._delayed if isinstance(obj, BaseType) else obj,
+                subassign,
+                *args,
                 dtype=np_dtype(meta.dtype),
             )
-            self.parent._delayed = delayed_dup
+            parent._delayed = delayed_dup
             # The following last few lines are only meant to trigger the
-            # above updates whenever self.parent.compute() is called
-            if mask is not None and self.updater.replace:
-                self.parent << self.parent.apply(
+            # above updates whenever parent.compute() is called
+            if (not subassign) and mask and replace:
+                parent << parent.apply(
                     gb.binary.plus, right=clear_mask
                 )
             zero = get_return_type(meta)(delayed).reduce().new()
-            self.parent << self.parent.apply(gb.binary.plus, right=zero)
+            parent << parent.apply(gb.binary.plus, right=zero)
             return
         raise NotImplementedError()
 
