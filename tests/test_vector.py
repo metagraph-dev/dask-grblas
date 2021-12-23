@@ -364,6 +364,7 @@ def test_update(vs, ws):
                 )
 
 
+@pytest.mark.slow
 def test_extract(vs, ws, vms, sms):
     v, dvs = vs
     w, dws = ws
@@ -680,6 +681,7 @@ def test_extract(vs, ws, vms, sms):
                     )
 
 
+@pytest.mark.slow
 def test_subassign(vs, ws, vms, sms):
 
     test_replace_true = True
@@ -896,6 +898,7 @@ def test_subassign(vs, ws, vms, sms):
                         )
 
 
+@pytest.mark.slow
 def test_assign(vs, ws, vms, sms):
 
     test_replace_true = True

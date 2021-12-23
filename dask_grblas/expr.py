@@ -378,13 +378,17 @@ class Updater:
             )
 
 
-def _resolve_indices(grblas_vector, indices):
-    resolved_indices = np.arange(grblas_vector.size)
-    for index in indices[::-1]:
-        if type(index) is tuple and len(index) == 1:
-            ind = index[0]
-            resolved_indices = resolved_indices[ind]
-    return resolved_indices
+def _resolve_indices(grblas_obj, indices):
+    out = ()
+    ndim = len(grblas_obj.shape)
+    for axis in range(ndim):
+        resolved_indices = np.arange(grblas_obj.shape[axis])
+        for index in indices[::-1]:
+            if type(index) is tuple:
+                ind = index[axis]
+                resolved_indices = resolved_indices[ind]
+        out += (resolved_indices,)
+    return out if ndim > 1 else out[0]
 
 
 def _expand_mask_to_fit(value, mask_loc, mask, mask_type):
@@ -431,8 +435,6 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
         inner = inner.inner
     # Extractor level 0 has the full InnerVector chunk:
     inner = inner.inner
-    # if len(indices) == 0:
-    #     inner.value(mask=mask, accum=accum, replace=replace) << obj.value
     if len(indices) > 0:
         chunk = inner.value
         resolved_indices = _resolve_indices(chunk, indices)
@@ -542,16 +544,20 @@ class AmbiguousAssignOrExtract:
             grblas_mask_type = None
 
         # indices = gb.base.IndexerResolver(self.parent._meta, self.index, raw=False).indices
-        if len(self.parent.shape) == 1 and type(self.index) is not tuple:
+        ndim = len(self.parent.shape)
+        if ndim == 1 and type(self.index) is not tuple:
             indices = (self.index,)
         else:
             indices = self.index
-        if len(indices) == 1 or len(indices) == 2:
+        if ndim in [1, 2]:
             delayed = self.parent._delayed.map_blocks(
                 Extractor,
                 dtype=np_dtype(meta.dtype),
             )
-            delayed = delayed[indices]
+            if ndim == 1:
+                delayed = delayed[indices]
+            else:
+                delayed = delayed[indices[0], :][:, indices[1]]
             delayed = da.core.elemwise(
                 _extractor_new,
                 delayed,
@@ -651,7 +657,8 @@ class Assigner:
             delayed_mask = None
             grblas_mask_type = None
 
-        if len(parent.shape) == 1 and type(self.index) is not tuple:
+        ndim = len(self.parent.shape)
+        if ndim == 1 and type(self.index) is not tuple:
             if type(self.index) in {list, np.ndarray}:
                 if subassign and mask:
                     self.index, obj, submask = _uniquify(
