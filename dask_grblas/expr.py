@@ -319,7 +319,9 @@ class GbDelayed:
                 )
         elif self.method_name in {"vxm", "mxv", "mxm"}:
             delayed = self._matmul2(meta, mask=mask)
-            updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
+            updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(
+                delayed
+            )
             return
         else:
             raise ValueError(self.method_name)
@@ -367,7 +369,9 @@ class Updater:
         if self.parent._meta._is_scalar:
             self.parent._update(delayed, accum=self.accum)
         else:
-            self.parent._update(delayed, accum=self.accum, mask=self.mask, replace=self.replace)
+            self.parent._update(
+                delayed, accum=self.accum, mask=self.mask, replace=self.replace
+            )
 
 
 def _resolve_indices(grblas_obj, indices):
@@ -560,7 +564,7 @@ class AmbiguousAssignOrExtract:
         raise NotImplementedError()
 
     def __call__(self, *args, **kwargs):
-        return Assigner(Updater(self.parent, **kwargs), self.index, subassign=True)
+        return Assigner(self.parent(*args, **kwargs), self.index, subassign=True)
 
     def update(self, obj):
         Assigner(Updater(self.parent), self.index).update(obj)
@@ -623,6 +627,32 @@ def _uniquify(index, obj, mask=None):
     return index, obj, mask
 
 
+def _uniquify2D(index, obj, mask=None):
+    # here we follow the SuiteSparse:GraphBLAS specification for
+    # duplicate index entries: ignore all but the last unique entry
+    is_not_unique = False
+    unique_indices_tup = ()
+    obj_indices_tup = ()
+    for axis in range(2):
+        rev_index = np.array(index[axis])[::-1]
+        unique_indices, obj_indices = np.unique(
+            rev_index, return_index=True)
+        unique_indices_tup += (unique_indices,)
+        obj_indices_tup += (obj_indices,)
+        if unique_indices.size < rev_index.size:
+            is_not_unique = True
+
+    if is_not_unique:
+        if isinstance(obj, BaseType):
+            obj = obj[::-1, ::-1].new()
+            obj = obj[obj_indices_tup].new()
+        if mask:
+            mask = mask[::-1, ::-1].new()
+            mask = mask[obj_indices_tup].new()
+        index = unique_indices_tup
+    return index, obj, mask
+
+
 class Assigner:
     def __init__(self, updater, index, subassign=False):
         self.updater = updater
@@ -658,8 +688,15 @@ class Assigner:
                     self.index, obj, _ = _uniquify(self.index, obj)
             indices = (self.index,)
         else:
+            if subassign and mask:
+                self.index, obj, submask = _uniquify2D(
+                    self.index, obj, mask=mask.mask)
+                mask.mask = submask
+                delayed_mask = submask._delayed
+            else:
+                self.index, obj, _ = _uniquify2D(self.index, obj)
             indices = self.index
-        if len(indices) == 1 or len(indices) == 2:
+        if ndim in [1, 2]:
             delayed_dup = parent._optional_dup()
             # Extractor level 0:
             delayed0 = delayed_dup.map_blocks(
@@ -669,14 +706,15 @@ class Assigner:
             # Extractor level 1 (and possibly 2):
             # We use blockwise here to enable chunk alignment between
             # `delayed_mask` and `delayed_dup`
+            ind = "i" if ndim == 1 else "ij"
             if (not subassign) and mask:
-                args = [delayed0, "i", delayed_mask, "i"]
+                args = [delayed0, ind, delayed_mask, ind]
                 if replace:
                     # when replace=True we use this branch to
                     # clear all masked data from the chunks
                     replaced = da.core.blockwise(
                         Extractor,
-                        "i",
+                        ind,
                         *args,
                         dtype=np_dtype(meta.dtype),
                         replace=True,
@@ -686,23 +724,31 @@ class Assigner:
                         replaced,
                         _clear_mask,
                         _clear_mask_final_step,
+                        axis=0,
                         dtype=np_dtype(meta.dtype),
                         concatenate=False,
                     )
-                    clear_mask = get_return_type(meta.reduce().new())(replaced)
+                    if ndim == 1:
+                        clear_mask = get_return_type(meta.reduce().new())(replaced)
+                    else:
+                        clear_mask = get_return_type(meta.reduce_scalar.new())(replaced)
             else:
-                args = [delayed0, "i"]
+                args = [delayed0, ind]
             delayed = da.core.blockwise(
                 Extractor,
-                "i",
+                ind,
                 *args,
                 dtype=np_dtype(meta.dtype),
                 replace=False,
                 mask_type=grblas_mask_type,
             )
-            delayed = delayed[indices]
-            # the size of `delayed` is now in general different from
-            # `delayed_dup` by virtue of `indices`.
+            
+            if ndim == 1:
+                delayed = delayed[indices]
+            else:
+                delayed = delayed[indices[0], :][:, indices[1]]
+            # the size/shape of `delayed` is now in general
+            # different from `delayed_dup` by virtue of `indices`.
             # The following updates the indexed elements of
             # `delayed_dup` but returns a dask.array of zeros
             # since it is difficult to return the updated
@@ -725,8 +771,13 @@ class Assigner:
             # The following last few lines are only meant to trigger the
             # above updates whenever parent.compute() is called
             if (not subassign) and mask and replace:
-                parent << parent.apply(gb.binary.plus, right=clear_mask)
-            zero = get_return_type(meta)(delayed).reduce().new()
+                parent << parent.apply(
+                    gb.binary.plus, right=clear_mask
+                )
+            if ndim == 1:
+                zero = get_return_type(meta)(delayed).reduce().new()
+            else:
+                zero = get_return_type(meta)(delayed).reduce_scalar().new()
             parent << parent.apply(gb.binary.plus, right=zero)
             return
         raise NotImplementedError()

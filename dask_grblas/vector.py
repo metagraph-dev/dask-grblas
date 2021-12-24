@@ -4,7 +4,7 @@ from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 
 from .base import BaseType, InnerBaseType
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
+from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from .utils import np_dtype, wrap_inner
 
@@ -147,7 +147,7 @@ class Vector(BaseType):
         raise NotImplementedError()
 
     def __setitem__(self, index, delayed):
-        Updater(self)[index] = delayed
+        Assigner(Updater(self), index).update(delayed)
 
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
         assert type(other) is Vector
