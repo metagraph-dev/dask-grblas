@@ -1,9 +1,9 @@
 import dask.array as da
 import grblas as gb
 import numpy as np
+
 from .mask import Mask
 from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
-
 
 _expect_type = gb.base._expect_type
 
@@ -251,9 +251,7 @@ def _dup(x, mask, dtype, mask_type):
 
 
 def _isclose(x, y, rel_tol, abs_tol, check_dtype):
-    val = x.value.isclose(
-        y.value, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype
-    )
+    val = x.value.isclose(y.value, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
     return _reduction_value(x, val)
 
 
@@ -293,5 +291,5 @@ def _update_assign(updating, accum, mask, mask_type, replace, x):
     return updating
 
 
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater  # noqa
-from .matrix import TransposedMatrix  # noqa
+from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater  # noqa isort: skip
+from .matrix import TransposedMatrix  # noqa isort: skip

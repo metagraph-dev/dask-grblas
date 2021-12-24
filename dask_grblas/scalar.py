@@ -1,9 +1,10 @@
 import dask.array as da
 import grblas as gb
-from dask.delayed import delayed, Delayed
+from dask.delayed import Delayed, delayed
+
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed
-from .utils import np_dtype, get_meta
+from .utils import get_meta, np_dtype
 
 
 def from_delayed(cls, scalar, dtype, *, name=None):
@@ -122,9 +123,7 @@ class Scalar(BaseType):
             self._meta.isclose(get_meta(other))
             other = Scalar.from_value(other)
             check_dtype = False
-        return super().isclose(
-            other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype
-        )
+        return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
     @property
     def is_empty(self):

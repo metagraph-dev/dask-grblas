@@ -1,8 +1,10 @@
-import pytest
 import grblas as gb
-import dask_grblas as dgb
+import pytest
 from grblas import dtypes
 from pytest import raises
+
+import dask_grblas as dgb
+
 from .utils import compare
 
 
@@ -68,9 +70,7 @@ def sms():
     dsm1 = dgb.concat_vectors(
         [
             dgb.Vector.from_vector(gb.Vector.from_values([0], [False], size=2)),
-            dgb.Vector.from_vector(
-                gb.Vector.from_values([1, 2], [False, False], size=4)
-            ),
+            dgb.Vector.from_vector(gb.Vector.from_values([1, 2], [False, False], size=4)),
         ]
     )
     return struct_mask, (dsm0, dsm1)
@@ -359,11 +359,10 @@ def test_update(vs, ws):
         for dv in dvs:
             for dw in dws:
                 compare(f, (v.dup(), w.dup()), (dv.dup(), dw.dup()))
-                compare(
-                    f, (v.dup(dtype=float), w.dup()), (dv.dup(dtype=float), dw.dup())
-                )
+                compare(f, (v.dup(dtype=float), w.dup()), (dv.dup(dtype=float), dw.dup()))
 
 
+@pytest.mark.slow
 def test_extract(vs, ws, vms, sms):
     v, dvs = vs
     w, dws = ws

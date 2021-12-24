@@ -1,6 +1,7 @@
 import pytest
-from dask_grblas import Scalar
 from grblas import dtypes
+
+from dask_grblas import Scalar
 
 
 @pytest.fixture
@@ -116,9 +117,7 @@ def test_isequal(s):
     t = Scalar.from_value(5, dtype="INT8")
     assert s.isequal(t)
     assert not s.isequal(t, check_dtype=True)
-    assert Scalar.from_value(None, dtype="INT8").isequal(
-        Scalar.from_value(None, dtype="INT16")
-    )
+    assert Scalar.from_value(None, dtype="INT8").isequal(Scalar.from_value(None, dtype="INT16"))
 
 
 def test_isclose():
@@ -133,9 +132,7 @@ def test_isclose():
         s.isclose(object())
     assert not s.isclose(Scalar.from_value(5), check_dtype=True)
     assert not s.isclose(Scalar.from_value(None, dtype=s.dtype))
-    assert Scalar.from_value(None, dtype="FP64").isequal(
-        Scalar.from_value(None, dtype="FP32")
-    )
+    assert Scalar.from_value(None, dtype="FP64").isequal(Scalar.from_value(None, dtype="FP32"))
 
 
 def test_nvals(s):
