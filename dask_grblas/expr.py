@@ -4,7 +4,7 @@ import dask.array as da
 import grblas as gb
 import numpy as np
 
-# from dask import is_dask_collection
+from dask.distributed import Lock
 
 from .base import BaseType, InnerBaseType
 from .mask import Mask
@@ -421,45 +421,29 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
     # `inner` is of Extractor type
     indices = []
     inner = x
-    mask = None
-    mask_level = None
     while inner.level > 0:
         indices.append(inner.index)
-        if inner.mask is not None:
-            mask = inner.mask
-            mask_level = inner.level
         inner = inner.inner
-    # Extractor level 0 has the full InnerVector chunk:
+    # Extractor level 0 has the full InnerVector chunk and mask (if given):
+    mask = inner.mask
     inner = inner.inner
-    if len(indices) > 0:
-        chunk = inner.value
-        resolved_indices = _resolve_indices(chunk, indices)
-        if isinstance(obj, InnerBaseType):
-            obj_value = obj.value
-        else:
-            obj_value = obj
-        if subassign:
-            mask, replace = args
-            if mask is not None:
-                mask = mask_type(mask.value)
-            chunk[resolved_indices](mask=mask, accum=accum, replace=replace) << obj_value
-        else:
-            if mask is not None:
-                mask = mask_type(mask.value)
-            if mask_level == 2:
-                # mask_level == 2 means that during blockwise(), dask extracted
-                # part  of the  InnerVector chunk at Extractor level 1
-                # to match grblas.Mask chunk size at Extractor level 2
-                # Now we expand the mask to the size of the InnerVector
-                # so that we can update the grblas.Vector chunk directly
-                # and not a copy of it
-                mask_range = np.arange(chunk.size)[indices[-mask_level + 1][0]]
-                mask = _expand_mask_to_fit(chunk, mask_range, mask, mask_type)
-
-            chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
-        return wrap_inner(gb.Vector.new(dtype, size=len(resolved_indices)))
+    chunk = inner.value
+    resolved_indices = _resolve_indices(chunk, indices)
+    if isinstance(obj, InnerBaseType):
+        obj_value = obj.value
     else:
-        raise NotImplementedError(f"indices: {indices}")
+        obj_value = obj
+    if subassign:
+        mask, replace = args
+        if mask is not None:
+            mask = mask_type(mask.value)
+        chunk[resolved_indices](mask=mask, accum=accum, replace=replace) << obj_value
+    else:
+        if mask is not None:
+            mask = mask_type(mask.value)
+        chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
+    return wrap_inner(gb.Vector.new(dtype, size=len(resolved_indices)))
+    # raise NotImplementedError(f"indices: {indices}")
 
 
 def _get_expanded_mask_indices(mask, mask_range):
@@ -498,22 +482,17 @@ class Extractor:
             # This branch is necessary when replace is True:
             # Here, we remove all chunk elements in the mask
             # range that lie in the complement of the mask
-            if self.level == 1:
-                chunk = inner.inner.value
-            elif self.level == 2:
-                chunk = inner.inner.inner.value
-
-            all_indices = np.arange(chunk.size)
-            mask_range = slice(None) if inner.index is None else inner.index[0]
-            mask_range = all_indices[mask_range]
             mask = mask_type(mask.value)
-            mask = _expand_mask_to_fit(chunk, mask_range, mask, mask_type)
-            mask_indices = _get_expanded_mask_indices(mask, mask_range)
-            indices_to_remove = set(mask_range) - set(mask_indices)
-
-            # this loop needs to be made 'race-free'!
-            for chunk_index in indices_to_remove:
-                del chunk[chunk_index]
+            if index is None:
+                mask_range = (slice(None),) * self.ndim
+            else:
+                mask_range = tuple([index[axis] for axis in range(self.ndim)])
+            if self.ndim == 1:
+                mask_range, = mask_range
+            # subassign makes things much easier than a loop with del!
+            chunk = inner.value
+            chunk_piece = chunk[mask_range].new()
+            chunk[mask_range](mask=mask, replace=True) << chunk_piece
 
     def __getitem__(self, index):
         return Extractor(self, index=index)
@@ -698,30 +677,33 @@ class Assigner:
             indices = self.index
         if ndim in [1, 2]:
             delayed_dup = parent._optional_dup()
-            # Extractor level 0:
-            delayed0 = delayed_dup.map_blocks(
-                Extractor,
-                dtype=np_dtype(meta.dtype),
-            )
             # Extractor level 1 (and possibly 2):
             # We use blockwise here to enable chunk alignment between
             # `delayed_mask` and `delayed_dup`
             ind = "i" if ndim == 1 else "ij"
             if (not subassign) and mask:
-                args = [delayed0, ind, delayed_mask, ind]
+                # data chunks and mask chunks must have the same granularity:
+                args = [delayed_dup, ind, delayed_mask, ind]
+                delayed_dup = da.core.blockwise(
+                    lambda x, y: x,
+                    ind,
+                    *args,
+                    dtype=np_dtype(meta.dtype),
+                )
+                # clear data chunks using corresponding mask
+                delayed = da.core.blockwise(
+                    Extractor,
+                    ind,
+                    *args,
+                    dtype=np_dtype(meta.dtype),
+                    replace=replace,
+                    mask_type=grblas_mask_type,
+                )
                 if replace:
-                    # when replace=True we use this branch to
-                    # clear all masked data from the chunks
-                    replaced = da.core.blockwise(
-                        Extractor,
-                        ind,
-                        *args,
-                        dtype=np_dtype(meta.dtype),
-                        replace=True,
-                        mask_type=grblas_mask_type,
-                    )
+                    # when replace=True we use this branch to touch ALL
+                    # chunks to ensure all data chunks are cleared
                     replaced = da.reduction(
-                        replaced,
+                        delayed,
                         _clear_mask,
                         _clear_mask_final_step,
                         axis=0,
@@ -733,15 +715,15 @@ class Assigner:
                     else:
                         clear_mask = get_return_type(meta.reduce_scalar.new())(replaced)
             else:
-                args = [delayed0, ind]
-            delayed = da.core.blockwise(
-                Extractor,
-                ind,
-                *args,
-                dtype=np_dtype(meta.dtype),
-                replace=False,
-                mask_type=grblas_mask_type,
-            )
+                args = [delayed_dup, ind]
+                delayed = da.core.blockwise(
+                    Extractor,
+                    ind,
+                    *args,
+                    dtype=np_dtype(meta.dtype),
+                    replace=False,
+                    mask_type=grblas_mask_type,
+                )
             
             if ndim == 1:
                 delayed = delayed[indices]
