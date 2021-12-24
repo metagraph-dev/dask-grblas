@@ -1,7 +1,9 @@
 # dask-grblas
-
+[![Version](https://img.shields.io/pypi/v/dask-grblas.svg)](https://pypi.org/project/dask-grblas/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/metagraph-dev/dask-grblas/blob/main/LICENSE)
 [![Build Status](https://github.com/metagraph-dev/dask-grblas/workflows/Test%20and%20Deploy/badge.svg)](https://github.com/metagraph-dev/dask-grblas/actions)
-[![Coverage Status](https://coveralls.io/repos/metagraph-dev/dask-grblas/badge.svg?branch=main)](https://coveralls.io/r/metagraph-dev/dask-grblas)
+[![Coverage Status](https://coveralls.io/repos/github/metagraph-dev/dask-grblas/badge.svg?branch=main)](https://coveralls.io/github/metagraph-dev/dask-grblas?branch=main)
+[![Code style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 This is a work in progress.  It is ready to be played with (lightly), but not used for any serious work.
 

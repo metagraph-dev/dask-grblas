@@ -1,8 +1,8 @@
 import pytest
+from grblas import binary, dtypes, unary
+
 from dask_grblas import Matrix, Vector
 from dask_grblas.expr import Updater
-from grblas import unary, binary
-from grblas import dtypes
 
 
 def test_from_values_dtype_resolving():

@@ -1,10 +1,11 @@
-import pytest
 import numpy as np
-from grblas import lib
-from grblas import unary, binary, monoid, semiring
-from grblas import dtypes, operator as ops, exceptions
-from dask_grblas import Vector, Matrix
-from grblas.operator import UnaryOp, BinaryOp, Monoid, Semiring
+import pytest
+from grblas import binary, dtypes, exceptions, lib, monoid
+from grblas import operator as ops
+from grblas import semiring, unary
+from grblas.operator import BinaryOp, Monoid, Semiring, UnaryOp
+
+from dask_grblas import Matrix, Vector
 
 
 def test_unaryop():
@@ -277,9 +278,7 @@ def test_semiring_parameterized():
     assert B0.isequal(B2)
 
     # While we're here, let's check misc Matrix operations
-    Adup = Matrix.from_values(
-        [0, 0, 0, 1, 1], [0, 0, 1, 0, 1], [100, 1, 2, 3, 4], dup_op=bin_op
-    )
+    Adup = Matrix.from_values([0, 0, 0, 1, 1], [0, 0, 1, 0, 1], [100, 1, 2, 3, 4], dup_op=bin_op)
     Adup2 = Matrix.from_values(
         [0, 0, 0, 1, 1], [0, 0, 1, 0, 1], [100, 1, 2, 3, 4], dup_op=binary.plus
     )
@@ -412,24 +411,19 @@ def test_semiring_udf():
     assert w.isequal(result)
 
 
+@pytest.mark.slow
 def test_binary_updates():
     assert not hasattr(binary, "div")
     assert binary.cdiv["INT64"].gb_obj == lib.GrB_DIV_INT64
     vec1 = Vector.from_values([0], [1], dtype=dtypes.INT64)
     vec2 = Vector.from_values([0], [2], dtype=dtypes.INT64)
     result = vec1.ewise_mult(vec2, binary.truediv).new()
-    assert result.isclose(
-        Vector.from_values([0], [0.5], dtype=dtypes.FP64), check_dtype=True
-    )
+    assert result.isclose(Vector.from_values([0], [0.5], dtype=dtypes.FP64), check_dtype=True)
     vec4 = Vector.from_values([0], [-3], dtype=dtypes.INT64)
     result2 = vec4.ewise_mult(vec2, binary.cdiv).new()
-    assert result2.isequal(
-        Vector.from_values([0], [-1], dtype=dtypes.INT64), check_dtype=True
-    )
+    assert result2.isequal(Vector.from_values([0], [-1], dtype=dtypes.INT64), check_dtype=True)
     result3 = vec4.ewise_mult(vec2, binary.floordiv).new()
-    assert result3.isequal(
-        Vector.from_values([0], [-2], dtype=dtypes.INT64), check_dtype=True
-    )
+    assert result3.isequal(Vector.from_values([0], [-2], dtype=dtypes.INT64), check_dtype=True)
 
 
 def test_nested_names():
@@ -466,9 +460,7 @@ def test_nested_names():
 
     UnaryOp.register_new("incrementers.plus_four", plus_four)
     assert hasattr(unary.incrementers, "plus_four")
-    v << v.apply(
-        unary.incrementers.plus_four
-    )  # this is in addition to the plus_three earlier
+    v << v.apply(unary.incrementers.plus_four)  # this is in addition to the plus_three earlier
     result2 = Vector.from_values([0, 1, 3], [8, 9, 3], dtype=dtypes.INT32)
     assert v.isequal(result2), print(v.show())
 

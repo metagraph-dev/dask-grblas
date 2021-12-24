@@ -21,13 +21,19 @@ on:
 #   - upload to anaconda.org on both the dev and main channel
 #   - upload to PyPI
 jobs:
-  test_build_deploy:
+  test_and_style_checks:
     runs-on: ubuntu-latest
     env:
       AC_LABEL: -l dev
     defaults:
       run:
         shell: bash -l {0}
+    strategy:
+      fail-fast: true
+      matrix:
+        testopts:
+          - ""
+          - "--runveryslow"
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -40,14 +46,45 @@ jobs:
           python-version: 3.9
       - name: Update env
         run: |
-          conda install -q -c defaults -c conda-forge conda-build grblas dask pytest 'black=21.11b1'
+          conda install -q -c defaults -c conda-forge grblas dask pytest 'black=21.11b1' flake8 coverage coveralls
           pip install -e .
       - name: Lint with Black
         run: |
           black --version
           black dask_grblas/ --check --diff
+      - name: Flake8 style check
+        run: flake8
       - name: Pytest
-        run: pytest
+        run: coverage run --branch -m pytest ${{ matrix.testopts }}
+      - name: Coverage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COVERALLS_FLAG_NAME: ${{ matrix.testopts }}
+          COVERALLS_PARALLEL: true
+        run: |
+          coverage report --show-missing
+          coveralls --service=github
+
+  build_and_deploy:
+    needs: test_and_style_checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      # why do we need to checkout again?
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Create env
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: 3.9
+      - name: Update env
+        run: |
+          conda install -q -c defaults -c conda-forge conda-build
       - name: Conda Build
         run: conda build -c defaults -c conda-forge --python 3.9 recipe
       - name: Determine label
@@ -71,3 +108,23 @@ jobs:
         with:
           user: __token__
           password: ${{ secrets.PYPI_TOKEN }}
+
+  coveralls_upload:
+    needs: test_and_style_checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - name: Create env
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: 3.9
+      - name: Update env
+        run: conda install -q -c defaults -c conda-forge coveralls
+      - name: Coveralls Finished
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          coveralls --finish

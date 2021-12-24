@@ -1,13 +1,17 @@
 # These tests are very slow, since they force creation of all numpy unary, binary, monoid, and semiring objects
-import pytest
-import numpy as np
 import itertools
-import dask_grblas as dgb
-import grblas.unary.numpy as npunary
+
 import grblas.binary.numpy as npbinary
 import grblas.monoid.numpy as npmonoid
 import grblas.semiring.numpy as npsemiring
-from grblas import operator as ops, monoid, binary
+import grblas.unary.numpy as npunary
+import numpy as np
+
+import pytest
+from grblas import binary, monoid
+from grblas import operator as ops
+
+import dask_grblas as dgb
 
 
 def test_numpyops_dir():
@@ -62,9 +66,7 @@ def test_npunary():
                 gb_input[1] = 1.1 + 1.2j
                 np_input = np_input.copy()
                 np_input[1] = 1.1 + 1.2j
-            with np.errstate(
-                divide="ignore", over="ignore", under="ignore", invalid="ignore"
-            ):
+            with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
                 gb_result = gb_input.apply(op).new()
                 if gb_input.dtype == "BOOL" and gb_result.dtype == "FP32":
                     np_result = getattr(np, unary_name)(np_input, dtype="float32")
@@ -150,14 +152,10 @@ def test_npbinary():
                 gb_left.dtype.name, ()
             ):
                 continue
-            with np.errstate(
-                divide="ignore", over="ignore", under="ignore", invalid="ignore"
-            ):
+            with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
                 gb_result = gb_left.ewise_mult(gb_right, op).new()
                 if gb_left.dtype == "BOOL" and gb_result.dtype == "FP32":
-                    np_result = getattr(np, binary_name)(
-                        np_left, np_right, dtype="float32"
-                    )
+                    np_result = getattr(np, binary_name)(np_left, np_right, dtype="float32")
                     compare_op = isclose
                 else:
                     np_result = getattr(np, binary_name)(np_left, np_right)
@@ -237,9 +235,7 @@ def test_npmonoid():
                 gb_left.dtype.name, ()
             ):
                 continue
-            with np.errstate(
-                divide="ignore", over="ignore", under="ignore", invalid="ignore"
-            ):
+            with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
                 gb_result = gb_left.ewise_mult(gb_right, op).new()
                 np_result = getattr(np, binary_name)(np_left, np_right)
             np_result = dgb.Vector.from_values(

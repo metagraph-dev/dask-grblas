@@ -1,8 +1,10 @@
-import pytest
 import grblas as gb
-import dask_grblas as dgb
+import pytest
 from grblas import dtypes
 from pytest import raises
+
+import dask_grblas as dgb
+
 from .utils import compare
 
 
@@ -68,9 +70,7 @@ def sms():
     dsm1 = dgb.concat_vectors(
         [
             dgb.Vector.from_vector(gb.Vector.from_values([0], [False], size=2)),
-            dgb.Vector.from_vector(
-                gb.Vector.from_values([1, 2], [False, False], size=4)
-            ),
+            dgb.Vector.from_vector(gb.Vector.from_values([1, 2], [False, False], size=4)),
         ]
     )
     return struct_mask, (dsm0, dsm1)
@@ -359,9 +359,7 @@ def test_update(vs, ws):
         for dv in dvs:
             for dw in dws:
                 compare(f, (v.dup(), w.dup()), (dv.dup(), dw.dup()))
-                compare(
-                    f, (v.dup(dtype=float), w.dup()), (dv.dup(dtype=float), dw.dup())
-                )
+                compare(f, (v.dup(dtype=float), w.dup()), (dv.dup(dtype=float), dw.dup()))
 
 
 @pytest.mark.slow
@@ -442,15 +440,11 @@ def test_extract(vs, ws, vms, sms):
                 compare(g2, (v.dup(), w), (dv.dup(), dw))
                 compare(g2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(g3, (v.dup(), w), (dv.dup(), dw), errors=True)
-                compare(
-                    g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
-                )
+                compare(g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
                 compare(g4, (v.dup(), w), (dv.dup(), dw))
                 compare(g4, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(h1, (v.dup(), w), (dv.dup(), dw), errors=True)
-                compare(
-                    h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
-                )
+                compare(h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
                 compare(h2, (v.dup(), w), (dv.dup(), dw))
                 compare(h2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 for dvm in dvms:
@@ -515,9 +509,7 @@ def test_extract(vs, ws, vms, sms):
                         errors=True,
                     )
                     compare(
-                        lambda m, x: x[index].new(
-                            mask=m, accum=gb.binary.plus, dtype=float
-                        ),
+                        lambda m, x: x[index].new(mask=m, accum=gb.binary.plus, dtype=float),
                         (vm.V, w),
                         (dvm.V, dw),
                         errors=True,
@@ -529,9 +521,7 @@ def test_extract(vs, ws, vms, sms):
                         (dvm.V, dv.dup(dtype=float), dw),
                     )
                     compare(
-                        lambda m, x: x[index].new(
-                            mask=m, accum=gb.binary.plus, replace=True
-                        ),
+                        lambda m, x: x[index].new(mask=m, accum=gb.binary.plus, replace=True),
                         (vm.V, w),
                         (dvm.V, dw),
                         errors=True,
@@ -551,9 +541,7 @@ def test_extract(vs, ws, vms, sms):
                         (dvm.V, dv.dup(dtype=float), dw),
                     )
                     compare(
-                        lambda m, x: x[index].new(
-                            mask=m, accum=gb.binary.plus, replace=False
-                        ),
+                        lambda m, x: x[index].new(mask=m, accum=gb.binary.plus, replace=False),
                         (vm.V, w),
                         (dvm.V, dw),
                         errors=True,
@@ -628,9 +616,7 @@ def test_extract(vs, ws, vms, sms):
                         errors=True,
                     )
                     compare(
-                        lambda m, x: x[index].new(
-                            mask=m, accum=gb.binary.plus, dtype=float
-                        ),
+                        lambda m, x: x[index].new(mask=m, accum=gb.binary.plus, dtype=float),
                         (vm.S, w),
                         (dvm.S, dw),
                         errors=True,
@@ -642,9 +628,7 @@ def test_extract(vs, ws, vms, sms):
                         (dvm.S, dv.dup(dtype=float), dw),
                     )
                     compare(
-                        lambda m, x: x[index].new(
-                            mask=m, accum=gb.binary.plus, replace=True
-                        ),
+                        lambda m, x: x[index].new(mask=m, accum=gb.binary.plus, replace=True),
                         (vm.S, w),
                         (dvm.S, dw),
                         errors=True,
@@ -664,9 +648,7 @@ def test_extract(vs, ws, vms, sms):
                         (dvm.S, dv.dup(dtype=float), dw),
                     )
                     compare(
-                        lambda m, x: x[index].new(
-                            mask=m, accum=gb.binary.plus, replace=False
-                        ),
+                        lambda m, x: x[index].new(mask=m, accum=gb.binary.plus, replace=False),
                         (vm.S, w),
                         (dvm.S, dw),
                         errors=True,
@@ -691,7 +673,7 @@ def test_subassign(vs, ws, vms, sms):
     sm, dsms = sms
 
     scalars = (1, 1.0)
-    gws = (gw,)*len(dws) + scalars
+    gws = (gw,) * len(dws) + scalars
     dws = dws + scalars
 
     def inv_if(mask, is_inv=False):
@@ -762,15 +744,11 @@ def test_subassign(vs, ws, vms, sms):
                 compare(g2, (v.dup(), w), (dv.dup(), dw))
                 compare(g2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(g3, (v.dup(), w), (dv.dup(), dw), errors=True)
-                compare(
-                    g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
-                )
+                compare(g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
                 compare(g4, (v.dup(), w), (dv.dup(), dw))
                 compare(g4, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(h1, (v.dup(), w), (dv.dup(), dw), errors=True)
-                compare(
-                    h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
-                )
+                compare(h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
                 compare(h2, (v.dup(), w), (dv.dup(), dw))
                 compare(h2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 for is_inv in [False, True]:
@@ -908,7 +886,7 @@ def test_assign(vs, ws, vms, sms):
     sm, dsms = sms
 
     scalars = (1, 1.0)
-    gws = (gw,)*len(dws) + scalars
+    gws = (gw,) * len(dws) + scalars
     dws = dws + scalars
 
     def inv_if(mask, is_inv=False):
@@ -985,15 +963,11 @@ def test_assign(vs, ws, vms, sms):
                 compare(g2, (v.dup(), w), (dv.dup(), dw))
                 compare(g2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(g3, (v.dup(), w), (dv.dup(), dw), errors=True)
-                compare(
-                    g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
-                )
+                compare(g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
                 compare(g4, (v.dup(), w), (dv.dup(), dw))
                 compare(g4, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(h1, (v.dup(), w), (dv.dup(), dw), errors=True)
-                compare(
-                    h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True
-                )
+                compare(h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
                 compare(h2, (v.dup(), w), (dv.dup(), dw))
                 compare(h2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 for is_inv in [False, True]:

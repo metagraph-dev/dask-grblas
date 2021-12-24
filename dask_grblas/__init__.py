@@ -1,10 +1,12 @@
 import grblas.mask
-from . import scalar, vector, matrix, mask, utils
+
+from . import _version, mask, scalar, utils, vector
+from .construction import column_stack, concat_vectors, row_stack  # noqa
+from .matrix import Matrix
 from .scalar import Scalar
 from .vector import Vector
-from .matrix import Matrix
-from .construction import row_stack, column_stack, concat_vectors  # noqa
-from . import _version
+
+from . import matrix  # isort:skip (here to avoid cyclic imports)
 
 for dgb_type, inner_type, gb_type in [
     (mask.StructuralMask, None, grblas.mask.StructuralMask),

@@ -1,18 +1,14 @@
-from dask import is_dask_collection
+from functools import partial, reduce
+
 import dask.array as da
 import grblas as gb
 import numpy as np
-from functools import partial, reduce
+
+# from dask import is_dask_collection
+
 from .base import BaseType, InnerBaseType
 from .mask import Mask
-from .utils import (
-    np_dtype,
-    get_meta,
-    get_return_type,
-    get_grblas_type,
-    wrap_inner,
-)
-from builtins import isinstance
+from .utils import get_grblas_type, get_meta, get_return_type, np_dtype, wrap_inner
 
 
 class GbDelayed:
@@ -323,9 +319,7 @@ class GbDelayed:
                 )
         elif self.method_name in {"vxm", "mxv", "mxm"}:
             delayed = self._matmul2(meta, mask=mask)
-            updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(
-                delayed
-            )
+            updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
             return
         else:
             raise ValueError(self.method_name)
@@ -373,9 +367,7 @@ class Updater:
         if self.parent._meta._is_scalar:
             self.parent._update(delayed, accum=self.accum)
         else:
-            self.parent._update(
-                delayed, accum=self.accum, mask=self.mask, replace=self.replace
-            )
+            self.parent._update(delayed, accum=self.accum, mask=self.mask, replace=self.replace)
 
 
 def _resolve_indices(grblas_obj, indices):
@@ -446,9 +438,7 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
             mask, replace = args
             if mask is not None:
                 mask = mask_type(mask.value)
-            chunk[resolved_indices](
-                mask=mask, accum=accum, replace=replace
-            ) << obj_value
+            chunk[resolved_indices](mask=mask, accum=accum, replace=replace) << obj_value
         else:
             if mask is not None:
                 mask = mask_type(mask.value)
@@ -461,7 +451,7 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
                 # and not a copy of it
                 mask_range = np.arange(chunk.size)[indices[-mask_level + 1][0]]
                 mask = _expand_mask_to_fit(chunk, mask_range, mask, mask_type)
-    
+
             chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
         return wrap_inner(gb.Vector.new(dtype, size=len(resolved_indices)))
     else:
@@ -661,8 +651,7 @@ class Assigner:
         if ndim == 1 and type(self.index) is not tuple:
             if type(self.index) in {list, np.ndarray}:
                 if subassign and mask:
-                    self.index, obj, submask = _uniquify(
-                        self.index, obj, mask=mask.mask)
+                    self.index, obj, submask = _uniquify(self.index, obj, mask=mask.mask)
                     mask.mask = submask
                     delayed_mask = submask._delayed
                 else:
@@ -698,7 +687,7 @@ class Assigner:
                         _clear_mask,
                         _clear_mask_final_step,
                         dtype=np_dtype(meta.dtype),
-                        concatenate=False
+                        concatenate=False,
                     )
                     clear_mask = get_return_type(meta.reduce().new())(replaced)
             else:
@@ -736,9 +725,7 @@ class Assigner:
             # The following last few lines are only meant to trigger the
             # above updates whenever parent.compute() is called
             if (not subassign) and mask and replace:
-                parent << parent.apply(
-                    gb.binary.plus, right=clear_mask
-                )
+                parent << parent.apply(gb.binary.plus, right=clear_mask)
             zero = get_return_type(meta)(delayed).reduce().new()
             parent << parent.apply(gb.binary.plus, right=zero)
             return
@@ -764,9 +751,7 @@ def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
     # expr.new(...)
     args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
     kwargs = {
-        key: (
-            kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key]
-        )
+        key: (kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key])
         for key in kwargs
     }
     expr = getattr(x.value, method_name)(*args, **kwargs)
@@ -780,9 +765,7 @@ def _update_expr(method_name, updating, x, kwargs, *args):
     # v << left.ewise_mult(right)
     args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
     kwargs = {
-        key: (
-            kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key]
-        )
+        key: (kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key])
         for key in kwargs
     }
     expr = getattr(x.value, method_name)(*args, **kwargs)
@@ -791,15 +774,11 @@ def _update_expr(method_name, updating, x, kwargs, *args):
 
 
 # This mutates the value in `updating`
-def _update_expr_full(
-    method_name, updating, accum, mask, mask_type, replace, x, kwargs, *args
-):
+def _update_expr_full(method_name, updating, accum, mask, mask_type, replace, x, kwargs, *args):
     # v(mask=mask) << left.ewise_mult(right)
     args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
     kwargs = {
-        key: (
-            kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key]
-        )
+        key: (kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key])
         for key in kwargs
     }
     expr = getattr(x.value, method_name)(*args, **kwargs)
@@ -809,9 +788,7 @@ def _update_expr_full(
     return updating
 
 
-def _reduce_axis(
-    op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None
-):
+def _reduce_axis(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
     """Call reduce_rowwise or reduce_columnwise on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
@@ -821,9 +798,7 @@ def _reduce_axis(
         return wrap_inner(x.value.reduce_columnwise(op).new(dtype=gb_dtype))
 
 
-def _reduce_axis_combine(
-    op, x, axis=None, keepdims=None, computing_meta=None, dtype=None
-):
+def _reduce_axis_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
     """Combine results from _reduce_axis on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
@@ -833,9 +808,7 @@ def _reduce_axis_combine(
     return x
 
 
-def _reduce_scalar(
-    op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None
-):
+def _reduce_scalar(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
     """Call reduce_scalar on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
@@ -859,9 +832,7 @@ def _reduce_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=
             vals = [val.value.value for sublist in x for val in sublist]
         else:
             vals = [val.value.value for val in x]
-        values = gb.Vector.from_values(
-            list(range(len(vals))), vals, size=len(vals), dtype=dtype
-        )
+        values = gb.Vector.from_values(list(range(len(vals))), vals, size=len(vals), dtype=dtype)
         return wrap_inner(values.reduce(op).new())
     return x
 
@@ -877,9 +848,7 @@ def _reduce_accum(output, reduced, accum):
     if reduced.value.is_empty:
         right = gb.Vector.new(reduced.value.dtype, 1)
     else:
-        right = gb.Vector.from_values(
-            [0], [reduced.value.value], dtype=reduced.value.dtype
-        )
+        right = gb.Vector.from_values([0], [reduced.value.value], dtype=reduced.value.dtype)
     result = left.ewise_add(right, op=accum, require_monoid=False).new(dtype=dtype)
     result = result[0].new()
     return wrap_inner(result)

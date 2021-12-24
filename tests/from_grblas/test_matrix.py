@@ -1,9 +1,9 @@
-import pytest
 import numpy as np
-from dask_grblas import Matrix, Vector, Scalar
-from grblas import unary, binary, monoid, semiring
-from grblas import dtypes
-from grblas.exceptions import IndexOutOfBound, DimensionMismatch, OutputNotEmpty
+import pytest
+from grblas import binary, dtypes, monoid, semiring, unary
+from grblas.exceptions import DimensionMismatch, IndexOutOfBound, OutputNotEmpty
+
+from dask_grblas import Matrix, Scalar, Vector
 
 
 @pytest.fixture
@@ -55,13 +55,9 @@ def test_dup(A):
         Matrix.from_values([0, 1], [0, 1], [0, 2], dtype=dtypes.INT64), check_dtype=True
     )
     E = D.dup(mask=D.V)
-    assert E.isequal(
-        Matrix.from_values([1], [1], [2.5], dtype=dtypes.FP64), check_dtype=True
-    )
+    assert E.isequal(Matrix.from_values([1], [1], [2.5], dtype=dtypes.FP64), check_dtype=True)
     E = D.dup(dtype=dtypes.INT64, mask=D.V)
-    assert E.isequal(
-        Matrix.from_values([1], [1], [2], dtype=dtypes.INT64), check_dtype=True
-    )
+    assert E.isequal(Matrix.from_values([1], [1], [2], dtype=dtypes.INT64), check_dtype=True)
 
 
 def test_from_values():
@@ -75,9 +71,7 @@ def test_from_values():
     assert C2.ncols == 3
     assert C2.nvals == 3
     assert C2.dtype == float
-    C3 = Matrix.from_values(
-        [0, 1, 1], [2, 1, 1], [1, 2, 3], nrows=10, dup_op=binary.times
-    )
+    C3 = Matrix.from_values([0, 1, 1], [2, 1, 1], [1, 2, 3], nrows=10, dup_op=binary.times)
     assert C3.nrows == 10
     assert C3.ncols == 3
     assert C3.nvals == 2  # duplicates were combined
@@ -227,9 +221,7 @@ def test_mxm_nonsquare():
 
 
 def test_mxm_mask(A):
-    val_mask = Matrix.from_values(
-        [0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7
-    )
+    val_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7)
     struct_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [1, 0, 0], nrows=7, ncols=7)
     C = A.dup()
     C(val_mask.V) << A.mxm(A, semiring.plus_times)
@@ -252,103 +244,17 @@ def test_mxm_mask(A):
     result3 = Matrix.from_values([0, 3, 4], [2, 3, 2], [9, 9, 7], nrows=7, ncols=7)
     assert C.isequal(result3)
     C2 = A.mxm(A, semiring.plus_times).new(mask=struct_mask.S)
-
-
-###     assert C2.isequal(result3)
-###     with pytest.raises(TypeError, match="Mask must indicate"):
-###         A.mxm(A).new(mask=struct_mask)
+    assert C2.isequal(result3)
+    ### with pytest.raises(TypeError, match="Mask must indicate"):
+    ###     A.mxm(A).new(mask=struct_mask)
 
 
 def test_mxm_accum(A):
     A(binary.plus) << A.mxm(A, semiring.plus_times)
     result = Matrix.from_values(
-        [
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            1,
-            1,
-            1,
-            1,
-            1,
-            2,
-            2,
-            3,
-            3,
-            3,
-            3,
-            3,
-            4,
-            4,
-            5,
-            5,
-            6,
-            6,
-            6,
-            6,
-            6,
-        ],
-        [
-            0,
-            1,
-            2,
-            3,
-            4,
-            6,
-            2,
-            3,
-            4,
-            5,
-            6,
-            2,
-            5,
-            0,
-            1,
-            2,
-            3,
-            5,
-            2,
-            5,
-            2,
-            5,
-            0,
-            2,
-            3,
-            4,
-            5,
-        ],
-        [
-            9,
-            2,
-            9,
-            3,
-            16,
-            8,
-            20,
-            28,
-            20,
-            56,
-            4,
-            1,
-            1,
-            3,
-            6,
-            3,
-            9,
-            3,
-            7,
-            7,
-            1,
-            1,
-            21,
-            26,
-            7,
-            3,
-            26,
-        ],
+        [0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 3, 3, 3, 3, 3, 4, 4, 5, 5, 6, 6, 6, 6, 6],
+        [0, 1, 2, 3, 4, 6, 2, 3, 4, 5, 6, 2, 5, 0, 1, 2, 3, 5, 2, 5, 2, 5, 0, 2, 3, 4, 5],
+        [9, 2, 9, 3, 16, 8, 20, 28, 20, 56, 4, 1, 1, 3, 6, 3, 9, 3, 7, 7, 1, 1, 21, 26, 7, 3, 26],
     )
     assert A.isequal(result)
 
@@ -644,20 +550,7 @@ def test_isequal(A, v):
     C4 = Matrix.from_values(
         [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
         [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-        [
-            3.0,
-            2.0,
-            3.0,
-            1.0,
-            5.0,
-            3.000000000000000001,
-            7.0,
-            8.0,
-            3.0,
-            1 - 1e-11,
-            7.0,
-            4.0,
-        ],
+        [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
     )
     assert not C4.isequal(A)
 
@@ -690,20 +583,7 @@ def test_isclose(A, v):
     C5 = Matrix.from_values(
         [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
         [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-        [
-            3.0,
-            2.0,
-            3.0,
-            1.0,
-            5.0,
-            3.000000000000000001,
-            7.0,
-            8.0,
-            3.0,
-            1 - 1e-11,
-            7.0,
-            4.0,
-        ],
+        [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
     )
     assert C5.isclose(A)
     C6 = Matrix.from_values(
