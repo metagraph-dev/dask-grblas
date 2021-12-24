@@ -348,8 +348,7 @@ class Updater:
         return Assigner(self, keys)
 
     def __setitem__(self, keys, obj):
-        self._meta[keys]
-        self.parent._meta.clear()  # XXX: test to see if this is necessary
+        Assigner(self, keys).update(obj)
 
     def __lshift__(self, delayed):
         # Occurs when user calls C(params) << delayed
@@ -442,8 +441,12 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
         if mask is not None:
             mask = mask_type(mask.value)
         chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
-    return wrap_inner(gb.Vector.new(dtype, size=len(resolved_indices)))
-    # raise NotImplementedError(f"indices: {indices}")
+    if type(chunk) == gb.Vector:
+        return wrap_inner(gb.Vector.new(dtype, size=resolved_indices.size))
+    else:
+        nrows = resolved_indices[0].size
+        ncols = resolved_indices[1].size
+        return wrap_inner(gb.Matrix.new(dtype, nrows=nrows, ncols=ncols))
 
 
 def _get_expanded_mask_indices(mask, mask_range):
@@ -480,19 +483,12 @@ class Extractor:
             self.level = 0
         if replace and (type(mask) is not np.ndarray):
             # This branch is necessary when replace is True:
-            # Here, we remove all chunk elements in the mask
-            # range that lie in the complement of the mask
-            mask = mask_type(mask.value)
-            if index is None:
-                mask_range = (slice(None),) * self.ndim
-            else:
-                mask_range = tuple([index[axis] for axis in range(self.ndim)])
-            if self.ndim == 1:
-                mask_range, = mask_range
-            # subassign makes things much easier than a loop with del!
+            # Here, we remove all chunk elements that lie in
+            # the complement of the mask
             chunk = inner.value
-            chunk_piece = chunk[mask_range].new()
-            chunk[mask_range](mask=mask, replace=True) << chunk_piece
+            chunk_copy = chunk.dup()
+            mask = mask_type(mask.value)
+            chunk(mask=mask, replace=True) << chunk_copy
 
     def __getitem__(self, index):
         return Extractor(self, index=index)
@@ -567,27 +563,47 @@ def _clear_mask(a, computing_meta=None, axis=None, keepdims=None):
     if computing_meta:
         return np.array()
     if type(a) is list:
-        meta = _get_Extractor_meta(a[0])
+        if type(a[0]) is list:
+            meta = _get_Extractor_meta(a[0][0])
+        else:
+            meta = _get_Extractor_meta(a[0])
     else:
         meta = _get_Extractor_meta(a)
-    v = type(meta).new(dtype=np_dtype(meta.dtype), size=1)
-    if keepdims:
-        return wrap_inner(v)
+
+    if len(meta.shape) == 1:
+        o = type(meta).new(dtype=np_dtype(meta.dtype), size=1)
     else:
-        return wrap_inner(v.reduce().new())
+        o = type(meta).new(dtype=np_dtype(meta.dtype), nrows=1, ncols=1)
+        
+    if keepdims:
+        return wrap_inner(o)
+    else:
+        # if len(axis) == 1:
+        #     raise Exception()
+        return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
 
 
 def _clear_mask_final_step(a, axis=None, keepdims=None):
     if type(a) is list:
-        meta = _get_Extractor_meta(a[0])
+        if type(a[0]) is list:
+            meta = _get_Extractor_meta(a[0][0])
+        else:
+            meta = _get_Extractor_meta(a[0])
     else:
         meta = _get_Extractor_meta(a)
-    v = type(meta).new(dtype=np_dtype(meta.dtype), size=1)
-    if keepdims:
-        return wrap_inner(v)
+
+    dtype = np_dtype(meta.dtype)
+    if len(meta.shape) == 1:
+        o = type(meta).new(dtype=dtype, size=1)
     else:
-        s = v.reduce().new()
-        return wrap_inner(s)
+        o = type(meta).new(dtype=dtype, nrows=1, ncols=1)
+
+    if keepdims:
+        return wrap_inner(o)
+    else:
+        # if len(axis) == 1:
+            # raise Exception()
+        return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
 
 
 def _uniquify(index, obj, mask=None):
@@ -656,6 +672,7 @@ class Assigner:
             delayed_mask = None
             grblas_mask_type = None
 
+        dtype = np_dtype(meta.dtype)
         ndim = len(self.parent.shape)
         if ndim == 1 and type(self.index) is not tuple:
             if type(self.index) in {list, np.ndarray}:
@@ -677,25 +694,24 @@ class Assigner:
             indices = self.index
         if ndim in [1, 2]:
             delayed_dup = parent._optional_dup()
-            # Extractor level 1 (and possibly 2):
-            # We use blockwise here to enable chunk alignment between
-            # `delayed_mask` and `delayed_dup`
             ind = "i" if ndim == 1 else "ij"
             if (not subassign) and mask:
-                # data chunks and mask chunks must have the same granularity:
+                # We use blockwise here to enable chunk alignment between
+                # `delayed_mask` and `delayed_dup`
                 args = [delayed_dup, ind, delayed_mask, ind]
                 delayed_dup = da.core.blockwise(
                     lambda x, y: x,
                     ind,
                     *args,
-                    dtype=np_dtype(meta.dtype),
+                    dtype=dtype,
                 )
+                # Extractor level 0:
                 # clear data chunks using corresponding mask
                 delayed = da.core.blockwise(
                     Extractor,
                     ind,
                     *args,
-                    dtype=np_dtype(meta.dtype),
+                    dtype=dtype,
                     replace=replace,
                     mask_type=grblas_mask_type,
                 )
@@ -706,21 +722,17 @@ class Assigner:
                         delayed,
                         _clear_mask,
                         _clear_mask_final_step,
-                        axis=0,
-                        dtype=np_dtype(meta.dtype),
+                        dtype=dtype,
                         concatenate=False,
                     )
-                    if ndim == 1:
-                        clear_mask = get_return_type(meta.reduce().new())(replaced)
-                    else:
-                        clear_mask = get_return_type(meta.reduce_scalar.new())(replaced)
+                    clear_mask = get_return_type(gb.Scalar.new(dtype))(replaced)
             else:
                 args = [delayed_dup, ind]
                 delayed = da.core.blockwise(
                     Extractor,
                     ind,
                     *args,
-                    dtype=np_dtype(meta.dtype),
+                    dtype=dtype,
                     replace=False,
                     mask_type=grblas_mask_type,
                 )
@@ -741,13 +753,13 @@ class Assigner:
             delayed = da.core.elemwise(
                 _assigner_update,
                 delayed,
-                np_dtype(meta.dtype),
+                dtype,
                 grblas_mask_type,
                 self.updater.accum,
                 obj._delayed if isinstance(obj, BaseType) else obj,
                 subassign,
                 *args,
-                dtype=np_dtype(meta.dtype),
+                dtype=dtype,
             )
             parent._delayed = delayed_dup
             # The following last few lines are only meant to trigger the
