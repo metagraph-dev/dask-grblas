@@ -296,17 +296,17 @@ def test_ewise_add(A):
     assert C.isequal(result)
 
 
-### def test_extract(A):
-###     C = Matrix.new(A.dtype, 3, 4)
-###     result = Matrix.from_values([0, 0, 1, 2, 2, 2], [0, 2, 1, 1, 2, 3], [2, 3, 3, 5, 7, 3], nrows=3, ncols=4)
-###     C << A[[0, 3, 6], [1, 2, 3, 4]]
-###     assert C.isequal(result)
-###     C << A[0::3, 1:5]
-###     assert C.isequal(result)
-###     C << A[[0, 3, 6], 1:5:1]
-###     assert C.isequal(result)
-###     C2 = A[[0, 3, 6], [1, 2, 3, 4]].new()
-###     assert C2.isequal(result)
+def test_extract(A):
+    C = Matrix.new(A.dtype, 3, 4)
+    result = Matrix.from_values([0, 0, 1, 2, 2, 2], [0, 2, 1, 1, 2, 3], [2, 3, 3, 5, 7, 3], nrows=3, ncols=4)
+    C << A[[0, 3, 6], [1, 2, 3, 4]]
+    assert C.isequal(result)
+    C << A[0::3, 1:5]
+    assert C.isequal(result)
+    C << A[[0, 3, 6], 1:5:1]
+    assert C.isequal(result)
+    C2 = A[[0, 3, 6], [1, 2, 3, 4]].new()
+    assert C2.isequal(result)
 
 
 ### def test_extract_row(A):
@@ -335,18 +335,18 @@ def test_ewise_add(A):
 ###     assert w2.isequal(result)
 
 
-### def test_assign(A):
-###     B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
-###     result = Matrix.from_values(
-###         [0, 0, 2, 3, 0, 3, 5, 6, 0, 6, 1, 6, 4, 1],
-###         [0, 5, 0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6],
-###         [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4])
-###     C = A.dup()
-###     C()[[0, 2], [0, 5]] = B
-###     assert C.isequal(result)
-###     C = A.dup()
-###     C[:3:2, :6:5]() << B
-###     assert C.isequal(result)
+def test_assign(A):
+    B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
+    result = Matrix.from_values(
+        [0, 0, 2, 3, 0, 3, 5, 6, 0, 6, 1, 6, 4, 1],
+        [0, 5, 0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6],
+        [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4])
+    C = A.dup()
+    C()[[0, 2], [0, 5]] = B
+    assert C.isequal(result)
+    C = A.dup()
+    C[:3:2, :6:5]() << B
+    assert C.isequal(result)
 
 
 ### def test_assign_wrong_dims(A):

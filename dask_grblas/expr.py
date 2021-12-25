@@ -570,16 +570,15 @@ def _clear_mask(a, computing_meta=None, axis=None, keepdims=None):
     else:
         meta = _get_Extractor_meta(a)
 
+    dtype = np_dtype(meta.dtype)
     if len(meta.shape) == 1:
-        o = type(meta).new(dtype=np_dtype(meta.dtype), size=1)
+        o = type(meta).new(dtype=dtype, size=1)
     else:
-        o = type(meta).new(dtype=np_dtype(meta.dtype), nrows=1, ncols=1)
-        
+        o = type(meta).new(dtype=dtype, nrows=1, ncols=1)
+
     if keepdims:
         return wrap_inner(o)
     else:
-        # if len(axis) == 1:
-        #     raise Exception()
         return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
 
 
@@ -601,8 +600,6 @@ def _clear_mask_final_step(a, axis=None, keepdims=None):
     if keepdims:
         return wrap_inner(o)
     else:
-        # if len(axis) == 1:
-            # raise Exception()
         return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
 
 
@@ -628,21 +625,28 @@ def _uniquify2D(index, obj, mask=None):
     is_not_unique = False
     unique_indices_tup = ()
     obj_indices_tup = ()
+    pm = ()
     for axis in range(2):
+        if type(index[axis]) is slice:
+            unique_indices_tup += (index[axis],)
+            obj_indices_tup += (slice(None),)
+            pm += (1,)
+            continue
         rev_index = np.array(index[axis])[::-1]
         unique_indices, obj_indices = np.unique(
             rev_index, return_index=True)
         unique_indices_tup += (unique_indices,)
         obj_indices_tup += (obj_indices,)
+        pm += (-1,)
         if unique_indices.size < rev_index.size:
             is_not_unique = True
 
     if is_not_unique:
         if isinstance(obj, BaseType):
-            obj = obj[::-1, ::-1].new()
+            obj = obj[::pm[0], ::pm[1]].new()
             obj = obj[obj_indices_tup].new()
         if mask:
-            mask = mask[::-1, ::-1].new()
+            mask = mask[::pm[0], ::pm[1]].new()
             mask = mask[obj_indices_tup].new()
         index = unique_indices_tup
     return index, obj, mask
