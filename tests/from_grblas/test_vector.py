@@ -132,10 +132,10 @@ def test_extract_element(v):
 def test_set_element(v):
     assert v[0].value.compute() is None
     assert v[1].value == 1
-    ### v[0] = 12
-    ### v[1] << 9
-    ### assert v[0].value == 12
-    ### assert v[1].new() == 9
+    v[0] = 12
+    v[1] << 9
+    assert v[0].value == 12
+    assert v[1].new() == 9
 
 
 def test_remove_element(v):

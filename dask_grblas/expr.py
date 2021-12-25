@@ -1,14 +1,14 @@
 from functools import partial, reduce
-
+from numbers import Number
 import dask.array as da
 import grblas as gb
 import numpy as np
 
-from dask.distributed import Lock
 
 from .base import BaseType, InnerBaseType
 from .mask import Mask
 from .utils import get_grblas_type, get_meta, get_return_type, np_dtype, wrap_inner
+from grblas.exceptions import DimensionMismatch
 
 
 class GbDelayed:
@@ -376,12 +376,17 @@ class Updater:
 def _resolve_indices(grblas_obj, indices):
     out = ()
     ndim = len(grblas_obj.shape)
+    offset = np.zeros(len(indices), dtype=int)
     for axis in range(ndim):
         resolved_indices = np.arange(grblas_obj.shape[axis])
-        for index in indices[::-1]:
+        for level, index in enumerate(indices[::-1]):
             if type(index) is tuple:
-                ind = index[axis]
-                resolved_indices = resolved_indices[ind]
+                if axis == 0 and isinstance(resolved_indices, Number):
+                    offset[level] = 1
+                elif not isinstance(resolved_indices, Number):
+                    o = offset[level] if axis == 1 else 0
+                    ind = index[axis - o]
+                    resolved_indices = resolved_indices[ind]
         out += (resolved_indices,)
     return out if ndim > 1 else out[0]
 
@@ -440,7 +445,22 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
     else:
         if mask is not None:
             mask = mask_type(mask.value)
-        chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
+        if isinstance(resolved_indices, Number):
+            index_is_number = [True]
+        elif isinstance(resolved_indices, np.ndarray):
+            index_is_number = [False]
+        else:
+            index_is_number = [isinstance(i, Number) for i in resolved_indices]
+
+        if np.all(index_is_number):
+            chunk[resolved_indices] << obj_value
+            return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
+        elif np.any(index_is_number):
+            chunk[resolved_indices] << obj_value
+            sz, = [len(i) for i in resolved_indices if not isinstance(i, Number)]
+            return wrap_inner(gb.Vector.new(dtype, size=sz))
+        else:
+            chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
     if type(chunk) == gb.Vector:
         return wrap_inner(gb.Vector.new(dtype, size=resolved_indices.size))
     else:
@@ -523,10 +543,11 @@ class AmbiguousAssignOrExtract:
                 Extractor,
                 dtype=np_dtype(meta.dtype),
             )
-            if ndim == 1:
-                delayed = delayed[indices]
-            else:
+            index_is_a_list = [type(i) in {list, np.ndarray} for i in indices]
+            if ndim == 2 and np.all(index_is_a_list):
                 delayed = delayed[indices[0], :][:, indices[1]]
+            else:
+                delayed = delayed[indices]
             delayed = da.core.elemwise(
                 _extractor_new,
                 delayed,
@@ -632,6 +653,14 @@ def _uniquify2D(index, obj, mask=None):
             obj_indices_tup += (slice(None),)
             pm += (1,)
             continue
+        elif isinstance(index[axis], Number):
+            other = 0 if axis else 1
+            other, obj, mask = _uniquify(index[other], obj, mask=mask)
+            if axis:
+                return (other, index[axis]), obj, mask
+            else:
+                return (index[axis], other), obj, mask
+                
         rev_index = np.array(index[axis])[::-1]
         unique_indices, obj_indices = np.unique(
             rev_index, return_index=True)
@@ -688,13 +717,13 @@ class Assigner:
                     self.index, obj, _ = _uniquify(self.index, obj)
             indices = (self.index,)
         else:
-            if subassign and mask:
-                self.index, obj, submask = _uniquify2D(
-                    self.index, obj, mask=mask.mask)
-                mask.mask = submask
-                delayed_mask = submask._delayed
-            else:
-                self.index, obj, _ = _uniquify2D(self.index, obj)
+            if ndim == 2 and np.any([type(i) in {list, np.ndarray} for i in self.index]):
+                if subassign and mask:
+                    self.index, obj, submask = _uniquify2D(self.index, obj, mask=mask.mask)
+                    mask.mask = submask
+                    delayed_mask = submask._delayed
+                else:
+                    self.index, obj, _ = _uniquify2D(self.index, obj)
             indices = self.index
         if ndim in [1, 2]:
             delayed_dup = parent._optional_dup()
@@ -741,10 +770,11 @@ class Assigner:
                     mask_type=grblas_mask_type,
                 )
             
-            if ndim == 1:
-                delayed = delayed[indices]
-            else:
+            index_is_a_list = [type(i) in {list, np.ndarray} for i in indices]
+            if ndim == 2 and np.all(index_is_a_list):
                 delayed = delayed[indices[0], :][:, indices[1]]
+            else:
+                delayed = delayed[indices]
             # the size/shape of `delayed` is now in general
             # different from `delayed_dup` by virtue of `indices`.
             # The following updates the indexed elements of
@@ -754,17 +784,20 @@ class Assigner:
             args = []
             if subassign:
                 args = [delayed_mask, replace]
-            delayed = da.core.elemwise(
-                _assigner_update,
-                delayed,
-                dtype,
-                grblas_mask_type,
-                self.updater.accum,
-                obj._delayed if isinstance(obj, BaseType) else obj,
-                subassign,
-                *args,
-                dtype=dtype,
-            )
+            try:
+                delayed = da.core.elemwise(
+                    _assigner_update,
+                    delayed,
+                    dtype,
+                    grblas_mask_type,
+                    self.updater.accum,
+                    obj._delayed if isinstance(obj, BaseType) else obj,
+                    subassign,
+                    *args,
+                    dtype=dtype,
+                )
+            except ValueError:
+                raise DimensionMismatch
             parent._delayed = delayed_dup
             # The following last few lines are only meant to trigger the
             # above updates whenever parent.compute() is called
@@ -772,8 +805,12 @@ class Assigner:
                 parent << parent.apply(
                     gb.binary.plus, right=clear_mask
                 )
-            if ndim == 1:
-                zero = get_return_type(meta)(delayed).reduce().new()
+            index_is_a_number = [isinstance(i, Number) for i in indices]
+            if np.all(index_is_a_number):
+                zero = get_return_type(gb.Scalar.new(dtype))(delayed)
+            elif np.any(index_is_a_number) or ndim == 1:
+                _meta = gb.Vector.new(dtype)
+                zero = get_return_type(_meta)(delayed).reduce().new()
             else:
                 zero = get_return_type(meta)(delayed).reduce_scalar().new()
             parent << parent.apply(gb.binary.plus, right=zero)
