@@ -319,9 +319,7 @@ class GbDelayed:
                 )
         elif self.method_name in {"vxm", "mxv", "mxm"}:
             delayed = self._matmul2(meta, mask=mask)
-            updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(
-                delayed
-            )
+            updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
             return
         else:
             raise ValueError(self.method_name)
@@ -368,9 +366,7 @@ class Updater:
         if self.parent._meta._is_scalar:
             self.parent._update(delayed, accum=self.accum)
         else:
-            self.parent._update(
-                delayed, accum=self.accum, mask=self.mask, replace=self.replace
-            )
+            self.parent._update(delayed, accum=self.accum, mask=self.mask, replace=self.replace)
 
 
 def _resolve_indices(grblas_obj, indices):
@@ -457,7 +453,7 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
             return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
         elif np.any(index_is_number):
             chunk[resolved_indices] << obj_value
-            sz, = [len(i) for i in resolved_indices if not isinstance(i, Number)]
+            (sz,) = (len(i) for i in resolved_indices if not isinstance(i, Number))
             return wrap_inner(gb.Vector.new(dtype, size=sz))
         else:
             chunk(mask=mask, accum=accum)[resolved_indices] << obj_value
@@ -660,10 +656,9 @@ def _uniquify2D(index, obj, mask=None):
                 return (other, index[axis]), obj, mask
             else:
                 return (index[axis], other), obj, mask
-                
+
         rev_index = np.array(index[axis])[::-1]
-        unique_indices, obj_indices = np.unique(
-            rev_index, return_index=True)
+        unique_indices, obj_indices = np.unique(rev_index, return_index=True)
         unique_indices_tup += (unique_indices,)
         obj_indices_tup += (obj_indices,)
         pm += (-1,)
@@ -672,10 +667,10 @@ def _uniquify2D(index, obj, mask=None):
 
     if is_not_unique:
         if isinstance(obj, BaseType):
-            obj = obj[::pm[0], ::pm[1]].new()
+            obj = obj[:: pm[0], :: pm[1]].new()
             obj = obj[obj_indices_tup].new()
         if mask:
-            mask = mask[::pm[0], ::pm[1]].new()
+            mask = mask[:: pm[0], :: pm[1]].new()
             mask = mask[obj_indices_tup].new()
         index = unique_indices_tup
     return index, obj, mask
@@ -769,7 +764,7 @@ class Assigner:
                     replace=False,
                     mask_type=grblas_mask_type,
                 )
-            
+
             index_is_a_list = [type(i) in {list, np.ndarray} for i in indices]
             if ndim == 2 and np.all(index_is_a_list):
                 delayed = delayed[indices[0], :][:, indices[1]]
@@ -802,9 +797,7 @@ class Assigner:
             # The following last few lines are only meant to trigger the
             # above updates whenever parent.compute() is called
             if (not subassign) and mask and replace:
-                parent << parent.apply(
-                    gb.binary.plus, right=clear_mask
-                )
+                parent << parent.apply(gb.binary.plus, right=clear_mask)
             index_is_a_number = [isinstance(i, Number) for i in indices]
             if np.all(index_is_a_number):
                 zero = get_return_type(gb.Scalar.new(dtype))(delayed)

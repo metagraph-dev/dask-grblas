@@ -298,7 +298,9 @@ def test_ewise_add(A):
 
 def test_extract(A):
     C = Matrix.new(A.dtype, 3, 4)
-    result = Matrix.from_values([0, 0, 1, 2, 2, 2], [0, 2, 1, 1, 2, 3], [2, 3, 3, 5, 7, 3], nrows=3, ncols=4)
+    result = Matrix.from_values(
+        [0, 0, 1, 2, 2, 2], [0, 2, 1, 1, 2, 3], [2, 3, 3, 5, 7, 3], nrows=3, ncols=4
+    )
     C << A[[0, 3, 6], [1, 2, 3, 4]]
     assert C.isequal(result)
     C << A[0::3, 1:5]
@@ -340,7 +342,8 @@ def test_assign(A):
     result = Matrix.from_values(
         [0, 0, 2, 3, 0, 3, 5, 6, 0, 6, 1, 6, 4, 1],
         [0, 5, 0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6],
-        [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4])
+        [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4],
+    )
     C = A.dup()
     C()[[0, 2], [0, 5]] = B
     assert C.isequal(result)
@@ -359,7 +362,8 @@ def test_assign_row(A, v):
     result = Matrix.from_values(
         [3, 3, 5, 6, 6, 1, 6, 2, 4, 1, 0, 0, 0, 0],
         [0, 2, 2, 2, 3, 4, 4, 5, 5, 6, 1, 3, 4, 6],
-        [3, 3, 1, 5, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0])
+        [3, 3, 1, 5, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
+    )
     C = A.dup()
     C[0, :] = v
     assert C.isequal(result)
@@ -369,7 +373,8 @@ def test_assign_column(A, v):
     result = Matrix.from_values(
         [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4, 6],
         [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1, 1],
-        [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0])
+        [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
+    )
     C = A.dup()
     C[:, 1] = v
     assert C.isequal(result)
@@ -380,7 +385,8 @@ def test_assign_scalar(A):
     result_block = Matrix.from_values(
         [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 3, 5, 1, 3, 5],
         [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4, 4, 4],
-        [3, 2, 5, 3, 7, 3, 1, 7, 4, 0, 0, 0, 0, 0, 0])
+        [3, 2, 5, 3, 7, 3, 1, 7, 4, 0, 0, 0, 0, 0, 0],
+    )
     C = A.dup()
     C[[1, 3, 5], [2, 4]] = 0
     assert C.isequal(result_block)
@@ -391,7 +397,8 @@ def test_assign_scalar(A):
     result_row = Matrix.from_values(
         [3, 0, 6, 0, 6, 6, 2, 4, 1, 3, 5, 1, 1],
         [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4],
-        [3, 2, 5, 3, 7, 3, 1, 7, 4, 3, 1, 0, 0])
+        [3, 2, 5, 3, 7, 3, 1, 7, 4, 3, 1, 0, 0],
+    )
     C = A.dup()
     C[1, [2, 4]] = 0
     assert C.isequal(result_row)
@@ -402,7 +409,8 @@ def test_assign_scalar(A):
     result_column = Matrix.from_values(
         [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 1, 3, 5],
         [0, 1, 2, 3, 3, 4, 5, 5, 6, 4, 2, 2, 2],
-        [3, 2, 5, 3, 7, 3, 1, 7, 4, 8, 0, 0, 0])
+        [3, 2, 5, 3, 7, 3, 1, 7, 4, 8, 0, 0, 0],
+    )
     C = A.dup()
     C[[1, 3, 5], 2] = 0
     assert C.isequal(result_column)

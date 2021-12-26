@@ -1019,7 +1019,7 @@ def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
             raise
 
 
-@pytest.mark.slow
+@pytest.mark.veryslow
 def test_extract(As, vms_Matrix, sms_Matrix):
     A, dAs = As
     B, dBs = As
@@ -1348,9 +1348,8 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                         )
 
 
-@pytest.mark.slow
+@pytest.mark.veryslow
 def test_assign(As, vms_Matrix, sms_Matrix):
-
     def inv_if(mask, is_inv=False):
         if is_inv:
             return ~mask
@@ -1363,7 +1362,7 @@ def test_assign(As, vms_Matrix, sms_Matrix):
     sm, dsms = sms_Matrix
 
     scalars = (1, 1.0)
-    gBs = (gB,)*len(dBs) + scalars
+    gBs = (gB,) * len(dBs) + scalars
     dBs = dBs + scalars
 
     row_indexes = [
@@ -1381,55 +1380,58 @@ def test_assign(As, vms_Matrix, sms_Matrix):
             def f1(x, y):
                 x[row_index, col_index] << y
                 return x
-    
+
             def f2(x, y):
                 x()[row_index, col_index] << y
                 return x
-    
+
             def g1(m, x, y):
                 x(mask=m)[row_index, col_index] << y
                 return x
-    
+
             def g2(x, y):
                 x(accum=gb.binary.plus)[row_index, col_index] << y
                 return x
-    
+
             def g3(x, y):
                 x(replace=True)[row_index, col_index] << y
                 return x
-    
+
             def g4(x, y):
                 x(replace=False)[row_index, col_index] << y
                 return x
-    
+
             def h1(x, y):
                 x(accum=gb.binary.plus, replace=True)[row_index, col_index] << y
                 return x
-    
+
             def h2(x, y):
                 x(accum=gb.binary.plus, replace=False)[row_index, col_index] << y
                 return x
-    
+
             def h3(m, x, y):
                 x(mask=m, replace=test_replace_true)[row_index, col_index] << y
                 return x
-    
+
             def h4(m, x, y):
                 x(mask=m, replace=False)[row_index, col_index] << y
                 return x
-    
+
             def h5(m, x, y):
                 x(mask=m, accum=gb.binary.plus)[row_index, col_index] << y
                 return x
-    
+
             def i1(m, x, y):
-                x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[row_index, col_index] << y
+                (
+                    x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[row_index, col_index]
+                    << y
+                )
                 return x
-    
+
             def i2(m, x, y):
                 x(mask=m, accum=gb.binary.plus, replace=False)[row_index, col_index] << y
                 return x
-    
+
             for dA in dAs:
                 for B, dB in zip(gBs, dBs):
                     compare(f1, (A.dup(), B), (dA.dup(), dB))
@@ -1439,15 +1441,11 @@ def test_assign(As, vms_Matrix, sms_Matrix):
                     compare(g2, (A.dup(), B), (dA.dup(), dB))
                     compare(g2, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB))
                     compare(g3, (A.dup(), B), (dA.dup(), dB), errors=True)
-                    compare(
-                        g3, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB), errors=True
-                    )
+                    compare(g3, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB), errors=True)
                     compare(g4, (A.dup(), B), (dA.dup(), dB))
                     compare(g4, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB))
                     compare(h1, (A.dup(), B), (dA.dup(), dB), errors=True)
-                    compare(
-                        h1, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB), errors=True
-                    )
+                    compare(h1, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB), errors=True)
                     compare(h2, (A.dup(), B), (dA.dup(), dB))
                     compare(h2, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB))
                     for is_inv in [False, True]:
