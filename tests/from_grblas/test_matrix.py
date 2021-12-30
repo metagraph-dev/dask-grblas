@@ -334,31 +334,30 @@ def test_extract(A):
     assert C.isequal(result)
 
 
+### def test_extract_row(A):
+###     w = Vector.new(A.dtype, 3)
+###     result = Vector.from_values([1, 2], [5, 3], size=3)
+###     w << A[6, [0, 2, 4]]
+###     assert w.isequal(result)
+###     w << A[6, :5:2]
+###     assert w.isequal(result)
+###     w << A.T[[0, 2, 4], 6]
+###     assert w.isequal(result)
+###     w2 = A[6, [0, 2, 4]].new()
+###     assert w2.isequal(result)
 
-def test_extract_row(A):
-    w = Vector.new(A.dtype, 3)
-    result = Vector.from_values([1, 2], [5, 3], size=3)
-    w << A[6, [0, 2, 4]]
-    assert w.isequal(result)
-    w << A[6, :5:2]
-    assert w.isequal(result)
-    w << A.T[[0, 2, 4], 6]
-    assert w.isequal(result)
-    w2 = A[6, [0, 2, 4]].new()
-    assert w2.isequal(result)
 
-
-def test_extract_column(A):
-    w = Vector.new(A.dtype, 3)
-    result = Vector.from_values([1, 2], [3, 1], size=3)
-    w << A[[1, 3, 5], 2]
-    assert w.isequal(result)
-    w << A[1:6:2, 2]
-    assert w.isequal(result)
-    w << A.T[2, [1, 3, 5]]
-    assert w.isequal(result)
-    w2 = A[1:6:2, 2].new()
-    assert w2.isequal(result)
+### def test_extract_column(A):
+###     w = Vector.new(A.dtype, 3)
+###     result = Vector.from_values([1, 2], [3, 1], size=3)
+###     w << A[[1, 3, 5], 2]
+###     assert w.isequal(result)
+###     w << A[1:6:2, 2]
+###     assert w.isequal(result)
+###     w << A.T[2, [1, 3, 5]]
+###     assert w.isequal(result)
+###     w2 = A[1:6:2, 2].new()
+###     assert w2.isequal(result)
 
 
 def test_assign(A):

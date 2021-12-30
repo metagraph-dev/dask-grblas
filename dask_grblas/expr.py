@@ -551,27 +551,32 @@ def _frag_by_index(*args, mask_type, index_is_a_number, gb_dtype, gb_meta):
     mask = args[x.ndim + 1]
     x_offsets = args[x.ndim + 2:]
     index_tuple = ()
+    mask_index_tuple = ()
     idx_within = True
     for axis in range(x.ndim):
         offset = x_offsets[axis][0]
         if type(indices[axis]) is slice:
             idx = indices[axis]
+            mask_idx = idx  # slice is always slice(None)
         else:
             idx = np.array(indices[axis]) - offset
             idx_filter = (idx >= 0) & (idx < x.shape[axis])
             idx_within = np.any(idx_filter)
             if idx_within:
                 idx = idx[idx_filter]
+                mask_idx = np.argwhere(idx_filter)[:, 0]
             else:
                 break
         index_tuple += (idx,)
+        mask_index_tuple += (mask_idx,)
     x = x.value
     if idx_within:
         index_tuple = _squeeze(index_tuple)
-        mask = mask_type(mask) if mask else None
+        mask_index_tuple = _squeeze(mask_index_tuple)
+        mask = mask_type(mask.value[mask_index_tuple].new()) if mask else None
         return wrap_inner(x[index_tuple].new(gb_dtype, mask=mask))
     else:
-        return wrap_inner(gb_meta.new(dtype))
+        return wrap_inner(gb_meta.new(gb_dtype))
 
 
 def _defrag_by_index(*args, x_chunks, cat_axes, dtype=None):
