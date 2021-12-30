@@ -9,6 +9,7 @@ from .base import BaseType, InnerBaseType
 from .mask import Mask
 from .utils import get_grblas_type, get_meta, get_return_type, np_dtype, wrap_inner
 from grblas.exceptions import DimensionMismatch
+from dask.base import tokenize
 
 
 class GbDelayed:
@@ -526,6 +527,7 @@ class Extractor:
             self.level = inner.level + 1
         else:
             self.level = 0
+            
         if replace and (type(mask) is not np.ndarray):
             # This branch is necessary when replace is True:
             # Here, we remove all chunk elements that lie in
@@ -537,6 +539,82 @@ class Extractor:
 
     def __getitem__(self, index):
         return Extractor(self, index=index)
+    
+    def astype(self, dtype):
+        return self
+
+
+def _frag_by_index(*args, mask_type, index_is_a_number, gb_dtype, gb_meta):
+    """returns only that part of the data-chunk selected by the index"""
+    x = args[0]
+    indices = args[1: x.ndim + 1]
+    mask = args[x.ndim + 1]
+    x_offsets = args[x.ndim + 2:]
+    index_tuple = ()
+    idx_within = True
+    for axis in range(x.ndim):
+        offset = x_offsets[axis][0]
+        if type(indices[axis]) is slice:
+            idx = indices[axis]
+        else:
+            idx = np.array(indices[axis]) - offset
+            idx_filter = (idx >= 0) & (idx < x.shape[axis])
+            idx_within = np.any(idx_filter)
+            if idx_within:
+                idx = idx[idx_filter]
+            else:
+                break
+        index_tuple += (idx,)
+    x = x.value
+    if idx_within:
+        index_tuple = _squeeze(index_tuple)
+        mask = mask_type(mask) if mask else None
+        return wrap_inner(x[index_tuple].new(gb_dtype, mask=mask))
+    else:
+        return wrap_inner(gb_meta.new(dtype))
+
+
+def _defrag_by_index(*args, x_chunks, cat_axes, dtype=None):
+    """reassembles chunk-fragments, sorting them by the indices of the index chunk"""
+    ndim = len(x_chunks)
+    indices = args[0: ndim]
+    fused_fragments = args[ndim].value
+    index_tuple = ()
+    for axis, idx in enumerate(indices):
+        if axis not in cat_axes:
+            index_tuple += (slice(None),)
+        else:
+            # Needed when idx is unsigned
+            idx = idx.astype(np.int64)
+    
+            # Normalize negative indices
+            idx = np.where(idx < 0, idx + sum(x_chunks[axis]), idx)
+    
+            x_chunk_offset = 0
+            chunk_output_offset = 0
+        
+            # Assemble the final index that picks from the output of the previous
+            # kernel by adding together one layer per chunk of x
+            idx_final = np.zeros_like(idx)
+            for x_chunk in x_chunks[axis]:
+                idx_filter = (idx >= x_chunk_offset) & (idx < x_chunk_offset + x_chunk)
+                idx_cum = np.cumsum(idx_filter)
+                idx_final += np.where(idx_filter, idx_cum - 1 + chunk_output_offset, 0)
+                x_chunk_offset += x_chunk
+                if idx_cum.size > 0:
+                    chunk_output_offset += idx_cum[-1]
+        
+            index_tuple += (idx_final,)
+    index_tuple = _squeeze(index_tuple)
+    return wrap_inner(fused_fragments[index_tuple].new())
+
+
+def _shape_meta(shape):
+    return tuple(1 if x > 0 else 0 for x in shape)
+
+
+def _da_Array_meta(a):
+    return np.empty(_shape_meta(a.shape), dtype=int)
 
 
 class AmbiguousAssignOrExtract:
@@ -557,30 +635,105 @@ class AmbiguousAssignOrExtract:
             delayed_mask = None
             grblas_mask_type = None
 
-        # indices = gb.base.IndexerResolver(self.parent._meta, self.index, raw=False).indices
         ndim = len(self.parent.shape)
+        dtype = np_dtype(meta.dtype)
         if ndim == 1 and type(self.index) is not tuple:
             indices = (self.index,)
         else:
             indices = self.index
         if ndim in [1, 2]:
-            delayed = self.parent._delayed.map_blocks(
-                Extractor,
-                dtype=np_dtype(meta.dtype),
-            )
-            index_is_a_list = [type(i) in {list, np.ndarray} for i in indices]
-            if ndim == 2 and np.all(index_is_a_list):
-                delayed = delayed[indices[0], :][:, indices[1]]
-            else:
-                delayed = delayed[indices]
-            delayed = da.core.elemwise(
-                _extractor_new,
-                delayed,
-                dtype,
-                delayed_mask,
-                grblas_mask_type,
-                dtype=np_dtype(meta.dtype),
-            )
+            delayed = self.parent._delayed
+            index_is_da_Array = [type(i) is da.Array for i in indices]
+            if not np.all(index_is_da_Array):
+                delayed = delayed.map_blocks(
+                    Extractor,
+                    dtype=np_dtype(meta.dtype),
+                )
+                index_is_a_list = [type(i) in {list, np.ndarray} for i in indices]
+                indices_new = tuple(slice(None) if type(i) is da.Array else i for i in indices)
+                if ndim == 2 and np.all(index_is_a_list):
+                    delayed = delayed[indices_new[0], :][:, indices_new[1]]
+                else:
+                    delayed = delayed[indices_new]
+                delayed = da.core.elemwise(
+                    _extractor_new,
+                    delayed,
+                    dtype,
+                    delayed_mask,
+                    grblas_mask_type,
+                    dtype=np_dtype(meta.dtype),
+                )
+
+            if np.any(index_is_da_Array):
+                indices = tuple(
+                    i if type(i) is da.Array else slice(None)
+                    for i in indices if not isinstance(i, Number)
+                )
+                # prepare arguments for blockwise:
+                x = delayed
+                indices_args = []
+                offset_args = []
+                cat_axes = []
+                new_axes = ()
+                for axis in range(ndim):
+                    indx = indices[axis]
+                    if type(indx) is da.Array:
+                        indices_args += [indx, (ndim + axis,)]
+                        new_axes += (ndim + axis,)
+                        cat_axes += [axis]
+                    else:
+                        indices_args += [indx, None]
+
+                    # Calculate the offset at which each chunk starts along axis
+                    # e.g. chunks=(..., (5, 3, 4), ...) -> offset=[0, 5, 8]
+                    offset = np.roll(np.cumsum(x.chunks[axis]), 1)
+                    offset[0] = 0
+                    # it is vital to give a unique name to this dask array
+                    name = "offset-" + tokenize(offset, axis)
+                    offset = da.core.from_array(offset, chunks=1, name=name)
+                    # Tamper with the declared chunks of offset to make blockwise align it with
+                    # x[axis]
+                    offset = da.core.Array(
+                        offset.dask, offset.name, (x.chunks[axis],), offset.dtype, meta=x._meta
+                    )
+                    offset_args += [offset, (axis,)]
+
+                x_ind = tuple(range(ndim))
+                fragments_ind = x_ind + new_axes
+                mask_args = [delayed_mask, new_axes if mask else None]
+                index_is_a_number = [isinstance(i, Number) for i in indices]
+
+                # this blockwise is essentially a cartesian product of data chunks and index chunks
+                fragments = da.core.blockwise(
+                    _frag_by_index,
+                    fragments_ind,
+                    x, x_ind,
+                    *indices_args,
+                    *mask_args,
+                    *offset_args,
+                    mask_type=grblas_mask_type,
+                    index_is_a_number=index_is_a_number,
+                    gb_dtype=dtype,
+                    gb_meta=meta,
+                    dtype=dtype,
+                    meta=wrap_inner(meta),
+                )
+
+                extracts_ind = tuple((i + ndim) if i in cat_axes else i for i in x_ind)
+    
+                # this blockwise is essentially an aggregation over the data chunk axes
+                delayed = da.core.blockwise(
+                    _defrag_by_index,
+                    extracts_ind,
+                    *indices_args,
+                    fragments, fragments_ind,
+                    x_chunks=x.chunks,
+                    cat_axes=cat_axes,
+                    concatenate=True,
+                    dtype=dtype,
+                    meta=wrap_inner(meta),
+                )
+            
             return get_return_type(meta)(delayed)
         raise NotImplementedError()
 
@@ -1000,3 +1153,26 @@ def sum_by_monoid(
         concatenate=False,
     )
     return result
+
+
+@da.core.concatenate_lookup.register(Extractor)
+def _concat_extractor(seq, axis=0):
+    def materialise(x):
+        indices = []
+        inner = x
+        while inner.level > 0:
+            indices.append(inner.index)
+            inner = inner.inner
+        inner = inner.inner
+        chunk = inner.value
+        fused_indices = _fuse_indices(indices, chunk.shape)
+        return chunk[fused_indices].new()
+        
+    if axis not in {0, 1}:
+        raise ValueError(f"Can only concatenate for axis 0 or 1.  Got {axis}")
+    seq = [materialise(item) for item in seq]
+    if axis == 0:
+        value = gb.ss.concat([[item.value] for item in seq])
+    else:
+        value = gb.ss.concat([[item.value for item in seq]])
+    return InnerMatrix(value)

@@ -4,7 +4,7 @@ from grblas import binary, dtypes, monoid, semiring, unary
 from grblas.exceptions import IndexOutOfBound, OutputNotEmpty
 
 from dask_grblas import Matrix, Scalar, Vector
-
+import dask.array as da
 
 @pytest.fixture
 def A():
@@ -268,6 +268,16 @@ def test_extract(v):
     assert w.isequal(result)
     w2 = v[1::2].new()
     assert w2.isequal(w)
+    lazy = da.from_array(np.array([1, 3, 5]), chunks=3)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
+    lazy = da.from_array(np.array([1, 3, 5]), chunks=2)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
 
 
 def test_extract_fancy_scalars(v):
