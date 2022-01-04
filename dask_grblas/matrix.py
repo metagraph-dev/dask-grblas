@@ -173,17 +173,23 @@ class Matrix(BaseType):
         meta = self._meta.reduce_scalar(op)
         return GbDelayed(self, "reduce_scalar", op, meta=meta)
 
-    def build(self, rows, columns, values, *, dup_op=None, clear=False):
+    def build(self, rows, columns, values, *, dup_op=None, clear=False, nrows=None, ncols=None):
         # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
         # TODO: raise if output is not empty
         # This operation could, perhaps, partition rows, columns, and values if there are chunks
-        matrix = gb.Matrix.new(self.dtype, self.nrows, self.ncols)
+        if nrows is None:
+            nrows = self.nrows
+        if ncols is None:
+            ncols = self.ncols
+        matrix = gb.Matrix.new(self.dtype, nrows, ncols)
         matrix.build(rows, columns, values, dup_op=dup_op)
-        self._delayed = Matrix.from_matrix(matrix)._delayed
+        m = Matrix.from_matrix(matrix)
+        self._delayed = m._delayed
+        self._meta = m._meta
 
-    def to_values(self):
+    def to_values(self, dtype=None):
         # TODO: make this lazy; can we do something smart with this?
-        return self.compute().to_values()
+        return self.compute().to_values(dtype=dtype)
 
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(
@@ -236,14 +242,16 @@ class TransposedMatrix:
     mxm = Matrix.mxm
     kronecker = Matrix.kronecker
     apply = Matrix.apply
-    reduce_rows = Matrix.reduce_rowwise
-    reduce_columns = Matrix.reduce_columnwise
+    reduce_rowwise = Matrix.reduce_rowwise
+    reduce_columnwise = Matrix.reduce_columnwise
     reduce_scalar = Matrix.reduce_scalar
 
     # Misc.
     isequal = Matrix.isequal
     isclose = Matrix.isclose
     __getitem__ = Matrix.__getitem__
+    __array__ = Matrix.__array__
+    name = Matrix.name
 
 
 @da.core.concatenate_lookup.register(InnerMatrix)

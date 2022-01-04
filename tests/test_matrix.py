@@ -1,7 +1,8 @@
+import inspect
+import itertools
 from functools import partial
 
 import grblas as gb
-import itertools
 import pytest
 from grblas import dtypes
 from pytest import raises
@@ -1818,3 +1819,39 @@ def test_attrs(vs):
         "persist",
         "visualize",
     }
+
+
+def test_signatures_match_grblas():
+    def has_signature(x):
+        try:
+            inspect.signature(x)
+        except Exception:
+            return False
+        else:
+            return True
+
+    m1 = gb.Matrix.from_values(1, 2, 3)
+    m2 = dgb.Matrix.from_values(1, 2, 3)
+    skip = {
+        "from_pygraphblas",
+        "to_pygraphblas",
+        "__class__",
+        "__init__",
+        "from_values",
+        "reduce_columns",
+        "reduce_rows",
+    }
+    d1 = {
+        key: inspect.signature(val)
+        for key, val in inspect.getmembers(m1)
+        if has_signature(val) and key not in skip
+    }
+    d2 = {
+        key: inspect.signature(val)
+        for key, val in inspect.getmembers(m2)
+        if has_signature(val) and key not in skip
+    }
+    for key, val in d1.items():
+        # if not key.startswith("_") or key.startswith("__") and key in d2:
+        if not key.startswith("_"):
+            assert val == d2[key], (key, str(val), str(d2[key]))

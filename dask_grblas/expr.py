@@ -1,14 +1,14 @@
 from functools import partial, reduce
 from numbers import Number
+
 import dask.array as da
 import grblas as gb
 import numpy as np
-
+from grblas.exceptions import DimensionMismatch
 
 from .base import BaseType, InnerBaseType
 from .mask import Mask
 from .utils import get_grblas_type, get_meta, get_return_type, np_dtype, wrap_inner
-from grblas.exceptions import DimensionMismatch
 
 
 class GbDelayed:
@@ -181,8 +181,7 @@ class GbDelayed:
 
     def new(self, *, dtype=None, mask=None):
         if mask is not None:
-            assert isinstance(mask, Mask)
-            meta = self._meta.new(dtype=dtype, mask=mask._meta)
+            meta = self._meta.new(dtype=dtype, mask=get_meta(mask))
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
         else:
@@ -332,7 +331,7 @@ class GbDelayed:
 
 
 class Updater:
-    def __init__(self, parent, *, mask=None, accum=None, replace=False):
+    def __init__(self, parent, *, mask=None, accum=None, replace=False, input_mask=None):
         self.parent = parent
         self.mask = mask
         self.accum = accum
@@ -340,7 +339,9 @@ class Updater:
             self.replace = None
         else:
             self.replace = replace
-        self._meta = parent._meta(mask=get_meta(mask), accum=accum, replace=replace)
+        self._meta = parent._meta(
+            mask=get_meta(mask), accum=accum, replace=replace, input_mask=get_meta(input_mask)
+        )
 
     def __getitem__(self, keys):
         return Assigner(self, keys)
@@ -348,25 +349,25 @@ class Updater:
     def __setitem__(self, keys, obj):
         Assigner(self, keys).update(obj)
 
-    def __lshift__(self, delayed):
-        # Occurs when user calls C(params) << delayed
-        self.update(delayed)
+    def __lshift__(self, expr):
+        # Occurs when user calls C(params) << expr
+        self.update(expr)
 
-    def update(self, delayed):
-        # Occurs when user calls C(params).update(delayed)
-        # self.parent._update(delayed, **self.kwargs)
+    def update(self, expr):
+        # Occurs when user calls C(params).update(expr)
+        # self.parent._update(expr, **self.kwargs)
         if self.mask is None and self.accum is None:
-            return self.parent.update(delayed)
+            return self.parent.update(expr)
         self.parent._meta._update(
-            get_meta(delayed),
+            get_meta(expr),
             mask=get_meta(self.mask),
             accum=self.accum,
             replace=self.replace,
         )
         if self.parent._meta._is_scalar:
-            self.parent._update(delayed, accum=self.accum)
+            self.parent._update(expr, accum=self.accum)
         else:
-            self.parent._update(delayed, accum=self.accum, mask=self.mask, replace=self.replace)
+            self.parent._update(expr, accum=self.accum, mask=self.mask, replace=self.replace)
 
 
 def _ceildiv(a, b):
@@ -377,8 +378,8 @@ def fuse_slice_pair(slice0, slice1, length):
     """computes slice `s` such that array[s] = array[s0][s1] where array has length `length`"""
     a0, o0, e0 = slice0.indices(length)
     a1, o1, e1 = slice1.indices(_ceildiv(abs(o0 - a0), abs(e0)))
-    o01 = a0 + o1*e0
-    return slice(a0 + a1*e0, None if o01 < 0 else o01, e0*e1)
+    o01 = a0 + o1 * e0
+    return slice(a0 + a1 * e0, None if o01 < 0 else o01, e0 * e1)
 
 
 def fuse_index_pair(i, j, length=None):
@@ -389,11 +390,14 @@ def fuse_index_pair(i, j, length=None):
         raise ValueError("Length argument is missing")
     if type(i) is slice and isinstance(j, Number):
         a0, _, e0 = i.indices(length)
-        return  a0 + j*e0
+        return a0 + j * e0
     if type(i) is slice and type(j) in {list, np.ndarray}:
         a0, _, e0 = i.indices(length)
-        f = lambda x: a0 + x*e0
-        return  [f(x) for x in j] if type(j) is list else list(f(j))
+
+        def f(x):
+            return a0 + x * e0
+
+        return [f(x) for x in j] if type(j) is list else list(f(j))
     elif type(i) is slice and type(j) is slice:
         return fuse_slice_pair(i, j, length=length)
     else:
@@ -408,7 +412,7 @@ def _fuse_indices(indices, shape):
     """
     ndim = len(shape)
     if len(indices) == 0:
-        return (slice(None),)*ndim if ndim > 1 else slice(None)
+        return (slice(None),) * ndim if ndim > 1 else slice(None)
     out = ()
     offset = np.zeros(len(indices), dtype=int)
     for axis in range(ndim):
@@ -499,8 +503,11 @@ def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
     if np.all(index_is_number):
         return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
     elif np.any(index_is_number):
-        (sz,) = (_index_len(i, chunk.shape[axis]) for axis, i in enumerate(fused_indices)
-                 if not isinstance(i, Number))
+        (sz,) = (
+            _index_len(i, chunk.shape[axis])
+            for axis, i in enumerate(fused_indices)
+            if not isinstance(i, Number)
+        )
         return wrap_inner(gb.Vector.new(dtype, size=sz))
     elif type(chunk) == gb.Vector:
         sz = _index_len(fused_indices, chunk.shape[0])
@@ -545,11 +552,10 @@ class AmbiguousAssignOrExtract:
         self.index = index
         self._meta = parent._meta[index]
 
-    def new(self, *, dtype=None, mask=None):
+    def new(self, dtype=None, *, mask=None, input_mask=None, name=None):
         if mask is not None:
-            assert isinstance(mask, Mask)
             assert self.parent._meta.nvals == 0
-            meta = self._meta.new(dtype=dtype, mask=mask._meta)
+            meta = self._meta.new(dtype=dtype, mask=get_meta(mask))
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
         else:
@@ -650,7 +656,7 @@ def _uniquify(ndim, index, obj, mask=None):
     def extract(obj, indices, axis):
         indices = fuse_index_pair(slice(None, None, -1), indices, obj.shape[axis])
         n = len(obj.shape)
-        obj_index = [slice(None)]*n
+        obj_index = [slice(None)] * n
         axis = 0 if n < ndim else axis
         obj_index[axis] = indices
         indices = _squeeze(tuple(obj_index))
@@ -718,7 +724,8 @@ class Assigner:
                 )
                 parent._delayed = delayed_dup
                 # Extractor level 0:
-                # when replace=True, Extractor clears `delayed_dup` chunks using corresponding mask chunk
+                # when replace=True, Extractor clears `delayed_dup` chunks using corresponding
+                # mask chunk
                 delayed = da.core.elemwise(
                     Extractor,
                     delayed_dup,
@@ -728,7 +735,8 @@ class Assigner:
                     dtype=dtype,
                 )
                 if replace:
-                    # when replace = True, we use this branch to touch all chunks ensuring ALL `delayed_dup` chunks are cleared.  Actually, replaced = 0 by intention.
+                    # when replace = True, we use this branch to touch all chunks ensuring ALL
+                    # `delayed_dup` chunks are cleared.  Actually, replaced = 0 by intention.
                     replaced = da.reduction(
                         delayed,
                         _clear_mask,
@@ -736,7 +744,8 @@ class Assigner:
                         dtype=dtype,
                         concatenate=False,
                     )
-                    # bind `replaced` to `parent` to trigger the above action when parent.compute() is called
+                    # bind `replaced` to `parent` to trigger the above action when
+                    # parent.compute() is called
                     dgb_Scalar = get_return_type(gb.Scalar.new(dtype))
                     clear_mask = dgb_Scalar(replaced)
                     parent << parent.apply(gb.binary.plus, right=clear_mask)

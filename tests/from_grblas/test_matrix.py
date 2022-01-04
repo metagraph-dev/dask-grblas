@@ -520,10 +520,11 @@ def test_simple_assignment(A):
     assert C.isequal(A)
 
 
+@pytest.mark.xfail
 def test_assign_transpose(A):
     C = Matrix.new(A.dtype, A.ncols, A.nrows)
-    ### C << A.T
-    ### assert C.isequal(A.T.new())
+    C << A.T
+    assert C.isequal(A.T.new())
 
     with pytest.raises(TypeError):
         C.T << A
@@ -533,8 +534,8 @@ def test_assign_transpose(A):
         C[:, :].T << A
 
     C = Matrix.new(A.dtype, A.ncols + 1, A.nrows + 1)
-    ### C[:A.ncols, :A.nrows] << A.T
-    ### assert C[:A.ncols, :A.nrows].new().isequal(A.T.new())
+    C[: A.ncols, : A.nrows] << A.T
+    assert C[: A.ncols, : A.nrows].new().isequal(A.T.new())
 
 
 def test_isequal(A, v):
@@ -621,6 +622,7 @@ def test_isclose(A, v):
 ###     assert A.T.isclose(A.T)
 
 
+@pytest.mark.xfail
 def test_transpose_exceptional():
     A = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [True, True, False, True])
     B = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [1, 2, 3, 4])

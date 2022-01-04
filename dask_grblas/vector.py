@@ -4,7 +4,7 @@ from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 
 from .base import BaseType, InnerBaseType
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
+from .expr import AmbiguousAssignOrExtract, Assigner, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
 from .utils import np_dtype, wrap_inner
 
@@ -88,10 +88,10 @@ class Vector(BaseType):
         cls,
         indices,
         values,
+        dtype=None,
         *,
         size=None,
         dup_op=None,
-        dtype=None,
         chunks=None,
         name=None,
     ):
@@ -135,13 +135,13 @@ class Vector(BaseType):
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
 
-    def __delitem__(self, index):
-        del self._meta[index]
+    def __delitem__(self, keys):
+        del self._meta[keys]
         # delayed = self._optional_dup()
-        # TODO: normalize index
+        # TODO: normalize keys
         # delayed = delayed.map_blocks(
         #     _delitem,
-        #     index,
+        #     keys,
         #     dtype=np_dtype(self.dtype),
         # )
         raise NotImplementedError()
@@ -184,17 +184,21 @@ class Vector(BaseType):
         meta = self._meta.reduce(op)
         return GbDelayed(self, "reduce", op, meta=meta)
 
-    def build(self, indices, values, *, dup_op=None, clear=False):
+    def build(self, indices, values, *, dup_op=None, clear=False, size=None):
         # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
         # TODO: raise if output is not empty
         # This operation could, perhaps, partition indices and values if there are chunks
-        vector = gb.Vector.new(self.dtype, size=self.size)
+        if size is None:
+            size = self.size
+        vector = gb.Vector.new(self.dtype, size=size, name=self.name)
         vector.build(indices, values, dup_op=dup_op)
-        self._delayed = Vector.from_vector(vector)._delayed
+        v = Vector.from_vector(vector)
+        self._delayed = v._delayed
+        self._meta = v._meta
 
-    def to_values(self):
+    def to_values(self, dtype=None):
         # TODO: make this lazy; can we do something smart with this?
-        return self.compute().to_values()
+        return self.compute().to_values(dtype=dtype)
 
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(other, Vector, within="isequal", argname="other")

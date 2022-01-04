@@ -1,3 +1,5 @@
+import inspect
+
 import grblas as gb
 import pytest
 from grblas import dtypes
@@ -1120,3 +1122,39 @@ def test_attrs(vs):
         "persist",
         "visualize",
     }
+
+
+def test_signatures_match_grblas():
+    def has_signature(x):
+        try:
+            inspect.signature(x)
+        except Exception:
+            return False
+        else:
+            return True
+
+    v1 = gb.Vector.from_values(1, 2)
+    v2 = dgb.Vector.from_values(1, 2)
+    skip = {
+        "from_pygraphblas",
+        "to_pygraphblas",
+        "__class__",
+        "__init__",
+        "from_values",
+        "inner",  # TODO
+        "outer",  # TODO
+    }
+    d1 = {
+        key: inspect.signature(val)
+        for key, val in inspect.getmembers(v1)
+        if has_signature(val) and key not in skip
+    }
+    d2 = {
+        key: inspect.signature(val)
+        for key, val in inspect.getmembers(v2)
+        if has_signature(val) and key not in skip
+    }
+    for key, val in d1.items():
+        # if not key.startswith("_") or key.startswith("__") and key in d2:
+        if not key.startswith("_"):
+            assert val == d2[key], (key, str(val), str(d2[key]))
