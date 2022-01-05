@@ -370,14 +370,10 @@ def test_extract(vs, ws, vms, sms):
     vm, dvms = vms
     sm, dsms = sms
 
-    index1_da = da.from_array([0, 3, 1, 4, 2, 5], chunks=((2, 2, 2),))
-    index2_da = da.from_array([0, 5, 5, 1, 2, 0], chunks=((2, 2, 2),))
-    index3_da = da.from_array([0] * 6, chunks=((2, 2, 2),))
-
     for index in [
+        slice(None),
         [0, 3, 1, 4, 2, 5],
         [0, 5, 5, 1, 2, 0],
-        slice(None),
         slice(None, None, -1),
         [0] * 6,
     ]:
@@ -990,7 +986,14 @@ def test_subassign(vs, ws, vms, sms):
             return ~mask
         return mask
 
+    index1_da = da.from_array([0, 3, 1, 4, 2, 5], chunks=((2, 2, 2),))
+    index2_da = da.from_array([0, 5, 5, 1, 2, 0], chunks=((2, 2, 2),))
+    index3_da = da.from_array([0] * 6, chunks=((2, 2, 2),))
+
     for index in [
+        index1_da,
+        index2_da,
+        index3_da,
         [0, 3, 1, 4, 2, 5],
         [0, 5, 5, 1, 2, 0],
         slice(None),
@@ -999,51 +1002,63 @@ def test_subassign(vs, ws, vms, sms):
     ]:
 
         def f2(x, y):
-            x[index]() << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind]() << y
             return x
 
         def g1(m, x, y):
-            x[index](mask=m) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](mask=m) << y
             return x
 
         def g2(x, y):
-            x[index](accum=gb.binary.plus) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](accum=gb.binary.plus) << y
             return x
 
         def g3(x, y):
-            x[index](replace=True) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](replace=True) << y
             return x
 
         def g4(x, y):
-            x[index](replace=False) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](replace=False) << y
             return x
 
         def h1(x, y):
-            x[index](accum=gb.binary.plus, replace=True) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](accum=gb.binary.plus, replace=True) << y
             return x
 
         def h2(x, y):
-            x[index](accum=gb.binary.plus, replace=False) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](accum=gb.binary.plus, replace=False) << y
             return x
 
         def h3(m, x, y):
-            x[index](mask=m, replace=test_replace_true) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](mask=m, replace=test_replace_true) << y
             return x
 
         def h4(m, x, y):
-            x[index](mask=m, replace=False) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](mask=m, replace=False) << y
             return x
 
         def h5(m, x, y):
-            x[index](mask=m, accum=gb.binary.plus) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](mask=m, accum=gb.binary.plus) << y
             return x
 
         def i1(m, x, y):
-            x[index](mask=m, accum=gb.binary.plus, replace=test_replace_true) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](mask=m, accum=gb.binary.plus, replace=test_replace_true) << y
             return x
 
         def i2(m, x, y):
-            x[index](mask=m, accum=gb.binary.plus, replace=False) << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind](mask=m, accum=gb.binary.plus, replace=False) << y
             return x
 
         for dv in dvs:
@@ -1203,64 +1218,84 @@ def test_assign(vs, ws, vms, sms):
             return ~mask
         return mask
 
+    index1_da = da.from_array([0, 3, 1, 4, 2, 5], chunks=((2, 2, 2),))
+    index2_da = da.from_array([0, 5, 5, 1, 2, 0], chunks=((2, 2, 2),))
+    index3_da = da.from_array([0] * 6, chunks=((2, 2, 2),))
+
     for index in [
+        index1_da,
+        index2_da,
+        index3_da,
+        [0] * 6,
+        slice(None, None, -1),
+        slice(None),
         [0, 3, 1, 4, 2, 5],
         [0, 5, 5, 1, 2, 0],
-        slice(None),
-        slice(None, None, -1),
-        [0] * 6,
     ]:
 
         def f1(x, y):
-            x[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x[ind] << y
             return x
 
         def f2(x, y):
-            x()[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x()[ind] << y
             return x
 
         def g1(m, x, y):
-            x(mask=m)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(mask=m)[ind] << y
             return x
 
         def g2(x, y):
-            x(accum=gb.binary.plus)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(accum=gb.binary.plus)[ind] << y
             return x
 
         def g3(x, y):
-            x(replace=True)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(replace=True)[ind] << y
             return x
 
         def g4(x, y):
-            x(replace=False)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(replace=False)[ind] << y
             return x
 
         def h1(x, y):
-            x(accum=gb.binary.plus, replace=True)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(accum=gb.binary.plus, replace=True)[ind] << y
             return x
 
         def h2(x, y):
-            x(accum=gb.binary.plus, replace=False)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(accum=gb.binary.plus, replace=False)[ind] << y
             return x
 
         def h3(m, x, y):
-            x(mask=m, replace=test_replace_true)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(mask=m, replace=test_replace_true)[ind] << y
             return x
 
         def h4(m, x, y):
-            x(mask=m, replace=False)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(mask=m, replace=False)[ind] << y
             return x
 
         def h5(m, x, y):
-            x(mask=m, accum=gb.binary.plus)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(mask=m, accum=gb.binary.plus)[ind] << y
             return x
 
         def i1(m, x, y):
-            x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[ind] << y
             return x
 
         def i2(m, x, y):
-            x(mask=m, accum=gb.binary.plus, replace=False)[index] << y
+            ind = index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
+            x(mask=m, accum=gb.binary.plus, replace=False)[ind] << y
             return x
 
         for dv in dvs:

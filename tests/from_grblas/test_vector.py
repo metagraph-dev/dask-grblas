@@ -278,6 +278,25 @@ def test_extract(v):
     assert w.isequal(result)
     w = v[lazy].new()
     assert w.isequal(result)
+    
+    # reverse index order:
+    result = Vector.from_values([1, 2], [1, 1], size=3)
+    w << v[[5, 3, 1]]
+    assert w.isequal(result)
+    w() << v[5::-2]
+    assert w.isequal(result)
+    w2 = v[5::-2].new()
+    assert w2.isequal(w)
+    lazy = da.from_array(np.array([5, 3, 1]), chunks=3)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
+    lazy = da.from_array(np.array([5, 3, 1]), chunks=2)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
 
 
 def test_extract_fancy_scalars(v):
@@ -319,6 +338,13 @@ def test_assign(v):
     assert w.isequal(result)
     w = v.dup()
     w[:5:2] << u
+    assert w.isequal(result)
+
+    u_lazy = da.from_array(np.array([0, 2, 4]), chunks=3)
+    w[u_lazy] = u
+    assert w.isequal(result)
+    u_lazy = da.from_array(np.array([0, 2, 4]), chunks=2)
+    w[u_lazy] = u
     assert w.isequal(result)
 
 

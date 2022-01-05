@@ -334,30 +334,58 @@ def test_extract(A):
     assert C.isequal(result)
 
 
-### def test_extract_row(A):
-###     w = Vector.new(A.dtype, 3)
-###     result = Vector.from_values([1, 2], [5, 3], size=3)
-###     w << A[6, [0, 2, 4]]
-###     assert w.isequal(result)
-###     w << A[6, :5:2]
-###     assert w.isequal(result)
-###     w << A.T[[0, 2, 4], 6]
-###     assert w.isequal(result)
-###     w2 = A[6, [0, 2, 4]].new()
-###     assert w2.isequal(result)
+def test_extract_row(A):
+    w = Vector.new(A.dtype, 3)
+    result = Vector.from_values([1, 2], [5, 3], size=3)
+    w << A[6, [0, 2, 4]]
+    assert w.isequal(result)
+    w << A[6, :5:2]
+    assert w.isequal(result)
+    # w << A.T[[0, 2, 4], 6]
+    # assert w.isequal(result)
+    w2 = A[6, [0, 2, 4]].new()
+    assert w2.isequal(result)
+
+    w = Vector.new(A.dtype, 3)
+    lazy0 = da.from_array(np.array([0, 2, 4]), chunks=3)
+    w << A[6, lazy0]
+    assert w.isequal(result)
+    w2 = A[6, lazy0].new()
+    assert w2.isequal(result)
+
+    w = Vector.new(A.dtype, 3)
+    lazy0 = da.from_array(np.array([0, 2, 4]), chunks=2)
+    w << A[6, lazy0]
+    assert w.isequal(result)
+    w2 = A[6, lazy0].new()
+    assert w2.isequal(result)
 
 
-### def test_extract_column(A):
-###     w = Vector.new(A.dtype, 3)
-###     result = Vector.from_values([1, 2], [3, 1], size=3)
-###     w << A[[1, 3, 5], 2]
-###     assert w.isequal(result)
-###     w << A[1:6:2, 2]
-###     assert w.isequal(result)
-###     w << A.T[2, [1, 3, 5]]
-###     assert w.isequal(result)
-###     w2 = A[1:6:2, 2].new()
-###     assert w2.isequal(result)
+def test_extract_column(A):
+    w = Vector.new(A.dtype, 3)
+    result = Vector.from_values([1, 2], [3, 1], size=3)
+    w << A[[1, 3, 5], 2]
+    assert w.isequal(result)
+    w << A[1:6:2, 2]
+    assert w.isequal(result)
+    # w << A.T[2, [1, 3, 5]]
+    # assert w.isequal(result)
+    w2 = A[1:6:2, 2].new()
+    assert w2.isequal(result)
+
+    w = Vector.new(A.dtype, 3)
+    lazy0 = da.from_array(np.array([1, 3, 5]), chunks=3)
+    w << A[lazy0, 2]
+    assert w.isequal(result)
+    w2 = A[lazy0, 2].new()
+    assert w2.isequal(result)
+
+    w = Vector.new(A.dtype, 3)
+    lazy0 = da.from_array(np.array([1, 3, 5]), chunks=2)
+    w << A[lazy0, 2]
+    assert w.isequal(result)
+    w2 = A[lazy0, 2].new()
+    assert w2.isequal(result)
 
 
 def test_assign(A):
@@ -439,6 +467,42 @@ def test_assign_scalar(A):
     assert C.isequal(result_column)
     C = A.dup()
     C[1::2, 2] = 0
+    assert C.isequal(result_column)
+    
+    lazy0 = da.from_array(np.array([1, 3, 5]), chunks=3)
+    lazy1 = da.from_array(np.array([2, 4]), chunks=2)
+    C = A.dup()
+    C[lazy0, [2, 4]] = 0
+    assert C.isequal(result_block)
+    C = A.dup()
+    C[[1, 3, 5], lazy1] = 0
+    assert C.isequal(result_block)
+    C = A.dup()
+    C[lazy0, lazy1] = 0
+    assert C.isequal(result_block)
+    C = A.dup()
+    C[1, lazy1] = 0
+    assert C.isequal(result_row)
+    C = A.dup()
+    C[lazy0, 2] = 0
+    assert C.isequal(result_column)
+
+    lazy0 = da.from_array(np.array([1, 3, 5]), chunks=2)
+    lazy1 = da.from_array(np.array([2, 4]), chunks=1)
+    C = A.dup()
+    C[lazy0, [2, 4]] = 0
+    assert C.isequal(result_block)
+    C = A.dup()
+    C[[1, 3, 5], lazy1] = 0
+    assert C.isequal(result_block)
+    C = A.dup()
+    C[lazy0, lazy1] = 0
+    assert C.isequal(result_block)
+    C = A.dup()
+    C[1, lazy1] = 0
+    assert C.isequal(result_row)
+    C = A.dup()
+    C[lazy0, 2] = 0
     assert C.isequal(result_column)
 
 

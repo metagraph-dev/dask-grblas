@@ -55,7 +55,7 @@ class Scalar(BaseType):
 
     @classmethod
     def new(cls, dtype, *, name=None):
-        return new(cls, dtype, name=None)
+        return new(cls, dtype, name=name)
 
     def __init__(self, delayed, meta=None):
         assert type(delayed) is da.Array
