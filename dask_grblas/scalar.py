@@ -1,5 +1,6 @@
 import dask.array as da
 import grblas as gb
+import numpy as np
 from dask.delayed import Delayed, delayed
 
 from .base import BaseType, InnerBaseType
@@ -18,6 +19,10 @@ def from_delayed(cls, scalar, dtype, *, name=None):
 
 
 def from_value(cls, scalar, dtype=None, *, name=None):
+    if type(scalar) is Scalar:
+        if cls is Scalar:
+            return scalar.dup(dtype, name=name)
+        raise NotImplementedError()
     if type(scalar) is PythonScalar:
         scalar = cls(scalar._delayed, scalar._meta)
         if dtype is not None and scalar.dtype != gb.dtypes.lookup_dtype(dtype):
@@ -45,20 +50,24 @@ class InnerScalar(InnerBaseType):
 
 
 class Scalar(BaseType):
+    ndim = 0
+    shape = ()
+    _is_scalar = True
+
     @classmethod
     def from_delayed(cls, scalar, dtype, *, name=None):
         return from_delayed(cls, scalar, dtype, name=name)
 
     @classmethod
-    def from_value(cls, scalar, dtype=None, *, name=None):
-        return from_value(cls, scalar, dtype=dtype, name=name)
+    def from_value(cls, value, dtype=None, *, name=None):
+        return from_value(cls, value, dtype=dtype, name=name)
 
     @classmethod
     def new(cls, dtype, *, name=None):
         return new(cls, dtype, name=None)
 
     def __init__(self, delayed, meta=None):
-        assert type(delayed) is da.Array
+        assert type(delayed) is da.Array, type(delayed)
         assert delayed.ndim == 0
         self._delayed = delayed
         if meta is None:
@@ -66,29 +75,29 @@ class Scalar(BaseType):
         self._meta = meta
         self.dtype = meta.dtype
 
-    def update(self, delayed):
-        self._meta.update(get_meta(delayed))
+    def update(self, expr):
+        self._meta.update(get_meta(expr))
         self._meta.clear()
-        typ = type(delayed)
+        typ = type(expr)
         if typ is AmbiguousAssignOrExtract:
             # Extract (s << v[index])
-            self.value = delayed.new(dtype=self.dtype).value
+            self.value = expr.new(dtype=self.dtype).value
         elif typ is Scalar:
             # Simple assignment (s << t)
-            self.value = delayed.value
+            self.value = expr.value
         elif typ is GbDelayed:
             # s << v.reduce()
-            delayed._update(self)
+            expr._update(self)
         else:
             # Try simple assignment (s << 1)
-            self.value = delayed
+            self.value = expr
 
     def _update(self, delayed, *, accum):
         # s(accum=accum) << v.reduce()
         assert type(delayed) is GbDelayed
         delayed._update(self, accum=accum)
 
-    def dup(self, dtype=None):
+    def dup(self, dtype=None, *, name=None):
         if dtype is None:
             meta = self._meta
         else:
@@ -106,6 +115,32 @@ class Scalar(BaseType):
 
     def __bool__(self):
         return bool(self.compute())
+
+    def __float__(self):
+        return float(self.compute())
+
+    def __int__(self):
+        return int(self.compute())
+
+    def __complex__(self):
+        return complex(self.compute())
+
+    __index__ = __int__
+
+    def __neg__(self):
+        meta = -self._meta
+        delayed = da.core.elemwise(_neg, self._delayed, dtype=self._delayed.dtype)
+        return Scalar(delayed, meta=meta)
+
+    def __invert__(self):
+        meta = ~self._meta
+        delayed = da.core.elemwise(_invert, self._delayed, dtype=bool)
+        return Scalar(delayed, meta=meta)
+
+    def __array__(self, dtype=None):
+        if dtype is None:
+            dtype = self.dtype.np_type
+        return np.array(self.value.compute(), dtype=dtype)
 
     def isequal(self, other, *, check_dtype=False):
         if other is None:
@@ -166,7 +201,7 @@ class PythonScalar:
         return new(cls, dtype, name=None)
 
     def __eq__(self, other):
-        return Scalar.from_value(self) == other
+        return self.compute() == other
 
     def compute(self, *args, **kwargs):
         innerval = self._delayed.compute(*args, **kwargs)
@@ -180,3 +215,11 @@ def _scalar_dup(x, dtype):
 
 def _is_empty(x):
     return InnerScalar(gb.Scalar.from_value(x.value.is_empty))
+
+
+def _neg(x):
+    return InnerScalar(-x.value)
+
+
+def _invert(x):
+    return InnerScalar(~x.value)

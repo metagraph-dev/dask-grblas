@@ -1,4 +1,5 @@
 import grblas.mask
+from grblas import replace  # noqa
 
 from . import _version, mask, scalar, utils, vector
 from .construction import column_stack, concat_vectors, row_stack  # noqa

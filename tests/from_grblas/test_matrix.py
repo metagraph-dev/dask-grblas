@@ -164,10 +164,10 @@ def test_extract_element(A):
 def test_set_element(A):
     assert A[1, 1].value.compute() is None
     assert A[3, 0].value == 3
-    ### A[1, 1].update(21)
-    ### A[3, 0] << -5
-    ### assert A[1, 1].value == 21
-    ### assert A[3, 0].new() == -5
+    A[1, 1].update(21)
+    A[3, 0] << -5
+    assert A[1, 1].value == 21
+    assert A[3, 0].new() == -5
 
 
 ### def test_remove_element(A):
@@ -296,17 +296,19 @@ def test_ewise_add(A):
     assert C.isequal(result)
 
 
-### def test_extract(A):
-###     C = Matrix.new(A.dtype, 3, 4)
-###     result = Matrix.from_values([0, 0, 1, 2, 2, 2], [0, 2, 1, 1, 2, 3], [2, 3, 3, 5, 7, 3], nrows=3, ncols=4)
-###     C << A[[0, 3, 6], [1, 2, 3, 4]]
-###     assert C.isequal(result)
-###     C << A[0::3, 1:5]
-###     assert C.isequal(result)
-###     C << A[[0, 3, 6], 1:5:1]
-###     assert C.isequal(result)
-###     C2 = A[[0, 3, 6], [1, 2, 3, 4]].new()
-###     assert C2.isequal(result)
+def test_extract(A):
+    C = Matrix.new(A.dtype, 3, 4)
+    result = Matrix.from_values(
+        [0, 0, 1, 2, 2, 2], [0, 2, 1, 1, 2, 3], [2, 3, 3, 5, 7, 3], nrows=3, ncols=4
+    )
+    C << A[[0, 3, 6], [1, 2, 3, 4]]
+    assert C.isequal(result)
+    C << A[0::3, 1:5]
+    assert C.isequal(result)
+    C << A[[0, 3, 6], 1:5:1]
+    assert C.isequal(result)
+    C2 = A[[0, 3, 6], [1, 2, 3, 4]].new()
+    assert C2.isequal(result)
 
 
 ### def test_extract_row(A):
@@ -335,80 +337,86 @@ def test_ewise_add(A):
 ###     assert w2.isequal(result)
 
 
-### def test_assign(A):
-###     B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
-###     result = Matrix.from_values(
-###         [0, 0, 2, 3, 0, 3, 5, 6, 0, 6, 1, 6, 4, 1],
-###         [0, 5, 0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6],
-###         [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4])
-###     C = A.dup()
-###     C()[[0, 2], [0, 5]] = B
-###     assert C.isequal(result)
-###     C = A.dup()
-###     C[:3:2, :6:5]() << B
-###     assert C.isequal(result)
+def test_assign(A):
+    B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
+    result = Matrix.from_values(
+        [0, 0, 2, 3, 0, 3, 5, 6, 0, 6, 1, 6, 4, 1],
+        [0, 5, 0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6],
+        [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4],
+    )
+    C = A.dup()
+    C()[[0, 2], [0, 5]] = B
+    assert C.isequal(result)
+    C = A.dup()
+    C[:3:2, :6:5]() << B
+    assert C.isequal(result)
 
 
-### def test_assign_wrong_dims(A):
-###     B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
-###     with pytest.raises(DimensionMismatch):
-###         A[[0, 2, 4], [0, 5]] = B
+def test_assign_wrong_dims(A):
+    B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
+    with pytest.raises(DimensionMismatch):
+        A[[0, 2, 4], [0, 5]] = B
 
 
-### def test_assign_row(A, v):
-###     result = Matrix.from_values(
-###         [3, 3, 5, 6, 6, 1, 6, 2, 4, 1, 0, 0, 0, 0],
-###         [0, 2, 2, 2, 3, 4, 4, 5, 5, 6, 1, 3, 4, 6],
-###         [3, 3, 1, 5, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0])
-###     C = A.dup()
-###     C[0, :] = v
-###     assert C.isequal(result)
+def test_assign_row(A, v):
+    result = Matrix.from_values(
+        [3, 3, 5, 6, 6, 1, 6, 2, 4, 1, 0, 0, 0, 0],
+        [0, 2, 2, 2, 3, 4, 4, 5, 5, 6, 1, 3, 4, 6],
+        [3, 3, 1, 5, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
+    )
+    C = A.dup()
+    C[0, :] = v
+    assert C.isequal(result)
 
 
-### def test_assign_column(A, v):
-###     result = Matrix.from_values(
-###         [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4, 6],
-###         [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1, 1],
-###         [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0])
-###     C = A.dup()
-###     C[:, 1] = v
-###     assert C.isequal(result)
+def test_assign_column(A, v):
+    result = Matrix.from_values(
+        [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4, 6],
+        [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1, 1],
+        [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
+    )
+    C = A.dup()
+    C[:, 1] = v
+    assert C.isequal(result)
 
 
-### def test_assign_scalar(A):
-###     # Test block
-###     result_block = Matrix.from_values(
-###         [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 3, 5, 1, 3, 5],
-###         [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4, 4, 4],
-###         [3, 2, 5, 3, 7, 3, 1, 7, 4, 0, 0, 0, 0, 0, 0])
-###     C = A.dup()
-###     C[[1, 3, 5], [2, 4]] = 0
-###     assert C.isequal(result_block)
-###     C = A.dup()
-###     C[1::2, 2:5:2] = 0
-###     assert C.isequal(result_block)
-###     # Test row
-###     result_row = Matrix.from_values(
-###         [3, 0, 6, 0, 6, 6, 2, 4, 1, 3, 5, 1, 1],
-###         [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4],
-###         [3, 2, 5, 3, 7, 3, 1, 7, 4, 3, 1, 0, 0])
-###     C = A.dup()
-###     C[1, [2, 4]] = 0
-###     assert C.isequal(result_row)
-###     C = A.dup()
-###     C[1, 2:5:2] = 0
-###     assert C.isequal(result_row)
-###     # Test column
-###     result_column = Matrix.from_values(
-###         [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 1, 3, 5],
-###         [0, 1, 2, 3, 3, 4, 5, 5, 6, 4, 2, 2, 2],
-###         [3, 2, 5, 3, 7, 3, 1, 7, 4, 8, 0, 0, 0])
-###     C = A.dup()
-###     C[[1, 3, 5], 2] = 0
-###     assert C.isequal(result_column)
-###     C = A.dup()
-###     C[1::2, 2] = 0
-###     assert C.isequal(result_column)
+def test_assign_scalar(A):
+    # Test block
+    result_block = Matrix.from_values(
+        [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 3, 5, 1, 3, 5],
+        [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4, 4, 4],
+        [3, 2, 5, 3, 7, 3, 1, 7, 4, 0, 0, 0, 0, 0, 0],
+    )
+    C = A.dup()
+    C[[1, 3, 5], [2, 4]] = 0
+    assert C.isequal(result_block)
+    C = A.dup()
+    C[1::2, 2:5:2] = 0
+    assert C.isequal(result_block)
+    # Test row
+    result_row = Matrix.from_values(
+        [3, 0, 6, 0, 6, 6, 2, 4, 1, 3, 5, 1, 1],
+        [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4],
+        [3, 2, 5, 3, 7, 3, 1, 7, 4, 3, 1, 0, 0],
+    )
+    C = A.dup()
+    C[1, [2, 4]] = 0
+    assert C.isequal(result_row)
+    C = A.dup()
+    C[1, 2:5:2] = 0
+    assert C.isequal(result_row)
+    # Test column
+    result_column = Matrix.from_values(
+        [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 1, 3, 5],
+        [0, 1, 2, 3, 3, 4, 5, 5, 6, 4, 2, 2, 2],
+        [3, 2, 5, 3, 7, 3, 1, 7, 4, 8, 0, 0, 0],
+    )
+    C = A.dup()
+    C[[1, 3, 5], 2] = 0
+    assert C.isequal(result_column)
+    C = A.dup()
+    C[1::2, 2] = 0
+    assert C.isequal(result_column)
 
 
 def test_apply(A):
@@ -512,10 +520,11 @@ def test_simple_assignment(A):
     assert C.isequal(A)
 
 
+@pytest.mark.xfail
 def test_assign_transpose(A):
     C = Matrix.new(A.dtype, A.ncols, A.nrows)
-    ### C << A.T
-    ### assert C.isequal(A.T.new())
+    C << A.T
+    assert C.isequal(A.T.new())
 
     with pytest.raises(TypeError):
         C.T << A
@@ -525,8 +534,8 @@ def test_assign_transpose(A):
         C[:, :].T << A
 
     C = Matrix.new(A.dtype, A.ncols + 1, A.nrows + 1)
-    ### C[:A.ncols, :A.nrows] << A.T
-    ### assert C[:A.ncols, :A.nrows].new().isequal(A.T.new())
+    C[: A.ncols, : A.nrows] << A.T
+    assert C[: A.ncols, : A.nrows].new().isequal(A.T.new())
 
 
 def test_isequal(A, v):
@@ -613,6 +622,7 @@ def test_isclose(A, v):
 ###     assert A.T.isclose(A.T)
 
 
+@pytest.mark.xfail
 def test_transpose_exceptional():
     A = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [True, True, False, True])
     B = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [1, 2, 3, 4])

@@ -1,7 +1,9 @@
 import dask.array as da
 import grblas as gb
 import numpy as np
+from grblas.operator import UNKNOWN_OPCLASS, find_opclass, get_typed_op
 
+from . import replace as replace_singleton
 from .mask import Mask
 from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
 
@@ -15,6 +17,7 @@ class InnerBaseType:
 
 class BaseType:
     _expect_type = _expect_type
+    _is_scalar = False
 
     def isequal(self, other, *, check_dtype=False):
         from .scalar import PythonScalar
@@ -84,14 +87,14 @@ class BaseType:
             dtype=np_dtype(self.dtype),
         )
 
-    def dup(self, dtype=None, *, mask=None):
+    def dup(self, dtype=None, *, mask=None, name=None):
         if mask is not None:
             if not isinstance(mask, Mask):
-                self._meta.dup(dtype=dtype, mask=mask)  # should raise
+                self._meta.dup(dtype=dtype, mask=mask, name=name)  # should raise
                 raise TypeError("Use dask_grblas mask, not a mask from grblas")
-            meta = self._meta.dup(dtype=dtype, mask=mask._meta)
+            meta = self._meta.dup(dtype=dtype, mask=mask._meta, name=name)
         else:
-            meta = self._meta.dup(dtype=dtype)
+            meta = self._meta.dup(dtype=dtype, name=name)
         delayed = da.core.elemwise(
             _dup,
             self._delayed,
@@ -102,28 +105,47 @@ class BaseType:
         )
         return type(self)(delayed)
 
-    def __lshift__(self, delayed):
-        self.update(delayed)
+    def __lshift__(self, expr):
+        self.update(expr)
 
-    def __call__(self, *optional_mask_and_accum, mask=None, accum=None, replace=False):
+    def __call__(
+        self, *optional_mask_accum_replace, mask=None, accum=None, replace=False, input_mask=None
+    ):
+        # Pick out mask and accum from positional arguments
+        mask_arg = None
         accum_arg = None
-        for arg in optional_mask_and_accum:
-            if isinstance(arg, Mask):
-                mask = arg
+        for arg in optional_mask_accum_replace:
+            if arg is replace_singleton:
+                replace = True
+            elif isinstance(arg, (BaseType, Mask)):
+                if self._is_scalar:
+                    raise TypeError("Mask not allowed for Scalars")
+                if mask_arg is not None:
+                    raise TypeError("Got multiple values for argument 'mask'")
+                mask_arg = arg
             else:
                 if accum_arg is not None:
                     raise TypeError("Got multiple values for argument 'accum'")
-                accum_arg, _ = gb.operator.find_opclass(arg)
+                accum_arg, opclass = find_opclass(arg)
+                if opclass == UNKNOWN_OPCLASS:
+                    raise TypeError(f"Invalid item found in output params: {type(arg)}")
+        # Merge positional and keyword arguments
+        if mask_arg is not None and mask is not None:
+            raise TypeError("Got multiple values for argument 'mask'")
+        if mask_arg is not None:
+            mask = mask_arg
         if accum_arg is not None:
             if accum is not None:
                 raise TypeError("Got multiple values for argument 'accum'")
             accum = accum_arg
         if accum is not None:
             # Normalize accumulator
-            accum = gb.operator.get_typed_op(accum, self.dtype, kind="binary")
+            accum = get_typed_op(accum, self.dtype, kind="binary")
             if accum.opclass == "Monoid":
                 accum = accum.binaryop
-        return Updater(self, mask=mask, accum=accum, replace=replace)
+        return Updater(self, mask=mask, accum=accum, replace=replace, input_mask=input_mask)
+
+    __array__ = gb.base.BaseType.__array__
 
     def _optional_dup(self):
         # TODO: maybe try to create an optimization pass that remove these if they are unnecessary
@@ -149,6 +171,14 @@ class BaseType:
                 int,
             )
         return PythonScalar(delayed)
+
+    @property
+    def name(self):
+        return self._meta.name
+
+    @name.setter
+    def name(self, value):
+        self._meta.name = value
 
     def update(self, expr):
         self._meta.update(expr._meta)
@@ -225,6 +255,10 @@ class BaseType:
             )
         else:
             raise NotImplementedError(f"{typ}")
+
+    def wait(self):
+        # TODO: What should this do?
+        self._meta.wait()
 
     def compute(self, *args, **kwargs):
         # kwargs['scheduler'] = 'synchronous'

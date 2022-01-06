@@ -132,10 +132,10 @@ def test_extract_element(v):
 def test_set_element(v):
     assert v[0].value.compute() is None
     assert v[1].value == 1
-    ### v[0] = 12
-    ### v[1] << 9
-    ### assert v[0].value == 12
-    ### assert v[1].new() == 9
+    v[0] = 12
+    v[1] << 9
+    assert v[0].value == 12
+    assert v[1].new() == 9
 
 
 def test_remove_element(v):
@@ -195,7 +195,7 @@ def test_vxm_mask(v, A):
     u(replace=True, mask=~~val_mask.V) << v.vxm(A, semiring.plus_times)
     assert u.isequal(result3)
     w = v.vxm(A, semiring.plus_times).new(mask=val_mask.V)
-    ### assert w.isequal(result3)
+    assert w.isequal(result3)
 
 
 def test_vxm_accum(v, A):
@@ -305,45 +305,45 @@ def test_assign(v):
     u = Vector.from_values([0, 2], [9, 8])
     result = Vector.from_values([0, 1, 3, 4, 6], [9, 1, 1, 8, 0])
     w = v.dup()
-    ### w[[0, 2, 4]] = u
-    ### assert w.isequal(result)
+    w[[0, 2, 4]] = u
+    assert w.isequal(result)
     w = v.dup()
-    ### w[:5:2] << u
-    ### assert w.isequal(result)
+    w[:5:2] << u
+    assert w.isequal(result)
 
 
 def test_assign_scalar(v):
     result = Vector.from_values([1, 3, 4, 5, 6], [9, 9, 2, 9, 0])
     w = v.dup()
-    ### w[[1, 3, 5]] = 9
-    ### assert w.isequal(result)
+    w[[1, 3, 5]] = 9
+    assert w.isequal(result)
     w = v.dup()
-    ### w[1::2] = 9
-    ### assert w.isequal(result)
+    w[1::2] = 9
+    assert w.isequal(result)
     w = Vector.from_values([0, 1, 2], [1, 1, 1])
     s = Scalar.from_value(9)
-    ### w[:] = s
-    ### assert w.isequal(Vector.from_values([0, 1, 2], [9, 9, 9]))
+    w[:] = s
+    assert w.isequal(Vector.from_values([0, 1, 2], [9, 9, 9]))
 
 
 def test_assign_scalar_mask(v):
     mask = Vector.from_values([1, 2, 5, 6], [0, 0, 1, 0])
     result = Vector.from_values([1, 3, 4, 5, 6], [1, 1, 2, 5, 0])
     w = v.dup()
-    ### w[:](mask.V) << 5
-    ### assert w.isequal(result)
+    w[:](mask.V) << 5
+    assert w.isequal(result)
     result2 = Vector.from_values([0, 1, 2, 3, 4, 6], [5, 5, 5, 5, 5, 5])
     w = v.dup()
-    ### w[:](~mask.V) << 5
-    ### assert w.isequal(result2)
+    w[:](~mask.V) << 5
+    assert w.isequal(result2)
     result3 = Vector.from_values([1, 2, 3, 4, 5, 6], [5, 5, 1, 2, 5, 5])
     w = v.dup()
-    ### w[:](mask.S) << 5
-    ### assert w.isequal(result3)
+    w[:](mask.S) << 5
+    assert w.isequal(result3)
     result4 = Vector.from_values([0, 1, 3, 4, 6], [5, 1, 5, 5, 0])
     w = v.dup()
-    ### w[:](~mask.S) << 5
-    ### assert w.isequal(result4)
+    w[:](~mask.S) << 5
+    assert w.isequal(result4)
 
 
 def test_apply(v):

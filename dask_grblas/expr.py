@@ -1,8 +1,10 @@
 from functools import partial, reduce
+from numbers import Number
 
 import dask.array as da
 import grblas as gb
 import numpy as np
+from grblas.exceptions import DimensionMismatch
 
 from .base import BaseType, InnerBaseType
 from .mask import Mask
@@ -179,8 +181,7 @@ class GbDelayed:
 
     def new(self, *, dtype=None, mask=None):
         if mask is not None:
-            assert isinstance(mask, Mask)
-            meta = self._meta.new(dtype=dtype, mask=mask._meta)
+            meta = self._meta.new(dtype=dtype, mask=get_meta(mask))
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
         else:
@@ -330,7 +331,7 @@ class GbDelayed:
 
 
 class Updater:
-    def __init__(self, parent, *, mask=None, accum=None, replace=False):
+    def __init__(self, parent, *, mask=None, accum=None, replace=False, input_mask=None):
         self.parent = parent
         self.mask = mask
         self.accum = accum
@@ -338,36 +339,94 @@ class Updater:
             self.replace = None
         else:
             self.replace = replace
-        self._meta = parent._meta(mask=get_meta(mask), accum=accum, replace=replace)
+        self._meta = parent._meta(
+            mask=get_meta(mask), accum=accum, replace=replace, input_mask=get_meta(input_mask)
+        )
 
     def __getitem__(self, keys):
-        self._meta[keys]
-        return AmbiguousAssignOrExtract(self, keys)
+        return Assigner(self, keys)
 
     def __setitem__(self, keys, obj):
-        raise NotImplementedError()
-        self._meta[keys] = obj
-        self.parent._meta.clear()  # XXX: test to see if this is necessary
+        Assigner(self, keys).update(obj)
 
-    def __lshift__(self, delayed):
-        # Occurs when user calls C(params) << delayed
-        self.update(delayed)
+    def __lshift__(self, expr):
+        # Occurs when user calls C(params) << expr
+        self.update(expr)
 
-    def update(self, delayed):
-        # Occurs when user calls C(params).update(delayed)
-        # self.parent._update(delayed, **self.kwargs)
+    def update(self, expr):
+        # Occurs when user calls C(params).update(expr)
+        # self.parent._update(expr, **self.kwargs)
         if self.mask is None and self.accum is None:
-            return self.parent.update(delayed)
+            return self.parent.update(expr)
         self.parent._meta._update(
-            get_meta(delayed),
+            get_meta(expr),
             mask=get_meta(self.mask),
             accum=self.accum,
             replace=self.replace,
         )
         if self.parent._meta._is_scalar:
-            self.parent._update(delayed, accum=self.accum)
+            self.parent._update(expr, accum=self.accum)
         else:
-            self.parent._update(delayed, accum=self.accum, mask=self.mask, replace=self.replace)
+            self.parent._update(expr, accum=self.accum, mask=self.mask, replace=self.replace)
+
+
+def _ceildiv(a, b):
+    return -(a // -b)
+
+
+def fuse_slice_pair(slice0, slice1, length):
+    """computes slice `s` such that array[s] = array[s0][s1] where array has length `length`"""
+    a0, o0, e0 = slice0.indices(length)
+    a1, o1, e1 = slice1.indices(_ceildiv(abs(o0 - a0), abs(e0)))
+    o01 = a0 + o1 * e0
+    return slice(a0 + a1 * e0, None if o01 < 0 else o01, e0 * e1)
+
+
+def fuse_index_pair(i, j, length=None):
+    """computes indices `s` such that array[s] = array[i][j] where array has length `length`"""
+    if type(i) in {list, np.ndarray}:
+        return i[j]
+    if length is None:
+        raise ValueError("Length argument is missing")
+    if type(i) is slice and isinstance(j, Number):
+        a0, _, e0 = i.indices(length)
+        return a0 + j * e0
+    if type(i) is slice and type(j) in {list, np.ndarray}:
+        a0, _, e0 = i.indices(length)
+
+        def f(x):
+            return a0 + x * e0
+
+        return [f(x) for x in j] if type(j) is list else list(f(j))
+    elif type(i) is slice and type(j) is slice:
+        return fuse_slice_pair(i, j, length=length)
+    else:
+        raise NotImplementedError()
+
+
+def _fuse_indices(indices, shape):
+    """
+    fuses indices = [a1, a2, ..., aN], where each index ai is a tuple of
+    maximum length ndim=len(shape).  The index returned is `a` such that
+    array[a] = array[aN]...[a2][a1] where array has shape `shape`
+    """
+    ndim = len(shape)
+    if len(indices) == 0:
+        return (slice(None),) * ndim if ndim > 1 else slice(None)
+    out = ()
+    offset = np.zeros(len(indices), dtype=int)
+    for axis in range(ndim):
+        fused_indices = slice(None)
+        for level, index in enumerate(indices[::-1]):
+            if type(index) is tuple:
+                if axis == 0 and isinstance(fused_indices, Number):
+                    offset[level] = 1
+                elif not isinstance(fused_indices, Number):
+                    o = offset[level] if axis == 1 else 0
+                    ind = index[axis - o]
+                    fused_indices = fuse_index_pair(fused_indices, ind, shape[axis])
+        out += (fused_indices,)
+    return out if ndim > 1 else out[0]
 
 
 def _extractor_new(x, dtype, mask, mask_type):
@@ -383,26 +442,108 @@ def _extractor_new(x, dtype, mask, mask_type):
         # Is there some way we can avoid this dup here?
         # This likely comes from a slice such as v[:] or v[:10]
         # Ideally, we would use `_optional_dup` in the DAG
-        value = inner.value.dup(dtype=dtype, mask=mask)
-    elif len(indices) == 1:
-        index = indices[0]
-        if type(index) is tuple and len(index) == 1:
-            index = index[0]
-        value = inner.value[index].new(dtype=dtype, mask=mask)
+        chunk = inner.value.dup(dtype=dtype, mask=mask)
+    elif len(indices) > 0:
+        chunk = inner.value
+        fused_indices = _fuse_indices(indices, chunk.shape)
+        chunk = chunk[fused_indices].new(dtype=dtype, mask=mask)
     else:
         raise NotImplementedError(f"indices: {indices}")
-    return wrap_inner(value)
+    return wrap_inner(chunk)
+
+
+def _slice_len(s, len_):
+    start, stop, step = s.indices(len_)
+    return _ceildiv(abs(stop - start), abs(step))
+
+
+def _index_len(indx, len_):
+    return len(indx) if type(indx) in {list, np.ndarray} else _slice_len(indx, len_)
+
+
+def _assigner_update(x, dtype, mask_type, accum, obj, subassign, *args):
+    # `inner` is of Extractor type
+    indices = []
+    inner = x
+    while inner.level > 0:
+        indices.append(inner.index)
+        inner = inner.inner
+    # Extractor level 0 has the full InnerVector chunk and mask (if given):
+    mask = inner.mask
+    inner = inner.inner
+    chunk = inner.value
+    fused_indices = _fuse_indices(indices, chunk.shape)
+    if isinstance(fused_indices, Number):
+        index_is_number = [True]
+    elif not isinstance(fused_indices, tuple):
+        index_is_number = [False]
+    else:
+        index_is_number = [isinstance(i, Number) for i in fused_indices]
+
+    if isinstance(obj, InnerBaseType):
+        obj_value = obj.value
+    else:
+        obj_value = obj
+
+    if subassign:
+        mask, replace = args
+        if mask is not None:
+            mask = mask_type(mask.value)
+
+        chunk[fused_indices](mask=mask, accum=accum, replace=replace) << obj_value
+    else:
+        if mask is not None:
+            mask = mask_type(mask.value)
+
+        if np.all(index_is_number):
+            chunk[fused_indices] << obj_value
+        else:
+            chunk(mask=mask, accum=accum)[fused_indices] << obj_value
+
+    if np.all(index_is_number):
+        return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
+    elif np.any(index_is_number):
+        (sz,) = (
+            _index_len(i, chunk.shape[axis])
+            for axis, i in enumerate(fused_indices)
+            if not isinstance(i, Number)
+        )
+        return wrap_inner(gb.Vector.new(dtype, size=sz))
+    elif type(chunk) == gb.Vector:
+        sz = _index_len(fused_indices, chunk.shape[0])
+        return wrap_inner(gb.Vector.new(dtype, size=sz))
+    else:
+        nrows = _index_len(fused_indices[0], chunk.shape[0])
+        ncols = _index_len(fused_indices[1], chunk.shape[1])
+        return wrap_inner(gb.Matrix.new(dtype, nrows=nrows, ncols=ncols))
 
 
 class Extractor:
-    def __init__(self, inner, index=None):
+    """
+    This stores the extraction history of an InnerVector.
+    """
+
+    def __init__(self, inner, mask=None, mask_type=None, replace=False, index=None):
         self.inner = inner
+        self.mask = mask
         self.index = index
         self.dtype = inner.dtype
         self.ndim = inner.ndim
+        if type(inner) is Extractor:
+            self.level = inner.level + 1
+        else:
+            self.level = 0
+        if replace and (type(mask) is not np.ndarray):
+            # This branch is necessary when replace is True:
+            # Here, we remove all chunk elements that lie in
+            # the complement of the mask
+            chunk = inner.value
+            chunk_copy = chunk.dup()
+            mask = mask_type(mask.value)
+            chunk(mask=mask, replace=True) << chunk_copy
 
     def __getitem__(self, index):
-        return Extractor(self, index)
+        return Extractor(self, index=index)
 
 
 class AmbiguousAssignOrExtract:
@@ -411,11 +552,10 @@ class AmbiguousAssignOrExtract:
         self.index = index
         self._meta = parent._meta[index]
 
-    def new(self, *, dtype=None, mask=None):
+    def new(self, dtype=None, *, mask=None, input_mask=None, name=None):
         if mask is not None:
-            assert isinstance(mask, Mask)
             assert self.parent._meta.nvals == 0
-            meta = self._meta.new(dtype=dtype, mask=mask._meta)
+            meta = self._meta.new(dtype=dtype, mask=get_meta(mask))
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
         else:
@@ -424,16 +564,21 @@ class AmbiguousAssignOrExtract:
             grblas_mask_type = None
 
         # indices = gb.base.IndexerResolver(self.parent._meta, self.index, raw=False).indices
-        if len(self.parent.shape) == 1 and type(self.index) is not tuple:
+        ndim = len(self.parent.shape)
+        if ndim == 1 and type(self.index) is not tuple:
             indices = (self.index,)
         else:
             indices = self.index
-        if len(indices) == 1 or len(indices) == 2:
+        if ndim in [1, 2]:
             delayed = self.parent._delayed.map_blocks(
                 Extractor,
                 dtype=np_dtype(meta.dtype),
             )
-            delayed = delayed[indices]
+            index_is_a_list = [type(i) in {list, np.ndarray} for i in indices]
+            if ndim == 2 and np.all(index_is_a_list):
+                delayed = delayed[indices[0], :][:, indices[1]]
+            else:
+                delayed = delayed[indices]
             delayed = da.core.elemwise(
                 _extractor_new,
                 delayed,
@@ -446,19 +591,212 @@ class AmbiguousAssignOrExtract:
         raise NotImplementedError()
 
     def __call__(self, *args, **kwargs):
-        updater = self.parent(*args, **kwargs)
-        return updater[self.index]
+        return Assigner(self.parent(*args, **kwargs), self.index, subassign=True)
 
     def update(self, obj):
-        self.parent[self.index] = obj
+        Assigner(Updater(self.parent), self.index).update(obj)
 
-    def __lshift__(self, obj):
-        self.update(obj)
+    def __lshift__(self, rhs):
+        self.update(rhs)
 
     @property
     def value(self):
         self._meta.value
         return self.new().value
+
+
+def _get_Extractor_meta(w):
+    while type(w) is list:
+        w = w[0]
+    while type(w) is Extractor:
+        w = w.inner
+    return w.value
+
+
+def _clear_mask(a, computing_meta=None, axis=None, keepdims=None):
+    if computing_meta:
+        return np.array()
+
+    meta = _get_Extractor_meta(a)
+    dtype = np_dtype(meta.dtype)
+    if len(meta.shape) == 1:
+        o = type(meta).new(dtype=dtype, size=1)
+    else:
+        o = type(meta).new(dtype=dtype, nrows=1, ncols=1)
+
+    if keepdims:
+        return wrap_inner(o)
+    else:
+        return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
+
+
+def _clear_mask_final_step(a, axis=None, keepdims=None):
+    meta = _get_Extractor_meta(a)
+    dtype = np_dtype(meta.dtype)
+    if len(meta.shape) == 1:
+        o = type(meta).new(dtype=dtype, size=1)
+    else:
+        o = type(meta).new(dtype=dtype, nrows=1, ncols=1)
+
+    if keepdims:
+        return wrap_inner(o)
+    else:
+        return wrap_inner(gb.Scalar.from_value(0, dtype=dtype))
+
+
+def _squeeze(tupl):
+    if len(tupl) == 1:
+        return tupl[0]
+    return tupl
+
+
+def _uniquify(ndim, index, obj, mask=None):
+    # here we follow the SuiteSparse:GraphBLAS specification for
+    # duplicate index entries: ignore all but the last unique entry
+    def extract(obj, indices, axis):
+        indices = fuse_index_pair(slice(None, None, -1), indices, obj.shape[axis])
+        n = len(obj.shape)
+        obj_index = [slice(None)] * n
+        axis = 0 if n < ndim else axis
+        obj_index[axis] = indices
+        indices = _squeeze(tuple(obj_index))
+        return obj[indices].new()
+
+    index = index if type(index) is tuple else (index,)
+    unique_indices_tuple = ()
+    for axis in range(ndim):
+        indx = index[axis]
+        if type(indx) is not slice and not isinstance(indx, Number):
+            reverse_indx = np.array(indx)[::-1]
+            unique_indx, obj_indx = np.unique(reverse_indx, return_index=True)
+            if unique_indx.size < reverse_indx.size:
+                indx = list(unique_indx)
+                if isinstance(obj, BaseType):
+                    obj = extract(obj, obj_indx, axis)
+                if mask:
+                    mask = extract(mask, obj_indx, axis)
+        unique_indices_tuple += (indx,)
+    return unique_indices_tuple, obj, mask
+
+
+class Assigner:
+    def __init__(self, updater, index, subassign=False):
+        self.updater = updater
+        self.parent = updater.parent
+        self.index = index
+        self._meta = updater.parent._meta[index]
+        self.subassign = subassign
+
+    def update(self, obj):
+        parent = self.parent
+        mask = self.updater.mask
+        replace = self.updater.replace
+        subassign = self.subassign
+        if mask is not None:
+            assert isinstance(mask, Mask)
+            assert parent._meta.nvals == 0
+            meta = self._meta.new(mask=mask._meta)
+            delayed_mask = mask.mask._delayed
+            grblas_mask_type = get_grblas_type(mask)
+        else:
+            meta = self._meta.new()
+            delayed_mask = None
+            grblas_mask_type = None
+
+        dtype = np_dtype(meta.dtype)
+        ndim = len(parent.shape)
+        # first, deal with duplicate indices, if any:
+        if subassign and mask:
+            indices, obj, mask.mask = _uniquify(ndim, self.index, obj, mask=mask.mask)
+            delayed_mask = mask.mask._delayed
+        else:
+            indices, obj, _ = _uniquify(ndim, self.index, obj)
+        if ndim in [1, 2]:
+            delayed_dup = parent._optional_dup()
+            parent._delayed = delayed_dup
+            if (not subassign) and mask:
+                # align `delayed_mask` and `delayed_dup`
+                delayed_dup = da.core.elemwise(
+                    lambda x, y: x,
+                    delayed_dup,
+                    delayed_mask,
+                    dtype=dtype,
+                )
+                parent._delayed = delayed_dup
+                # Extractor level 0:
+                # when replace=True, Extractor clears `delayed_dup` chunks using corresponding
+                # mask chunk
+                delayed = da.core.elemwise(
+                    Extractor,
+                    delayed_dup,
+                    delayed_mask,
+                    grblas_mask_type,
+                    replace,
+                    dtype=dtype,
+                )
+                if replace:
+                    # when replace = True, we use this branch to touch all chunks ensuring ALL
+                    # `delayed_dup` chunks are cleared.  Actually, replaced = 0 by intention.
+                    replaced = da.reduction(
+                        delayed,
+                        _clear_mask,
+                        _clear_mask_final_step,
+                        dtype=dtype,
+                        concatenate=False,
+                    )
+                    # bind `replaced` to `parent` to trigger the above action when
+                    # parent.compute() is called
+                    dgb_Scalar = get_return_type(gb.Scalar.new(dtype))
+                    clear_mask = dgb_Scalar(replaced)
+                    parent << parent.apply(gb.binary.plus, right=clear_mask)
+            else:
+                # Extractor level 0:
+                delayed = da.core.elemwise(Extractor, delayed_dup, dtype=dtype)
+
+            index_is_a_list = [type(i) in {list, np.ndarray} for i in indices]
+            if ndim == 2 and np.all(index_is_a_list):
+                delayed = delayed[indices[0], :][:, indices[1]]
+            else:
+                delayed = delayed[indices]
+            # the size/shape of `delayed` is now in general different from `delayed_dup` by virtue
+            # of `indices`.  The following `elemwise` updates the indexed elements of `parent` but
+            # returns a dask.array of zeros since it is difficult/impossible to return the
+            # updated `parent` directly:
+            args = []
+            if subassign:
+                args = [delayed_mask, replace]
+            try:
+                delayed = da.core.elemwise(
+                    _assigner_update,
+                    delayed,
+                    dtype,
+                    grblas_mask_type,
+                    self.updater.accum,
+                    obj._delayed if isinstance(obj, BaseType) else obj,
+                    subassign,
+                    *args,
+                    dtype=dtype,
+                )
+            except ValueError:
+                raise DimensionMismatch
+            # The following last few lines are only meant to trigger the above update whenever
+            # parent.compute() is called
+            index_is_a_number = [isinstance(i, Number) for i in indices]
+            if np.all(index_is_a_number):
+                dgb_Scalar = get_return_type(gb.Scalar.new(dtype))
+                update_parent = dgb_Scalar(delayed)
+            elif np.any(index_is_a_number) or ndim == 1:
+                dgb_Vector = get_return_type(gb.Vector.new(dtype))
+                update_parent = dgb_Vector(delayed).reduce().new()
+            else:
+                dgb_Matrix = get_return_type(meta)
+                update_parent = dgb_Matrix(delayed).reduce_scalar().new()
+            parent << parent.apply(gb.binary.plus, right=update_parent)
+            return
+        raise NotImplementedError()
+
+    def __lshift__(self, obj):
+        self.update(obj)
 
 
 class FakeInnerTensor(InnerBaseType):
