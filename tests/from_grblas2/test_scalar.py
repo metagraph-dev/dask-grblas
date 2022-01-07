@@ -314,3 +314,11 @@ def test_expr_is_like_scalar(s):
         "_expect_op",
         "_expect_type",
     }
+
+
+@pytest.mark.xfail("'Needs investigated'")
+def test_ndim(s):
+    assert s.ndim == 0
+    v = Vector.from_values([1], [2])
+    assert v.inner(v).ndim == 0
+    assert (v @ v).ndim == 0
