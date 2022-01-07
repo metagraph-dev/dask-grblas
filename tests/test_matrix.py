@@ -1034,15 +1034,18 @@ def test_matmul_mxm(As, vms_Matrix, sms_Matrix):
 
 @pytest.mark.veryslow
 def test_extract(As, vms_Matrix, sms_Matrix):
+    import time
+
     A, dAs = As
     B, dBs = As
     vm, dvms = vms_Matrix
     sm, dsms = sms_Matrix
 
-    index1_da = da.from_array([6, 0, 3, 1, 4, 2, 5], chunks=2)
-    index2_da = da.from_array([0, 5, 5, 1, 2, 6, 0], chunks=2)
-    index3_da = da.from_array([0] * 7, chunks=2)
+    index1_da = da.from_array([6, 0, 3, 1, 4, 2, 5], chunks=2, name='unique indices')
+    index2_da = da.from_array([0, 5, 5, 1, 2, 6, 0], chunks=2, name='non unique indices')
+    index3_da = da.from_array([0] * 7, chunks=2, name='repeated index 0')
 
+    n = 0
     row_indexes = [
         index1_da,
         index2_da,
@@ -1054,9 +1057,10 @@ def test_extract(As, vms_Matrix, sms_Matrix):
         [0] * 7,
     ]
     col_indexes = row_indexes
-
     for row_index in row_indexes:
         for col_index in col_indexes:
+            n += 1
+            print(f'{n=}; {time.strftime("%H:%M:%S", time.localtime())}: {(row_index, col_index)}')
 
             def f1(x, y):
                 x << y[adapt(row_index, x), adapt(col_index, x)]
@@ -1111,11 +1115,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                 return x
 
             for a, dA in enumerate(dAs):
-                print(f'A = {a}', flush=True)
                 compare(lambda x: x[adapt(row_index, x), adapt(col_index, x)].new(), A, dA)
                 compare(lambda x: x[adapt(row_index, x), adapt(col_index, x)].new(dtype=float), A, dA)
                 for b, dB in enumerate(dBs):
-                    print(f'B = {b}', flush=True)
                     compare(f1, (A.dup(), B), (dA.dup(), dB))
                     compare(f1, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB))
                     compare(f2, (A.dup(), B), (dA.dup(), dB))
@@ -1372,6 +1374,8 @@ def test_extract(As, vms_Matrix, sms_Matrix):
 
 @pytest.mark.veryslow
 def test_subassign(As, vms_Matrix, sms_Matrix):
+    import time
+
     test_replace_true = True
     A, dAs = As
     gB, dBs = As
@@ -1382,6 +1386,7 @@ def test_subassign(As, vms_Matrix, sms_Matrix):
     gBs = (gB,) * len(dBs) + scalars
     dBs = dBs + scalars
 
+    n = 0
     index1_da = da.from_array([6, 0, 3, 1, 4, 2, 5], chunks=2)
     index2_da = da.from_array([0, 5, 5, 1, 2, 6, 0], chunks=2)
     index3_da = da.from_array([0] * 7, chunks=2)
@@ -1400,6 +1405,8 @@ def test_subassign(As, vms_Matrix, sms_Matrix):
 
     for row_index in row_indexes:
         for col_index in col_indexes:
+            n += 1
+            print(f'{n=}; {time.strftime("%H:%M:%S", time.localtime())}: {(row_index, col_index)}')
 
             def f2(x, y):
                 x[adapt(row_index, x), adapt(col_index, x)]() << y
@@ -1593,6 +1600,8 @@ def test_subassign(As, vms_Matrix, sms_Matrix):
 
 @pytest.mark.veryslow
 def test_assign(As, vms_Matrix, sms_Matrix):
+    import time
+
     test_replace_true = True
     A, dAs = As
     gB, dBs = As
@@ -1603,6 +1612,7 @@ def test_assign(As, vms_Matrix, sms_Matrix):
     gBs = (gB,) * len(dBs) + scalars
     dBs = dBs + scalars
 
+    n = 0
     index1_da = da.from_array([6, 0, 3, 1, 4, 2, 5], chunks=2)
     index2_da = da.from_array([0, 5, 5, 1, 2, 6, 0], chunks=2)
     index3_da = da.from_array([0] * 7, chunks=2)
@@ -1621,6 +1631,8 @@ def test_assign(As, vms_Matrix, sms_Matrix):
 
     for row_index in row_indexes:
         for col_index in col_indexes:
+            n += 1
+            print(f'{n=}; {time.strftime("%H:%M:%S", time.localtime())}: {(row_index, col_index)}')
 
             def f1(x, y):
                 x[adapt(row_index, x), adapt(col_index, x)] << y

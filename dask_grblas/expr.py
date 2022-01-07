@@ -1001,7 +1001,8 @@ class Assigner:
             )
 
             # gather all information for the assignment to each chunk of the old data.
-            # (Alas, a for-loop is necessary as dask reduction on multiple axes looks buggy.)
+            # (Alas, a for-loop is necessary as dask reduction with multiple axes at 
+            # the same time works in undesirable ways.)
             identity_func = lambda x, axis, keepdims: x
             red_axes = tuple(k for k, m in enumerate(fragments_ind) if m not in x_ind)
             uniquifed = fragments
@@ -1260,54 +1261,75 @@ def sum_by_monoid(
 
 @da.core.concatenate_lookup.register(Fragmenter)
 def _concat_fragmenter(seq, axis=0):
-    def concatenate_slices(s1, s2):
-        if type(s1) is not type(s2) or s1.stop != s2.start or s1.step != s2.step:
-            raise NotImplementedError()
-        return slice(s1.start, s2.stop, s1.step)
+    """
+    Concatenates Fragmenter objects in the sequence `seq` along the axis `axis`.
+    Fragmenter objects must have the same value for attribute `.ndim` which is the
+    number of dimensions of the array-like object being indexed by the index-tuple
+    stored in the `.index` attribute of the Fragmenter.  Hence, the attribute
+    `.index` should be a tuple `t` of length `.ndim`, each of whose elements can
+    be a Number, array, or slice representing an index.  `t[i]` is the index along
+    axis `i`.  However, `axis - .ndim` represents the
+    axis along the array-like object obtained AFTER applying the index `.index`
+    on an array with number of dimensions `.ndim`.
+    Fragmenter attributes of value `None` are ignored.
+    Fragmenter attributes (`.obj` and `.mask`) of type `Vector` or `Matrix`
+    should be able to be concatenated along the given axis according to the usual
+    rules otherwise an error will be raised.
+    If the attribute `.obj` of any Fragmenter in `seq` is of scalar value then it
+    should be the same over all Fragmenter objects, and the final result will
+    also have the same value for this attribute.
+    """
+    def concatenate_fragments(frag1, frag2, axis=0, base_axis=0):
+        out = Fragmenter(frag1.ndim)
+        out_index = list(frag1.index)
+        if type(frag1.index[base_axis]) is slice:
+            s1, s2 = frag1.index[base_axis], frag2.index[base_axis]
+            if type(s1) is not type(s2):
+                raise TypeError(f'Can only concatenate contiguous slices of the same step.  '
+                                f'Got a slice and something else: {type(s1)} and {type(s2)}.')
+            if s1.step != s2.step:
+                raise ValueError(f'Can only concatenate contiguous slices of the same step.  '
+                                 f'Got unequal steps: {s1.step} and {s2.step}.')
+    
+            s1_last = range(s1.start, s1.stop, s1.step)[-1]
+            s1_next = s1_last + s1.step
+            if s1_next != s2.start:
+                raise ValueError(f'Can only concatenate contiguous slices of the same step.  '
+                                 f'Got non-contiguous slices: first slice (with step {s1.step})'
+                                 f' stops at {s1_last} while the second starts from {s2.start}.')
+            out_index[base_axis] = slice(s1.start, s2.stop, s1.step)
+        else:
+            out_index[base_axis] = np.concatenate([frag1.index[base_axis], frag2.index[base_axis]])
+        out.index = tuple(out_index)
 
-    index_seq = [fragment.index for fragment in seq if fragment.index is not None]
-    mask_seq = [fragment.mask for fragment in seq if fragment.mask is not None]
-    obj_seq = [fragment.obj for fragment in seq if fragment.obj is not None]
+        obj = frag1.obj
+        if isinstance(obj, gb.base.BaseType) and type(obj) in {gb.Vector, gb.Matrix}:
+            concat = da.core.concatenate_lookup.dispatch(type(wrap_inner(obj)))
+            obj = concat([wrap_inner(frag1.obj), wrap_inner(frag2.obj)], axis=axis).value
+        out.obj = obj
 
-    new_index = None
+        mask = frag1.mask
+        if mask is not None:
+            concat = da.core.concatenate_lookup.dispatch(type(wrap_inner(mask)))
+            mask = concat([wrap_inner(frag1.mask), wrap_inner(frag2.mask)], axis=axis).value
+        out.mask = mask
+
+        return out
+
+    # seq is assumed to be a non-empty list
     ndim = seq[0].ndim
-    if index_seq:
-        non_singleton_axes = [axis for axis, index in enumerate(index_seq[0]) if not isinstance(index, Number)]
-        axis = non_singleton_axes[axis - ndim]
+    axis -= ndim
+    seq_ = [fragment for fragment in seq if fragment.index]
+    if seq_:
         if axis not in set(range(ndim)):
-            raise ValueError(f"Can only concatenate for axis 0 or 1.  Got {axis}")
+            raise ValueError(f"Can only concatenate for axis with values in {set(range(ndim))}.  "
+                             f"Got {axis}.")
 
-        if type(index_seq[0][axis]) is slice:
-            cat_index = reduce(concatenate_slices, [item[axis] for item in index_seq])
-        else:
-            cat_index = np.concatenate([item[axis] for item in index_seq])
-
-        new_index = list(index_seq[0])
-        new_index[axis] = cat_index
-        new_index = tuple(new_index)
-
-    new_mask = None
-    if obj_seq:
-        obj_is_scalar = not (isinstance(obj_seq[0], gb.base.BaseType) and type(obj_seq[0]) in {gb.Vector, gb.Matrix})
-        new_obj = obj_seq[0] if obj_is_scalar else None
+        non_singleton_axes = [
+            axis for axis, index in enumerate(seq_[0].index) if not isinstance(index, Number)
+        ]
+        base_axis = non_singleton_axes[axis]
+        return reduce(partial(concatenate_fragments, axis=axis, base_axis=base_axis), seq_)
     else:
-        new_obj = None
+        return seq[0]
 
-    if axis == 0:
-        if ndim == 1:
-            concat = da.core.concatenate_lookup.dispatch(type(wrap_inner(gb.Vector.new(int))))
-            if mask_seq:
-                new_mask = concat([wrap_inner(item) for item in mask_seq]).value
-            if obj_seq and not obj_is_scalar:
-                new_obj = concat([wrap_inner(item) for item in obj_seq]).value
-        else:
-            if mask_seq:
-                new_mask = gb.ss.concat([[item] for item in mask_seq])
-            if obj_seq and not obj_is_scalar:
-                new_obj = gb.ss.concat([[item] for item in obj_seq])
-    else:
-        if mask_seq:
-            new_mask = gb.ss.concat([mask_seq])
-        if obj_seq and not obj_is_scalar:
-            new_obj = gb.ss.concat([obj_seq])
-    return Fragmenter(ndim, new_index, new_mask, new_obj)
