@@ -26,7 +26,7 @@ class InnerMatrix(InnerBaseType):
 
 
 class Matrix(BaseType):
-
+    ndim = 2
     _is_transposed = False
 
     @classmethod
@@ -205,7 +205,7 @@ class Matrix(BaseType):
 
 
 class TransposedMatrix:
-
+    ndim = 2
     _is_transposed = True
 
     def __init__(self, matrix):

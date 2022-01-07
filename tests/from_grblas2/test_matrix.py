@@ -9,9 +9,10 @@ import pytest
 from grblas import agg, binary, dtypes, monoid, semiring, unary
 from grblas.exceptions import (
     DimensionMismatch,
-    DomainMismatch,
+    EmptyObject,
     IndexOutOfBound,
     InvalidValue,
+    NotImplementedException,
     OutputNotEmpty,
 )
 from numpy.testing import assert_array_equal
@@ -219,7 +220,7 @@ def test_build_scalar(A):
     A.clear()
     with pytest.raises(ValueError, match="lengths must match"):
         A.ss.build_scalar([0, 6], [0, 1, 2], 1)
-    with pytest.raises(InvalidValue):
+    with pytest.raises(EmptyObject):
         A.ss.build_scalar([0, 5], [0, 1], None)
 
 
@@ -1355,7 +1356,7 @@ def test_reduce_agg_empty():
 def test_reduce_row_udf(A):
     result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
     binop = grblas.operator.BinaryOp.register_anonymous(lambda x, y: x + y)
-    with pytest.raises(DomainMismatch):
+    with pytest.raises(NotImplementedException):
         # Although allowed by the spec, SuiteSparse doesn't like user-defined binarops here
         A.reduce_rowwise(binop).new()
     # If the user creates a monoid from the binop, then we can use the monoid instead
@@ -2942,3 +2943,11 @@ def test_deprecated(A):
         A.ss.scan_rows()
     with pytest.warns(DeprecationWarning):
         A.ss.scan_columns()
+
+
+@pytest.mark.xfail("'Expressions need .ndim'")
+def test_ndim(A):
+    assert A.ndim == 2
+    assert A.ewise_mult(A).ndim == 2
+    assert (A & A).ndim == 2
+    assert (A @ A).ndim == 2

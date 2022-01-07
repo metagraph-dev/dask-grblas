@@ -59,6 +59,7 @@ XFAIL_TESTS = {
         "test_firstk": "Needs investigated",
         "test_lastk": "Needs investigated",
         "test_deprecated": "Needs investigated",
+        "test_ndim": "Expressions need .ndim",
     },
     "test_op.py": {
         "test_semiring_parameterized": "Needs investigated",
@@ -105,6 +106,7 @@ XFAIL_TESTS = {
         "test_smallestk": "Needs investigated",
         "test_concat": "Needs investigated",
         "test_split": "Needs investigated",
+        "test_ndim": "Expressions need .ndim",
     },
     "test_numpyops.py": {},
 }

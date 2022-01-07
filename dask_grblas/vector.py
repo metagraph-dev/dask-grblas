@@ -64,6 +64,8 @@ class InnerVector(InnerBaseType):
 
 
 class Vector(BaseType):
+    ndim = 1
+
     @classmethod
     def from_delayed(cls, vector, dtype, size, *, name=None):
         if not isinstance(vector, Delayed):
