@@ -120,8 +120,9 @@ def test_build(v):
 
 def test_extract_values(v):
     idx, vals = v.to_values()
-    assert idx.tolist() == [1, 3, 4, 6]
-    assert vals.tolist() == [1, 1, 2, 0]
+    assert idx.compute().tolist() == [1, 3, 4, 6]
+    assert vals.compute().tolist() == [1, 1, 2, 0]
+    assert idx[1].compute() == 3
 
 
 def test_extract_element(v):

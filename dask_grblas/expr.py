@@ -7,7 +7,7 @@ import numpy as np
 
 from .base import BaseType, InnerBaseType
 from .mask import Mask
-from .utils import get_grblas_type, get_meta, get_return_type, np_dtype, wrap_inner
+from .utils import get_grblas_type, get_meta, get_return_type, np_dtype, wrap_inner, build_axis_offsets_dask_array
 from grblas.exceptions import DimensionMismatch
 from dask.base import tokenize
 
@@ -478,10 +478,12 @@ def _data_x_index_meshpoint_4assign(*args, subassign, obj_offset_axes, axis_map)
     if mask is not None:
         mask_ = mask.value
         y = mask_
+
     obj_ = obj
     if isinstance(obj, InnerBaseType):
         obj_ = obj.value
-        y = obj_
+        if obj.ndim > 0:
+            y = obj_
 
     obj_is_scalar = not (isinstance(obj, InnerBaseType) and obj.ndim > 0)
     index_tuple = ()
@@ -557,7 +559,7 @@ def _uniquify_merged(x, axis=None, keepdims=None, computing_meta=None):
     return x
 
 
-def _assign(old_data, mask, new_data, subassign, mask_type, replace, accum):
+def _assign(old_data, mask, new_data, band_offset, band_axis, band_selection, subassign, mask_type, replace, accum):
     x = old_data.value
 
     mask = new_data.mask if subassign else mask
@@ -567,7 +569,14 @@ def _assign(old_data, mask, new_data, subassign, mask_type, replace, accum):
 
     if new_data.index is None:
         if not subassign and replace:
-            x(mask=mask, replace=replace) << x
+            if band_selection:
+                chunk_band = band_selection[band_axis] - band_offset[0]
+                if 0 <= chunk_band and chunk_band < x.shape[band_axis]:
+                    band_selection[band_axis] = chunk_band
+                    band_selection = tuple(band_selection)
+                    x(mask=mask, replace=replace)[band_selection] << x[band_selection].new()
+            else:
+                x(mask=mask, replace=replace) << x
         return wrap_inner(x)
 
     normalized_index = ()
@@ -585,21 +594,6 @@ def _assign(old_data, mask, new_data, subassign, mask_type, replace, accum):
         x(mask=mask, replace=replace, accum=accum)[index] << obj
 
     return wrap_inner(x)
-
-
-def _build_axis_offsets_dask_array(x, axis, name):
-    # Calculate x offsets at which each chunk starts along axis
-    # e.g. chunks=(..., (5, 3, 4), ...) -> x_offset=[0, 5, 8]
-    offset = np.roll(np.cumsum(x.chunks[axis]), 1)
-    offset[0] = 0
-    # it is vital to give a unique name to this dask array
-    name = name + tokenize(offset, axis)
-    offset = da.core.from_array(offset, chunks=1, name=name)
-    # Tamper with the declared chunks of x_offset to make blockwise align it with
-    # x[axis]
-    return da.core.Array(
-        offset.dask, offset.name, (x.chunks[axis],), offset.dtype, meta=x._meta
-    )
 
 
 def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dtype, gb_meta):
@@ -769,7 +763,7 @@ class AmbiguousAssignOrExtract:
                 else:
                     indices_args += [indx, None]
 
-                offset = _build_axis_offsets_dask_array(x, axis, "offset-")
+                offset = build_axis_offsets_dask_array(x, axis, "offset-")
                 offset_args += [offset, (axis,)]
 
             x_ind = tuple(range(ndim))
@@ -840,6 +834,7 @@ def _uniquify(ndim, index, obj, mask=None):
 
     index = index if type(index) is tuple else (index,)
     unique_indices_tuple = ()
+    obj_axis = 0
     for axis in range(ndim):
         indx = index[axis]
         if type(indx) is not slice and not isinstance(indx, Number):
@@ -853,9 +848,10 @@ def _uniquify(ndim, index, obj, mask=None):
                 indx = list(unique_indx)
                 if ((isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType))
                     and len(obj.shape) > 0):
-                    obj = extract(obj, obj_indx, axis)
+                    obj = extract(obj, obj_indx, obj_axis)
                 if mask is not None:
-                    mask = extract(mask, obj_indx, axis)
+                    mask = extract(mask, obj_indx, obj_axis)
+            obj_axis += 1
         unique_indices_tuple += (indx,)
     return unique_indices_tuple, obj, mask
 
@@ -895,7 +891,10 @@ class Assigner:
         if not obj_is_scalar and _shape(parent, indices) != obj.shape:
             raise DimensionMismatch()
         if ndim in [1, 2]:
+            # prepare arguments for blockwise:
             x = parent._optional_dup()
+            x_ind = tuple(range(ndim))
+            mask_ind = None
             # pre-align chunks where necessary:
             if subassign:
                 if mask is not None and not obj_is_scalar:
@@ -908,11 +907,9 @@ class Assigner:
             elif mask is not None:
                 # align `x` and its mask in order to fix offsets
                 # of `x` before calculating them
-                ind = tuple(range(x.ndim))
-                _, (x, delayed_mask) = da.core.unify_chunks(x, ind, delayed_mask, ind)
+                mask_ind = tuple(i for i in x_ind if not isinstance(indices[i], Number))
+                _, (x, delayed_mask) = da.core.unify_chunks(x, x_ind, delayed_mask, mask_ind)
 
-            # prepare arguments for blockwise:
-            x_ind = tuple(range(ndim))
             i = 0
             axis_map = ()
             for axis in range(ndim):
@@ -942,11 +939,11 @@ class Assigner:
                     index_axes += (ndim + axis,)
                     obj_axis = axis_map[axis]
                     if not obj_is_scalar:
-                        obj_offset = _build_axis_offsets_dask_array(obj._delayed, obj_axis, "obj_offset-")
+                        obj_offset = build_axis_offsets_dask_array(obj._delayed, obj_axis, "obj_offset-")
                         obj_offset_args += [obj_offset, (ndim + axis,)]
                         obj_offset_axes += (axis,)
                     elif subassign and mask is not None:
-                        obj_offset = _build_axis_offsets_dask_array(delayed_mask, obj_axis, "obj_offset-")
+                        obj_offset = build_axis_offsets_dask_array(delayed_mask, obj_axis, "obj_offset-")
                         obj_offset_args += [obj_offset, (ndim + axis,)]
                         obj_offset_axes += (axis,)
                     else:
@@ -962,13 +959,13 @@ class Assigner:
                 else:
                     raise NotImplementedError()
 
-                x_offset = _build_axis_offsets_dask_array(x, axis, "x_offset-")
+                x_offset = build_axis_offsets_dask_array(x, axis, "x_offset-")
                 x_offset_args += [x_offset, (axis,)]
 
             if subassign:
                 mask_args = [delayed_mask, (index_axes if mask is not None else None)]
             else:
-                mask_args = [delayed_mask, (x_ind if mask is not None else None)]
+                mask_args = [delayed_mask, mask_ind]
 
             if not obj_is_scalar:
                 obj_args = [obj._delayed, index_axes]
@@ -1024,14 +1021,27 @@ class Assigner:
             assign_ind = x_ind
             if subassign:
                 mask_args = [None, None]
+            # for row or column assign:
+            band_axis = [axis for axis, i in enumerate(indices) if isinstance(i, Number)]
+            is_row_or_col_assign = (len(band_axis) == 1)
+            if is_row_or_col_assign:
+                band_selection = [i if isinstance(i, Number) else slice(None) for i in indices]
+                band_axis = band_axis[0]
+                band_offset_args = x_offset_args[2*band_axis: 2*band_axis + 2]
             else:
-                mask_args = [delayed_mask, (x_ind if mask is not None else None)]
+                band_selection = None
+                band_axis = None
+                band_offset_args = [None, None]
+
             delayed = da.core.blockwise(
                 _assign,
                 assign_ind,
                 x, x_ind,
                 *mask_args,
                 uniquifed, x_ind,
+                *band_offset_args,
+                band_axis=band_axis,
+                band_selection=band_selection,
                 subassign=subassign,
                 mask_type=grblas_mask_type,
                 replace=replace,

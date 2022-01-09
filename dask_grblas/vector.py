@@ -1,4 +1,5 @@
 import dask.array as da
+import numpy as np
 import grblas as gb
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
@@ -6,7 +7,7 @@ from grblas import binary, monoid, semiring
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
-from .utils import np_dtype, wrap_inner
+from .utils import np_dtype, wrap_inner, build_axis_offsets_dask_array
 
 
 class InnerVector(InnerBaseType):
@@ -193,8 +194,14 @@ class Vector(BaseType):
         self._delayed = Vector.from_vector(vector)._delayed
 
     def to_values(self):
-        # TODO: make this lazy; can we do something smart with this?
-        return self.compute().to_values()
+        delayed = self._delayed
+        dtype = np_dtype(self.dtype)
+        meta_i, meta_v = self._meta.to_values()
+        offsets = build_axis_offsets_dask_array(delayed, 0, "index_offset-")
+        x = da.map_blocks(TupleExtractor, delayed, offsets, dtype=dtype, meta=np.array([]))
+        indices = da.map_blocks(lambda t: t.indices, x, dtype=meta_i.dtype, meta=np.array([]))
+        values  = da.map_blocks(lambda t: t.values,  x, dtype=meta_v.dtype, meta=np.array([]))
+        return indices, values
 
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(other, Vector, within="isequal", argname="other")
@@ -218,6 +225,12 @@ def _concat_vector(seq, axis=0):
         value[start:end] = x.value
         start = end
     return InnerVector(value)
+
+
+class TupleExtractor:
+    def __init__(self, grblas_inner_vector, index_offset):
+        self.indices, self.values = grblas_inner_vector.value.to_values()
+        self.indices += index_offset[0]
 
 
 from .matrix import InnerMatrix  # noqa isort:skip
