@@ -856,6 +856,10 @@ def _uniquify(ndim, index, obj, mask=None):
     return unique_indices_tuple, obj, mask
 
 
+def _identity_func(x, axis, keepdims):
+    return x
+
+
 class Assigner:
     def __init__(self, updater, index, subassign=False):
         self.updater = updater
@@ -1000,17 +1004,16 @@ class Assigner:
             # gather all information for the assignment to each chunk of the old data.
             # (Alas, a for-loop is necessary as dask reduction with multiple axes at 
             # the same time works in undesirable ways.)
-            identity_func = lambda x, axis, keepdims: x
             red_axes = tuple(k for k, m in enumerate(fragments_ind) if m not in x_ind)
             uniquifed = fragments
             for axis in red_axes[::-1]:
                 if uniquifed.numblocks[axis] > 1:
                     aggregate_func = _uniquify_merged
                 else:
-                    aggregate_func = identity_func
+                    aggregate_func = _identity_func
                 uniquifed = da.reduction(
                     uniquifed,
-                    identity_func,
+                    _identity_func,
                     aggregate_func,
                     axis=axis,
                     dtype=dtype,

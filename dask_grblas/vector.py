@@ -197,10 +197,11 @@ class Vector(BaseType):
         delayed = self._delayed
         dtype = np_dtype(self.dtype)
         meta_i, meta_v = self._meta.to_values()
+        meta = np.array([])
         offsets = build_axis_offsets_dask_array(delayed, 0, "index_offset-")
-        x = da.map_blocks(TupleExtractor, delayed, offsets, dtype=dtype, meta=np.array([]))
-        indices = da.map_blocks(lambda t: t.indices, x, dtype=meta_i.dtype, meta=np.array([]))
-        values  = da.map_blocks(lambda t: t.values,  x, dtype=meta_v.dtype, meta=np.array([]))
+        x = da.map_blocks(TupleExtractor, delayed, offsets, dtype=dtype, meta=meta)
+        indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
+        values  = da.map_blocks(_get_values,  x, dtype=meta_v.dtype, meta=meta)
         return indices, values
 
     def isequal(self, other, *, check_dtype=False):
@@ -210,6 +211,14 @@ class Vector(BaseType):
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         other = self._expect_type(other, Vector, within="isclose", argname="other")
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+
+
+def _get_indices(tuple_extractor):
+    return tuple_extractor.indices
+
+
+def _get_values(tuple_extractor):
+    return tuple_extractor.values
 
 
 @da.core.concatenate_lookup.register(InnerVector)
