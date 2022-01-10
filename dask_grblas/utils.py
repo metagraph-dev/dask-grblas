@@ -27,9 +27,9 @@ def wrap_inner(val):
     return _inner_types[type(val)](val)
 
 
-def build_axis_offsets_dask_array(x, axis, name):
+def build_chunk_offsets_dask_array(x, axis, name):
     """
-    Calculate x offsets at which each chunk starts along axis
+    Calculate offsets at which each chunk of x starts along axis `axis`
     e.g. chunks=(..., (5, 3, 4), ...) -> x_offset=[0, 5, 8]
     """
     offset = np.roll(np.cumsum(x.chunks[axis]), 1)
@@ -39,8 +39,24 @@ def build_axis_offsets_dask_array(x, axis, name):
     offset = da.core.from_array(offset, chunks=1, name=name)
     # Tamper with the declared chunks of offset to make blockwise align it with
     # x[axis]
+    return da.core.Array(offset.dask, offset.name, (x.chunks[axis],), offset.dtype, meta=x._meta)
+
+
+def build_chunk_ranges_dask_array(x, axis, name):
+    """
+    Calculate ranges at which each chunk of starts along axis `axis`
+    e.g. chunks=(..., (5, 3, 4), ...) -> x_range=[slice(0, 5), slice(5, 8), slice(8, 12)]
+    """
+    offset = np.roll(np.cumsum(x.chunks[axis]), 1)
+    offset[0] = 0
+    ranges = np.array([slice(start, start + len) for (start, len) in zip(offset, x.chunks[axis])])
+    # it is vital to give a unique name to this dask array
+    name = name + tokenize(ranges, axis)
+    ranges = da.core.from_array(ranges, chunks=1, name=name)
+    # Tamper with the declared chunks of offset to make blockwise align it with
+    # x[axis]
     return da.core.Array(
-        offset.dask, offset.name, (x.chunks[axis],), offset.dtype, meta=x._meta
+        ranges.dask, ranges.name, (x.chunks[axis],), ranges.dtype, meta=ranges._meta
     )
 
 

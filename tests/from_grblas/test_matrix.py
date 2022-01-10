@@ -468,7 +468,7 @@ def test_assign_scalar(A):
     C = A.dup()
     C[1::2, 2] = 0
     assert C.isequal(result_column)
-    
+
     lazy0 = da.from_array(np.array([1, 3, 5]), chunks=3)
     lazy1 = da.from_array(np.array([2, 4]), chunks=2)
     C = A.dup()

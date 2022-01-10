@@ -255,18 +255,29 @@ def _concat_matrix(seq, axis=0):
         if len(ncols) > 1:
             raise Exception("Mismatching number of columns while stacking along axis 0")
         if len(ncols) == 1:
-            ncols, = ncols
-            seq = [InnerMatrix(gb.Matrix.new(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols))
-                   if item.value.ncols == 0 else item for item in seq]
+            (ncols,) = ncols
+            seq = [
+                InnerMatrix(
+                    gb.Matrix.new(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols)
+                )
+                if item.value.ncols == 0
+                else item
+                for item in seq
+            ]
         value = gb.ss.concat([[item.value] for item in seq])
     else:
         nrows = set(item.value.nrows for item in seq if item.value.nrows > 0)
         if len(nrows) > 1:
             raise Exception("Mismatching number of rows while stacking along axis 1")
         if len(nrows) == 1:
-            nrows, = nrows
+            (nrows,) = nrows
             seq = [
-                InnerMatrix(gb.Matrix.new(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols))
-                   if item.value.nrows == 0 else item for item in seq]
+                InnerMatrix(
+                    gb.Matrix.new(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols)
+                )
+                if item.value.nrows == 0
+                else item
+                for item in seq
+            ]
         value = gb.ss.concat([[item.value for item in seq]])
     return InnerMatrix(value)

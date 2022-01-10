@@ -6,6 +6,7 @@ from grblas.exceptions import IndexOutOfBound, OutputNotEmpty
 from dask_grblas import Matrix, Scalar, Vector
 import dask.array as da
 
+
 @pytest.fixture
 def A():
     data = [
@@ -279,7 +280,7 @@ def test_extract(v):
     assert w.isequal(result)
     w = v[lazy].new()
     assert w.isequal(result)
-    
+
     # reverse index order:
     result = Vector.from_values([1, 2], [1, 1], size=3)
     w << v[[5, 3, 1]]

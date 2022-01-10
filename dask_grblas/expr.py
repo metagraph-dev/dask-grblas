@@ -7,7 +7,15 @@ import numpy as np
 
 from .base import BaseType, InnerBaseType
 from .mask import Mask
-from .utils import get_grblas_type, get_meta, get_return_type, np_dtype, wrap_inner, build_axis_offsets_dask_array
+from .utils import (
+    get_grblas_type,
+    get_meta,
+    get_return_type,
+    np_dtype,
+    wrap_inner,
+    build_chunk_offsets_dask_array,
+    build_chunk_ranges_dask_array,
+)
 from grblas.exceptions import DimensionMismatch
 from dask.base import tokenize
 
@@ -374,6 +382,7 @@ class Fragmenter:
     """
     stores only that part of the data-chunk selected by the index
     """
+
     def __init__(self, ndim=None, index=None, mask=None, obj=None):
         self.ndim = ndim
         self.index = index
@@ -410,8 +419,8 @@ def fuse_slice_pair(slice0, slice1, length):
     """computes slice `s` such that array[s] = array[s0][s1] where array has length `length`"""
     a0, o0, e0 = slice0.indices(length)
     a1, o1, e1 = slice1.indices(_ceildiv(abs(o0 - a0), abs(e0)))
-    o01 = a0 + o1*e0
-    return slice(a0 + a1*e0, None if o01 < 0 else o01, e0*e1)
+    o01 = a0 + o1 * e0
+    return slice(a0 + a1 * e0, None if o01 < 0 else o01, e0 * e1)
 
 
 def fuse_index_pair(i, j, length=None):
@@ -422,11 +431,11 @@ def fuse_index_pair(i, j, length=None):
         raise ValueError("Length argument is missing")
     if type(i) is slice and isinstance(j, Number):
         a0, _, e0 = i.indices(length)
-        return  a0 + j*e0
+        return a0 + j * e0
     if type(i) is slice and type(j) in {list, np.ndarray}:
         a0, _, e0 = i.indices(length)
-        f = lambda x: a0 + x*e0
-        return  [f(x) for x in j] if type(j) is list else list(f(j))
+        f = lambda x: a0 + x * e0
+        return [f(x) for x in j] if type(j) is list else list(f(j))
     elif type(i) is slice and type(j) is slice:
         return fuse_slice_pair(i, j, length=length)
     else:
@@ -447,7 +456,7 @@ def _chunk_in_slice(chunk_begin, chunk_end, slice_start, slice_stop, slice_step)
         start, stop, step = -slice_start, -slice_stop, -slice_step
     if start < ce and stop > cb:
         if start < cb:
-            rem = (cb - start)%step
+            rem = (cb - start) % step
             start = cb + (step - rem) if rem > 0 else cb
         stop = min(ce, stop)
         idx_within = _ceildiv(stop - start, step) > 0
@@ -460,17 +469,15 @@ def _chunk_in_slice(chunk_begin, chunk_end, slice_start, slice_stop, slice_step)
         return False, np.array([], dtype=int)
 
 
-def _data_x_index_meshpoint_4assign(*args, subassign, obj_offset_axes, axis_map):
-    x = args[0].value
-    x_ndim = args[0].ndim
+def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes):
+    x_ranges = args[0:x_ndim]
+    indices = args[x_ndim : 2 * x_ndim]
 
-    indices = args[1: x_ndim + 1]
-    mask = args[x_ndim + 1]
-    obj = args[x_ndim + 2]
-    x_offsets = args[x_ndim + 3: 2*x_ndim + 3]
+    mask = args[2 * x_ndim]
+    obj = args[2 * x_ndim + 1]
     if obj_offset_axes:
-        obj_axis_offsets = args[2*x_ndim + 3:]
-        obj_offsets = [None]*x_ndim
+        obj_axis_offsets = args[2 * x_ndim + 2 :]
+        obj_offsets = [None] * x_ndim
         for axis, offsets in zip(obj_offset_axes, obj_axis_offsets):
             obj_offsets[axis] = offsets[0]
 
@@ -488,10 +495,11 @@ def _data_x_index_meshpoint_4assign(*args, subassign, obj_offset_axes, axis_map)
     obj_is_scalar = not (isinstance(obj, InnerBaseType) and obj.ndim > 0)
     index_tuple = ()
     obj_index_tuple = ()
+    obj_axis = 0
     for axis in range(x_ndim):
         index = indices[axis]
-        axis_len = x.shape[axis]
-        idx_offset = x_offsets[axis][0]
+        axis_len = x_ranges[axis][0].stop - x_ranges[axis][0].start
+        idx_offset = x_ranges[axis][0].start
         obj_idx = None
         if type(index) is np.ndarray:
             # CASE: array
@@ -509,17 +517,17 @@ def _data_x_index_meshpoint_4assign(*args, subassign, obj_offset_axes, axis_map)
             data_begin, data_end = 0, axis_len
             if (subassign and mask is not None) or not obj_is_scalar:
                 # Here mask and obj are already aligned if both exist
-                obj_begin = s.start + s.step*obj_offsets[axis]
-                obj_end = s.start + s.step*(obj_offsets[axis] + y.shape[axis_map[axis]])
+                obj_begin = s.start + s.step * obj_offsets[axis]
+                obj_end = s.start + s.step * (obj_offsets[axis] + y.shape[obj_axis])
                 obj_begin = obj_begin - idx_offset
                 obj_end = obj_end - idx_offset
-                idx_within, idx = _chunk_in_slice(
-                    data_begin, data_end, obj_begin, obj_end, s.step
-                )
+                idx_within, idx = _chunk_in_slice(data_begin, data_end, obj_begin, obj_end, s.step)
                 if idx_within:
                     stop = _ceildiv(idx.stop - obj_begin, s.step)
-                    obj_idx =  slice(
-                        _ceildiv(idx.start - obj_begin, s.step), stop if stop >=0 else None, idx.step//s.step
+                    obj_idx = slice(
+                        _ceildiv(idx.start - obj_begin, s.step),
+                        stop if stop >= 0 else None,
+                        idx.step // s.step,
                     )
                     obj_index_tuple += (obj_idx,)
             else:
@@ -531,9 +539,12 @@ def _data_x_index_meshpoint_4assign(*args, subassign, obj_offset_axes, axis_map)
             # CASE: number
             idx = indices[axis] - idx_offset
             idx_within = (idx >= 0) & (idx < axis_len)
+            obj_axis -= 1
         else:
             raise NotImplementedError()
-        
+
+        obj_axis += 1
+
         if not idx_within:
             break
         index_tuple += (idx,)
@@ -559,7 +570,18 @@ def _uniquify_merged(x, axis=None, keepdims=None, computing_meta=None):
     return x
 
 
-def _assign(old_data, mask, new_data, band_offset, band_axis, band_selection, subassign, mask_type, replace, accum):
+def _assign(
+    old_data,
+    mask,
+    new_data,
+    band_offset,
+    band_axis,
+    band_selection,
+    subassign,
+    mask_type,
+    replace,
+    accum,
+):
     x = old_data.value
 
     mask = new_data.mask if subassign else mask
@@ -585,7 +607,7 @@ def _assign(old_data, mask, new_data, band_offset, band_axis, band_selection, su
             i = slice(i.start, None, i.step)
         normalized_index += (i,)
     index = _squeeze(normalized_index)
-             
+
     obj = new_data.obj
 
     if subassign:
@@ -599,9 +621,9 @@ def _assign(old_data, mask, new_data, band_offset, band_axis, band_selection, su
 def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dtype, gb_meta):
     """returns only that part of the data-chunk selected by the index"""
     x = args[0]
-    indices = args[1: x.ndim + 1]
+    indices = args[1 : x.ndim + 1]
     mask = args[x.ndim + 1]
-    x_offsets = args[x.ndim + 2:]
+    x_offsets = args[x.ndim + 2 :]
     index_tuple = ()
     mask_index_tuple = ()
     idx_within = True
@@ -612,15 +634,17 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
             if type(index[0]) is slice:
                 # Note: slice is already aligned with mask if it exists
                 s = index[0]
-                idx_within, idx = _chunk_in_slice(offset, offset + x.shape[axis], s.start, s.stop, s.step)
+                idx_within, idx = _chunk_in_slice(
+                    offset, offset + x.shape[axis], s.start, s.stop, s.step
+                )
                 if idx_within:
                     mask_begin = _ceildiv(idx.start - s.start, s.step)
                     mask_end = _ceildiv(idx.stop - s.start, s.step)
                     # beware of negative indices in slice specification!
                     stop = idx.stop - offset
-                    idx =  slice(idx.start - offset, stop if stop >=0 else None, idx.step)
+                    idx = slice(idx.start - offset, stop if stop >= 0 else None, idx.step)
                     stop = _ceildiv(stop - s.start, s.step)
-                    mask_idx =  slice(mask_begin, mask_end, 1)
+                    mask_idx = slice(mask_begin, mask_end, 1)
                 else:
                     break
             else:
@@ -641,7 +665,7 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
                 break
         else:
             raise NotImplementedError()
-            
+
         index_tuple += (idx,)
         mask_index_tuple += (mask_idx,)
     x = x.value
@@ -657,7 +681,7 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
 def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
     """reassembles chunk-fragments, sorting them by the indices of the index chunk"""
     ndim = len(x_chunks)
-    indices = args[0: ndim]
+    indices = args[0:ndim]
     fused_fragments = args[ndim].value
     index_tuple = ()
     for axis, idx in enumerate(indices):
@@ -668,16 +692,16 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
                 s = idx[0]
                 # this branch needs more efficient-handling: (e.g. we should avoid use of np.arange)
                 idx = np.arange(s.start, s.stop, s.step, dtype=np.int64)
- 
+
             # Needed when idx is unsigned
             idx = idx.astype(np.int64)
-    
+
             # Normalize negative indices
             idx = np.where(idx < 0, idx + sum(x_chunks[axis]), idx)
-    
+
             x_chunk_offset = 0
             chunk_output_offset = 0
-        
+
             # Assemble the final index that picks from the output of the previous
             # kernel by adding together one layer per chunk of x
             idx_final = np.zeros_like(idx)
@@ -688,7 +712,7 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
                 x_chunk_offset += x_chunk
                 if idx_cum.size > 0:
                     chunk_output_offset += idx_cum[-1]
-        
+
             index_tuple += (idx_final,)
     index_tuple = _squeeze(index_tuple)
     return wrap_inner(fused_fragments[index_tuple].new())
@@ -735,7 +759,7 @@ class AmbiguousAssignOrExtract:
                     # convert list or numpy array to dask array
                     indx = np.array(indx)
                     name = "list_index-" + tokenize(indx, axis)
-                    indx = da.core.from_array(indx, chunks='auto', name=name)
+                    indx = da.core.from_array(indx, chunks="auto", name=name)
                     indices_args += [indx, (ndim + axis,)]
                     new_axes += (ndim + axis,)
                     cat_axes += [axis]
@@ -751,19 +775,23 @@ class AmbiguousAssignOrExtract:
                         chunk_sizes = delayed_mask.chunks[axis]
                         chunk_offsets = np.roll(np.cumsum(chunk_sizes), 1)
                         chunk_offsets[0] = 0
-                        starts = start + step*chunk_offsets
-                        stops = start + step*(chunk_offsets + chunk_sizes)
-                        indx = np.array([slice(start, stop, step) for start, stop in zip(starts, stops)])
+                        starts = start + step * chunk_offsets
+                        stops = start + step * (chunk_offsets + chunk_sizes)
+                        indx = np.array(
+                            [slice(start, stop, step) for start, stop in zip(starts, stops)]
+                        )
                     name = "slice_index-" + tokenize(indx, axis)
                     indx = da.core.from_array(indx, chunks=1, name=name)
-                    indx = da.Array(indx.dask, indx.name, (chunk_sizes, ), indx.dtype, meta=indx._meta)
+                    indx = da.Array(
+                        indx.dask, indx.name, (chunk_sizes,), indx.dtype, meta=indx._meta
+                    )
                     indices_args += [indx, (ndim + axis,)]
                     new_axes += (ndim + axis,)
                     cat_axes += [axis]
                 else:
                     indices_args += [indx, None]
 
-                offset = build_axis_offsets_dask_array(x, axis, "offset-")
+                offset = build_chunk_offsets_dask_array(x, axis, "offset-")
                 offset_args += [offset, (axis,)]
 
             x_ind = tuple(range(ndim))
@@ -776,7 +804,8 @@ class AmbiguousAssignOrExtract:
             fragments = da.core.blockwise(
                 _data_x_index_meshpoint_4extract,
                 fragments_ind,
-                x, x_ind,
+                x,
+                x_ind,
                 *indices_args,
                 *mask_args,
                 *offset_args,
@@ -794,14 +823,15 @@ class AmbiguousAssignOrExtract:
                 _defrag_to_index_chunk,
                 extracts_ind,
                 *indices_args,
-                fragments, fragments_ind,
+                fragments,
+                fragments_ind,
                 x_chunks=x.chunks,
                 cat_axes=cat_axes,
                 concatenate=True,
                 dtype=dtype,
                 meta=wrap_inner(meta),
             )
-            
+
             return get_return_type(meta)(delayed)
         raise NotImplementedError()
 
@@ -826,7 +856,7 @@ def _uniquify(ndim, index, obj, mask=None):
     def extract(obj, indices, axis):
         indices = fuse_index_pair(slice(None, None, -1), indices, obj.shape[axis])
         n = len(obj.shape)
-        obj_index = [slice(None)]*n
+        obj_index = [slice(None)] * n
         axis = 0 if n < ndim else axis
         obj_index[axis] = indices
         indices = _squeeze(tuple(obj_index))
@@ -846,8 +876,9 @@ def _uniquify(ndim, index, obj, mask=None):
                 unique_indx, obj_indx = np.unique(reverse_indx, return_index=True)
             if unique_indx.size < reverse_indx.size:
                 indx = list(unique_indx)
-                if ((isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType))
-                    and len(obj.shape) > 0):
+                if (isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType)) and len(
+                    obj.shape
+                ) > 0:
                     obj = extract(obj, obj_indx, obj_axis)
                 if mask is not None:
                     mask = extract(mask, obj_indx, obj_axis)
@@ -874,7 +905,9 @@ class Assigner:
         replace = self.updater.replace
         subassign = self.subassign
         indices = self.index
-        obj_is_scalar = not (isinstance(obj, BaseType) and type(obj._meta) in {gb.Vector, gb.Matrix})
+        obj_is_scalar = not (
+            isinstance(obj, BaseType) and type(obj._meta) in {gb.Vector, gb.Matrix}
+        )
         if mask is not None:
             assert isinstance(mask, Mask)
             assert parent._meta.nvals == 0
@@ -914,23 +947,15 @@ class Assigner:
                 mask_ind = tuple(i for i in x_ind if not isinstance(indices[i], Number))
                 _, (x, delayed_mask) = da.core.unify_chunks(x, x_ind, delayed_mask, mask_ind)
 
-            i = 0
-            axis_map = ()
-            for axis in range(ndim):
-                if isinstance(indices[axis], Number):
-                    axis_map += (None,)
-                else:
-                    axis_map += (i,)
-                    i += 1
-
             indices_args = []
-            x_offset_args = []
+            x_ranges_args = []
             obj_offset_args = []
             obj_offset_axes = ()
             index_axes = ()
-            # Note: the blockwise kwarg `new_axes` is non-empty only in one case: 
+            # Note: the blockwise kwarg `new_axes` is non-empty only in one case:
             # where index is a slice and obj is a scalar and there is no mask
             new_axes = dict()
+            obj_axis = 0
             for axis in range(ndim):
                 indx = indices[axis]
                 if type(indx) is da.Array:
@@ -941,13 +966,16 @@ class Assigner:
                     start, stop, step = s.indices(x.shape[axis])
                     indices_args += [slice(start, stop, step), None]
                     index_axes += (ndim + axis,)
-                    obj_axis = axis_map[axis]
                     if not obj_is_scalar:
-                        obj_offset = build_axis_offsets_dask_array(obj._delayed, obj_axis, "obj_offset-")
+                        obj_offset = build_chunk_offsets_dask_array(
+                            obj._delayed, obj_axis, "obj_offset-"
+                        )
                         obj_offset_args += [obj_offset, (ndim + axis,)]
                         obj_offset_axes += (axis,)
                     elif subassign and mask is not None:
-                        obj_offset = build_axis_offsets_dask_array(delayed_mask, obj_axis, "obj_offset-")
+                        obj_offset = build_chunk_offsets_dask_array(
+                            delayed_mask, obj_axis, "obj_offset-"
+                        )
                         obj_offset_args += [obj_offset, (ndim + axis,)]
                         obj_offset_axes += (axis,)
                     else:
@@ -955,54 +983,56 @@ class Assigner:
                 elif type(indx) in {list, np.ndarray}:
                     indx = np.array(indx)
                     name = "list_index-" + tokenize(indx, axis)
-                    indx = da.core.from_array(indx, chunks='auto', name=name)
+                    indx = da.core.from_array(indx, chunks="auto", name=name)
                     indices_args += [indx, (ndim + axis,)]
                     index_axes += (ndim + axis,)
                 elif isinstance(indx, Number):
                     indices_args += [indx, None]
+                    obj_axis -= 1
                 else:
                     raise NotImplementedError()
 
-                x_offset = build_axis_offsets_dask_array(x, axis, "x_offset-")
-                x_offset_args += [x_offset, (axis,)]
+                x_ranges = build_chunk_ranges_dask_array(x, axis, "x_ranges-")
+                x_ranges_args += [x_ranges, (axis,)]
+                obj_axis += 1
 
             if subassign:
                 mask_args = [delayed_mask, (index_axes if mask is not None else None)]
             else:
-                mask_args = [delayed_mask, mask_ind]
+                mask_args = [None, None]
 
             if not obj_is_scalar:
                 obj_args = [obj._delayed, index_axes]
-            elif isinstance(obj, BaseType): # dask_grblas.Scalar
+            elif isinstance(obj, BaseType):  # dask_grblas.Scalar
                 obj_args = [obj._delayed, None]
-            else:   # Number: int, float, etc.
+            else:  # Number: int, float, etc.
                 obj_args = [obj, None]
 
             if not obj_offset_args:
                 obj_offset_args = [None, None]
 
             # this blockwise is essentially a cartesian product of data chunks and index chunks
-            # both index and data chunks are fragmented in the process
+            # for assign: index and obj chunks are fragmented in the process;
+            # for subassign: index, obj, and mask chunks are fragmented in the process
             fragments_ind = x_ind + index_axes
             fragments = da.core.blockwise(
                 _data_x_index_meshpoint_4assign,
                 fragments_ind,
-                x, x_ind,
+                *x_ranges_args,
                 *indices_args,
                 *mask_args,
                 *obj_args,
-                *x_offset_args,
                 *obj_offset_args,
+                x_ndim=ndim,
                 subassign=subassign,
                 obj_offset_axes=obj_offset_axes,
-                axis_map=axis_map,
                 new_axes=new_axes if new_axes else None,
                 dtype=dtype,
                 meta=wrap_inner(meta),
             )
 
             # gather all information for the assignment to each chunk of the old data.
-            # (Alas, a for-loop is necessary as dask reduction with multiple axes at 
+            # (Alas, a for-loop is necessary as dask reduction with multiple axes at
             # the same time works in undesirable ways.)
             red_axes = tuple(k for k, m in enumerate(fragments_ind) if m not in x_ind)
             uniquifed = fragments
@@ -1024,13 +1054,15 @@ class Assigner:
             assign_ind = x_ind
             if subassign:
                 mask_args = [None, None]
+            else:
+                mask_args = [delayed_mask, mask_ind]
             # for row or column assign:
             band_axis = [axis for axis, i in enumerate(indices) if isinstance(i, Number)]
-            is_row_or_col_assign = (len(band_axis) == 1)
+            is_row_or_col_assign = len(band_axis) == 1
             if is_row_or_col_assign:
                 band_selection = [i if isinstance(i, Number) else slice(None) for i in indices]
                 band_axis = band_axis[0]
-                band_offset_args = x_offset_args[2*band_axis: 2*band_axis + 2]
+                band_offset_args = x_ranges_args[2 * band_axis : 2 * band_axis + 2]
             else:
                 band_selection = None
                 band_axis = None
@@ -1039,9 +1071,11 @@ class Assigner:
             delayed = da.core.blockwise(
                 _assign,
                 assign_ind,
-                x, x_ind,
+                x,
+                x_ind,
                 *mask_args,
-                uniquifed, x_ind,
+                uniquifed,
+                x_ind,
                 *band_offset_args,
                 band_axis=band_axis,
                 band_selection=band_selection,
@@ -1292,24 +1326,31 @@ def _concat_fragmenter(seq, axis=0):
     should be the same over all Fragmenter objects, and the final result will
     also have the same value for this attribute.
     """
+
     def concatenate_fragments(frag1, frag2, axis=0, base_axis=0):
         out = Fragmenter(frag1.ndim)
         out_index = list(frag1.index)
         if type(frag1.index[base_axis]) is slice:
             s1, s2 = frag1.index[base_axis], frag2.index[base_axis]
             if type(s1) is not type(s2):
-                raise TypeError(f'Can only concatenate contiguous slices of the same step.  '
-                                f'Got a slice and something else: {type(s1)} and {type(s2)}.')
+                raise TypeError(
+                    f"Can only concatenate contiguous slices of the same step.  "
+                    f"Got a slice and something else: {type(s1)} and {type(s2)}."
+                )
             if s1.step != s2.step:
-                raise ValueError(f'Can only concatenate contiguous slices of the same step.  '
-                                 f'Got unequal steps: {s1.step} and {s2.step}.')
-    
+                raise ValueError(
+                    f"Can only concatenate contiguous slices of the same step.  "
+                    f"Got unequal steps: {s1.step} and {s2.step}."
+                )
+
             s1_last = range(s1.start, s1.stop, s1.step)[-1]
             s1_next = s1_last + s1.step
             if s1_next != s2.start:
-                raise ValueError(f'Can only concatenate contiguous slices of the same step.  '
-                                 f'Got non-contiguous slices: first slice (with step {s1.step})'
-                                 f' stops at {s1_last} while the second starts from {s2.start}.')
+                raise ValueError(
+                    f"Can only concatenate contiguous slices of the same step.  "
+                    f"Got non-contiguous slices: first slice (with step {s1.step})"
+                    f" stops at {s1_last} while the second starts from {s2.start}."
+                )
             out_index[base_axis] = slice(s1.start, s2.stop, s1.step)
         else:
             out_index[base_axis] = np.concatenate([frag1.index[base_axis], frag2.index[base_axis]])
@@ -1335,8 +1376,9 @@ def _concat_fragmenter(seq, axis=0):
     seq_ = [fragment for fragment in seq if fragment.index]
     if seq_:
         if axis not in set(range(ndim)):
-            raise ValueError(f"Can only concatenate for axis with values in {set(range(ndim))}.  "
-                             f"Got {axis}.")
+            raise ValueError(
+                f"Can only concatenate for axis with values in {set(range(ndim))}.  " f"Got {axis}."
+            )
 
         non_singleton_axes = [
             axis for axis, index in enumerate(seq_[0].index) if not isinstance(index, Number)
@@ -1345,4 +1387,3 @@ def _concat_fragmenter(seq, axis=0):
         return reduce(partial(concatenate_fragments, axis=axis, base_axis=base_axis), seq_)
     else:
         return seq[0]
-

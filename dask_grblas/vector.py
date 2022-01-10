@@ -7,7 +7,7 @@ from grblas import binary, monoid, semiring
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
-from .utils import np_dtype, wrap_inner, build_axis_offsets_dask_array
+from .utils import np_dtype, wrap_inner, build_chunk_offsets_dask_array
 
 
 class InnerVector(InnerBaseType):
@@ -198,10 +198,10 @@ class Vector(BaseType):
         dtype = np_dtype(self.dtype)
         meta_i, meta_v = self._meta.to_values()
         meta = np.array([])
-        offsets = build_axis_offsets_dask_array(delayed, 0, "index_offset-")
+        offsets = build_chunk_offsets_dask_array(delayed, 0, "index_offset-")
         x = da.map_blocks(TupleExtractor, delayed, offsets, dtype=dtype, meta=meta)
         indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
-        values  = da.map_blocks(_get_values,  x, dtype=meta_v.dtype, meta=meta)
+        values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta)
         return indices, values
 
     def isequal(self, other, *, check_dtype=False):

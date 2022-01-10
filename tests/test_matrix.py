@@ -19,9 +19,11 @@ def inv_if(mask, is_inv=False):
 
 
 def adapt(index, x):
-    return index.compute() if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array else index
-
-
+    return (
+        index.compute()
+        if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+        else index
+    )
 
 
 @pytest.fixture
@@ -1041,9 +1043,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
     vm, dvms = vms_Matrix
     sm, dsms = sms_Matrix
 
-    index1_da = da.from_array([6, 0, 3, 1, 4, 2, 5], chunks=2, name='unique indices')
-    index2_da = da.from_array([0, 5, 5, 1, 2, 6, 0], chunks=2, name='non unique indices')
-    index3_da = da.from_array([0] * 7, chunks=2, name='repeated index 0')
+    index1_da = da.from_array([6, 0, 3, 1, 4, 2, 5], chunks=2, name="unique indices")
+    index2_da = da.from_array([0, 5, 5, 1, 2, 6, 0], chunks=2, name="non unique indices")
+    index3_da = da.from_array([0] * 7, chunks=2, name="repeated index 0")
 
     n = 0
     row_indexes = [
@@ -1091,7 +1093,10 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                 return x
 
             def h2(x, y):
-                x(accum=gb.binary.plus, replace=False) << y[adapt(row_index, x), adapt(col_index, x)]
+                (
+                    x(accum=gb.binary.plus, replace=False)
+                    << y[adapt(row_index, x), adapt(col_index, x)]
+                )
                 return x
 
             def h3(m, x, y):
@@ -1107,16 +1112,24 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                 return x
 
             def i1(m, x, y):
-                x(mask=m, accum=gb.binary.plus, replace=True) << y[adapt(row_index, x), adapt(col_index, x)]
+                (
+                    x(mask=m, accum=gb.binary.plus, replace=True)
+                    << y[adapt(row_index, x), adapt(col_index, x)]
+                )
                 return x
 
             def i2(m, x, y):
-                x(mask=m, accum=gb.binary.plus, replace=False) << y[adapt(row_index, x), adapt(col_index, x)]
+                (
+                    x(mask=m, accum=gb.binary.plus, replace=False)
+                    << y[adapt(row_index, x), adapt(col_index, x)]
+                )
                 return x
 
             for a, dA in enumerate(dAs):
                 compare(lambda x: x[adapt(row_index, x), adapt(col_index, x)].new(), A, dA)
-                compare(lambda x: x[adapt(row_index, x), adapt(col_index, x)].new(dtype=float), A, dA)
+                compare(
+                    lambda x: x[adapt(row_index, x), adapt(col_index, x)].new(dtype=float), A, dA
+                )
                 for b, dB in enumerate(dBs):
                     compare(f1, (A.dup(), B), (dA.dup(), dB))
                     compare(f1, (A.dup(dtype=float), B), (dA.dup(dtype=float), dB))
@@ -1140,10 +1153,14 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dvm.V, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m), (vm.V, B), (dvm.V, dB)
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m),
+                            (vm.V, B),
+                            (dvm.V, dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, dtype=float),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, dtype=float
+                            ),
                             (vm.V, B),
                             (dvm.V, dB),
                         )
@@ -1154,7 +1171,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dvm.V, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, replace=True),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, replace=True
+                            ),
                             (vm.V, B),
                             (dvm.V, dB),
                             errors=True,
@@ -1174,7 +1193,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dvm.V, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, replace=False),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, replace=False
+                            ),
                             (vm.V, B),
                             (dvm.V, dB),
                             errors=True,
@@ -1194,7 +1215,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dvm.V, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, accum=gb.binary.plus),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, accum=gb.binary.plus
+                            ),
                             (vm.V, B),
                             (dvm.V, dB),
                             errors=True,
@@ -1259,10 +1282,14 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dsm.S, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m), (sm.S, B), (dsm.S, dB)
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m),
+                            (sm.S, B),
+                            (dsm.S, dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, dtype=float),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, dtype=float
+                            ),
                             (sm.S, B),
                             (dsm.S, dB),
                         )
@@ -1273,7 +1300,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dsm.S, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, replace=True),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, replace=True
+                            ),
                             (sm.S, B),
                             (dsm.S, dB),
                             errors=True,
@@ -1293,7 +1322,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dsm.S, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, replace=False),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, replace=False
+                            ),
                             (sm.S, B),
                             (dsm.S, dB),
                             errors=True,
@@ -1313,7 +1344,9 @@ def test_extract(As, vms_Matrix, sms_Matrix):
                             (dsm.S, dA.dup(dtype=float), dB),
                         )
                         compare(
-                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(mask=m, accum=gb.binary.plus),
+                            lambda m, x: x[adapt(row_index, x), adapt(col_index, x)].new(
+                                mask=m, accum=gb.binary.plus
+                            ),
                             (sm.S, B),
                             (dsm.S, dB),
                             errors=True,
@@ -1435,7 +1468,10 @@ def test_subassign(As, vms_Matrix, sms_Matrix):
                 return x
 
             def h2(x, y):
-                x[adapt(row_index, x), adapt(col_index, x)](accum=gb.binary.plus, replace=False) << y
+                (
+                    x[adapt(row_index, x), adapt(col_index, x)](accum=gb.binary.plus, replace=False)
+                    << y
+                )
                 return x
 
             def h3(m, x, y):
@@ -1452,13 +1488,20 @@ def test_subassign(As, vms_Matrix, sms_Matrix):
 
             def i1(m, x, y):
                 (
-                    x[adapt(row_index, x), adapt(col_index, x)](mask=m, accum=gb.binary.plus, replace=test_replace_true)
+                    x[adapt(row_index, x), adapt(col_index, x)](
+                        mask=m, accum=gb.binary.plus, replace=test_replace_true
+                    )
                     << y
                 )
                 return x
 
             def i2(m, x, y):
-                x[adapt(row_index, x), adapt(col_index, x)](mask=m, accum=gb.binary.plus, replace=False) << y
+                (
+                    x[adapt(row_index, x), adapt(col_index, x)](
+                        mask=m, accum=gb.binary.plus, replace=False
+                    )
+                    << y
+                )
                 return x
 
             for dA in dAs:
@@ -1632,66 +1675,90 @@ def test_row_col_subassign(As, vs, vms, sms):
         index2_da,
         index3_da,
     ]
-    
+
     for one_row in True, False:
         if not one_row:
             row_indexes, col_indexes = col_indexes, row_indexes
         for row_index in row_indexes:
             for col_index in col_indexes:
                 n += 1
-                print(f'{n=}; {time.strftime("%H:%M:%S", time.localtime())}: {(row_index, col_index)}')
-    
+                print(
+                    f'{n=}; {time.strftime("%H:%M:%S", time.localtime())}: {(row_index, col_index)}'
+                )
+
                 def f2(x, y):
                     x[adapt(row_index, x), adapt(col_index, x)]() << y
                     return x
-    
+
                 def g1(m, x, y):
                     x[adapt(row_index, x), adapt(col_index, x)](mask=m) << y
                     return x
-    
+
                 def g2(x, y):
                     x[adapt(row_index, x), adapt(col_index, x)](accum=gb.binary.plus) << y
                     return x
-    
+
                 def g3(x, y):
                     x[adapt(row_index, x), adapt(col_index, x)](replace=True) << y
                     return x
-    
+
                 def g4(x, y):
                     x[adapt(row_index, x), adapt(col_index, x)](replace=False) << y
                     return x
-    
+
                 def h1(x, y):
-                    x[adapt(row_index, x), adapt(col_index, x)](accum=gb.binary.plus, replace=True) << y
-                    return x
-    
-                def h2(x, y):
-                    x[adapt(row_index, x), adapt(col_index, x)](accum=gb.binary.plus, replace=False) << y
-                    return x
-    
-                def h3(m, x, y):
-                    x[adapt(row_index, x), adapt(col_index, x)](mask=m, replace=test_replace_true) << y
-                    return x
-    
-                def h4(m, x, y):
-                    x[adapt(row_index, x), adapt(col_index, x)](mask=m, replace=False) << y
-                    return x
-    
-                def h5(m, x, y):
-                    x[adapt(row_index, x), adapt(col_index, x)](mask=m, accum=gb.binary.plus) << y
-                    return x
-    
-                def i1(m, x, y):
                     (
-                        x[adapt(row_index, x), adapt(col_index, x)](mask=m, accum=gb.binary.plus, replace=test_replace_true)
+                        x[adapt(row_index, x), adapt(col_index, x)](
+                            accum=gb.binary.plus, replace=True
+                        )
                         << y
                     )
                     return x
-    
-                def i2(m, x, y):
-                    x[adapt(row_index, x), adapt(col_index, x)](mask=m, accum=gb.binary.plus, replace=False) << y
+
+                def h2(x, y):
+                    (
+                        x[adapt(row_index, x), adapt(col_index, x)](
+                            accum=gb.binary.plus, replace=False
+                        )
+                        << y
+                    )
                     return x
-    
+
+                def h3(m, x, y):
+                    (
+                        x[adapt(row_index, x), adapt(col_index, x)](
+                            mask=m, replace=test_replace_true
+                        )
+                        << y
+                    )
+                    return x
+
+                def h4(m, x, y):
+                    x[adapt(row_index, x), adapt(col_index, x)](mask=m, replace=False) << y
+                    return x
+
+                def h5(m, x, y):
+                    x[adapt(row_index, x), adapt(col_index, x)](mask=m, accum=gb.binary.plus) << y
+                    return x
+
+                def i1(m, x, y):
+                    (
+                        x[adapt(row_index, x), adapt(col_index, x)](
+                            mask=m, accum=gb.binary.plus, replace=test_replace_true
+                        )
+                        << y
+                    )
+                    return x
+
+                def i2(m, x, y):
+                    (
+                        x[adapt(row_index, x), adapt(col_index, x)](
+                            mask=m, accum=gb.binary.plus, replace=False
+                        )
+                        << y
+                    )
+                    return x
+
                 for dA in dAs:
                     for B, dB in zip(gBs, dBs):
                         compare(f2, (A.dup(), B), (dA.dup(), dB))
@@ -1898,7 +1965,10 @@ def test_assign(As, vms_Matrix, sms_Matrix):
                 return x
 
             def h2(x, y):
-                x(accum=gb.binary.plus, replace=False)[adapt(row_index, x), adapt(col_index, x)] << y
+                (
+                    x(accum=gb.binary.plus, replace=False)[adapt(row_index, x), adapt(col_index, x)]
+                    << y
+                )
                 return x
 
             def h3(m, x, y):
@@ -1915,13 +1985,20 @@ def test_assign(As, vms_Matrix, sms_Matrix):
 
             def i1(m, x, y):
                 (
-                    x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[adapt(row_index, x), adapt(col_index, x)]
+                    x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[
+                        adapt(row_index, x), adapt(col_index, x)
+                    ]
                     << y
                 )
                 return x
 
             def i2(m, x, y):
-                x(mask=m, accum=gb.binary.plus, replace=False)[adapt(row_index, x), adapt(col_index, x)] << y
+                (
+                    x(mask=m, accum=gb.binary.plus, replace=False)[
+                        adapt(row_index, x), adapt(col_index, x)
+                    ]
+                    << y
+                )
                 return x
 
             for dA in dAs:
@@ -2074,7 +2151,6 @@ def test_row_col_assign(As, vs, vms, sms):
     gB, dBs = vs
     vm, dvms = vms
     sm, dsms = sms
-    
 
     gb_s = gb.Scalar.from_value(9)
     dgb_s = dgb.Scalar.from_value(9)
@@ -2098,70 +2174,94 @@ def test_row_col_assign(As, vs, vms, sms):
         index2_da,
         index3_da,
     ]
-    
+
     for one_row in True, False:
         if not one_row:
             row_indexes, col_indexes = col_indexes, row_indexes
         for row_index in row_indexes:
             for col_index in col_indexes:
                 n += 1
-                print(f'{n=}; {time.strftime("%H:%M:%S", time.localtime())}: {(row_index, col_index)}')
-    
+                print(
+                    f'{n=}; {time.strftime("%H:%M:%S", time.localtime())}: {(row_index, col_index)}'
+                )
+
                 def f1(x, y):
                     x[adapt(row_index, x), adapt(col_index, x)] << y
                     return x
-    
+
                 def f2(x, y):
                     x()[adapt(row_index, x), adapt(col_index, x)] << y
                     return x
-    
+
                 def g1(m, x, y):
                     x(mask=m)[adapt(row_index, x), adapt(col_index, x)] << y
                     return x
-    
+
                 def g2(x, y):
                     x(accum=gb.binary.plus)[adapt(row_index, x), adapt(col_index, x)] << y
                     return x
-    
+
                 def g3(x, y):
                     x(replace=True)[adapt(row_index, x), adapt(col_index, x)] << y
                     return x
-    
+
                 def g4(x, y):
                     x(replace=False)[adapt(row_index, x), adapt(col_index, x)] << y
                     return x
-    
+
                 def h1(x, y):
-                    x(accum=gb.binary.plus, replace=True)[adapt(row_index, x), adapt(col_index, x)] << y
-                    return x
-    
-                def h2(x, y):
-                    x(accum=gb.binary.plus, replace=False)[adapt(row_index, x), adapt(col_index, x)] << y
-                    return x
-    
-                def h3(m, x, y):
-                    x(mask=m, replace=test_replace_true)[adapt(row_index, x), adapt(col_index, x)] << y
-                    return x
-    
-                def h4(m, x, y):
-                    x(mask=m, replace=False)[adapt(row_index, x), adapt(col_index, x)] << y
-                    return x
-    
-                def h5(m, x, y):
-                    x(mask=m, accum=gb.binary.plus)[adapt(row_index, x), adapt(col_index, x)] << y
-                    return x
-    
-                def i1(m, x, y):
                     (
-                        x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[adapt(row_index, x), adapt(col_index, x)]
+                        x(accum=gb.binary.plus, replace=True)[
+                            adapt(row_index, x), adapt(col_index, x)
+                        ]
                         << y
                     )
                     return x
-    
-                def i2(m, x, y):
-                    x(mask=m, accum=gb.binary.plus, replace=False)[adapt(row_index, x), adapt(col_index, x)] << y
+
+                def h2(x, y):
+                    (
+                        x(accum=gb.binary.plus, replace=False)[
+                            adapt(row_index, x), adapt(col_index, x)
+                        ]
+                        << y
+                    )
                     return x
-    
+
+                def h3(m, x, y):
+                    (
+                        x(mask=m, replace=test_replace_true)[
+                            adapt(row_index, x), adapt(col_index, x)
+                        ]
+                        << y
+                    )
+                    return x
+
+                def h4(m, x, y):
+                    x(mask=m, replace=False)[adapt(row_index, x), adapt(col_index, x)] << y
+                    return x
+
+                def h5(m, x, y):
+                    x(mask=m, accum=gb.binary.plus)[adapt(row_index, x), adapt(col_index, x)] << y
+                    return x
+
+                def i1(m, x, y):
+                    (
+                        x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[
+                            adapt(row_index, x), adapt(col_index, x)
+                        ]
+                        << y
+                    )
+                    return x
+
+                def i2(m, x, y):
+                    (
+                        x(mask=m, accum=gb.binary.plus, replace=False)[
+                            adapt(row_index, x), adapt(col_index, x)
+                        ]
+                        << y
+                    )
+                    return x
+
                 for dA in dAs:
                     for B, dB in zip(gBs, dBs):
                         compare(f1, (A.dup(), B), (dA.dup(), dB))
