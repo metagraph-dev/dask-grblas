@@ -64,26 +64,32 @@ class Matrix(BaseType):
         chunks="auto",
         name=None,
     ):
-        if type(rows) is da.Array and type(columns) is da.Array and type(values) is da.Array:
+        if (
+            dup_op is None
+            and type(rows) is da.Array
+            and type(columns) is da.Array
+            and type(values) is da.Array
+        ):
             implied_nrows = 1 + da.max(rows).compute()
             implied_ncols = 1 + da.max(columns).compute()
             if nrows is not None and implied_nrows > nrows:
                 raise Exception()
             if ncols is not None and implied_ncols > ncols:
                 raise Exception()
-
             nrows = implied_nrows if nrows is None else nrows
             ncols = implied_ncols if ncols is None else ncols
 
-            if dtype is None:
-                dtype = gb.Matrix.new(values.dtype, nrows=nrows, ncols=ncols).dtype
-            np_dtype_ = np_dtype(dtype)
-            chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_dtype_)
+            idtype = gb.Matrix.new(rows.dtype).dtype
+            np_idtype_ = np_dtype(idtype)
+            vdtype = gb.Matrix.new(values.dtype).dtype
+            np_vdtype_ = np_dtype(vdtype)
+
+            chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_idtype_)
 
             name_ = name
             name = str(name) if name else ""
-            rname = name + "-row-ranges" + tokenize(chunks[0])
-            cname = name + "-col-ranges" + tokenize(chunks[1])
+            rname = name + "-row-ranges" + tokenize(cls, chunks[0])
+            cname = name + "-col-ranges" + tokenize(cls, chunks[1])
             row_ranges = build_ranges_dask_array_from_chunks(chunks[0], rname)
             col_ranges = build_ranges_dask_array_from_chunks(chunks[1], cname)
             fragments = da.core.blockwise(
@@ -93,23 +99,24 @@ class Matrix(BaseType):
                 *(values, "k"),
                 *(row_ranges, "i"),
                 *(col_ranges, "j"),
-                dtype=np_dtype_,
+                dtype=np_idtype_,
                 meta=np.array([]),
             )
-            meta = InnerMatrix(gb.Matrix.new(dtype))
+            meta = InnerMatrix(gb.Matrix.new(vdtype))
             delayed = da.core.blockwise(
                 *(_from_values2D, "ij"),
                 *(fragments, "ijk"),
                 *(row_ranges, "i"),
                 *(col_ranges, "j"),
                 concatenate=False,
-                gb_dtype=dtype,
-                dtype=np_dtype_,
+                gb_dtype=vdtype,
+                dtype=np_vdtype_,
                 meta=meta,
                 name=name_,
             )
             return Matrix(delayed)
 
+        chunks = None
         matrix = gb.Matrix.from_values(
             rows, columns, values, nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=dtype
         )

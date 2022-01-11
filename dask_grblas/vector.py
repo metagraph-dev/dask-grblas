@@ -8,7 +8,13 @@ from grblas import binary, monoid, semiring
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
-from .utils import np_dtype, get_grblas_type, wrap_inner, build_ranges_dask_array_from_chunks, build_chunk_offsets_dask_array
+from .utils import (
+    np_dtype,
+    get_grblas_type,
+    wrap_inner,
+    build_ranges_dask_array_from_chunks,
+    build_chunk_offsets_dask_array,
+)
 
 
 class InnerVector(InnerBaseType):
@@ -97,41 +103,43 @@ class Vector(BaseType):
         chunks="auto",
         name=None,
     ):
-        if type(indices) is da.Array and type(values) is da.Array:
+        if dup_op is None and type(indices) is da.Array and type(values) is da.Array:
             implied_size = 1 + da.max(indices).compute()
             if size is not None and implied_size > size:
                 raise Exception()
-
             size = implied_size if size is None else size
-            if dtype is None:
-                dtype = gb.Vector.new(values.dtype, size).dtype
-            np_dtype_ = np_dtype(dtype)
-            chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_dtype_)
+
+            idtype = gb.Vector.new(indices.dtype).dtype
+            np_idtype_ = np_dtype(idtype)
+            vdtype = gb.Vector.new(values.dtype).dtype
+            np_vdtype_ = np_dtype(vdtype)
+            chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
             name_ = name
             name = str(name) if name else ""
-            name = name + "-index-ranges" + tokenize(chunks[0])
+            name = name + "-index-ranges" + tokenize(cls, chunks[0])
             index_ranges = build_ranges_dask_array_from_chunks(chunks[0], name)
             fragments = da.core.blockwise(
                 *(_pick1D, "ij"),
                 *(indices, "j"),
                 *(values, "j"),
                 *(index_ranges, "i"),
-                dtype=np_dtype_,
+                dtype=np_vdtype_,
                 meta=np.array([]),
             )
-            meta = InnerVector(gb.Vector.new(dtype))
+            meta = InnerVector(gb.Vector.new(vdtype))
             delayed = da.core.blockwise(
                 *(_from_values1D, "i"),
                 *(fragments, "ij"),
                 *(index_ranges, "i"),
                 concatenate=False,
                 gb_dtype=dtype,
-                dtype=np_dtype_,
+                dtype=np_vdtype_,
                 meta=meta,
                 name=name_,
             )
             return Vector(delayed)
 
+        chunks = None
         vector = gb.Vector.from_values(indices, values, size=size, dup_op=dup_op, dtype=dtype)
         return cls.from_vector(vector, chunks=chunks, name=name)
 

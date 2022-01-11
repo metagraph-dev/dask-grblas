@@ -128,7 +128,7 @@ def test_to_values(vs, ws):
     for dw in dws:
         compare(f0, w, dw)
         compare(f1, w, dw)
-    
+
 
 def test_dup(vs):
     v, dvs = vs

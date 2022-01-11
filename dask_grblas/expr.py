@@ -341,7 +341,7 @@ class GbDelayed:
 
 
 class Updater:
-    def __init__(self, parent, *, mask=None, accum=None, replace=False):
+    def __init__(self, parent, *, mask=None, accum=None, replace=False, input_mask=None):
         self.parent = parent
         self.mask = mask
         self.accum = accum
