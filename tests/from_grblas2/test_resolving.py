@@ -153,7 +153,7 @@ def test_updater_only_once():
         u[[0, 1]][0]
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_bad_extract_with_updater():
     u = Vector.from_values([0, 1, 3], [1, 2, 3])
     assert u[0].value == 1
@@ -178,7 +178,7 @@ def test_bad_extract_with_updater():
         s()[0]
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_updater_on_rhs():
     u = Vector.from_values([0, 1, 3], [1, 2, 3])
     with pytest.raises(TypeError, match="Assignment value must be a valid expression"):

@@ -123,7 +123,7 @@ def main():
             if line.startswith("def test_") and line[4:].split("(", 1)[0] in xfail:
                 key = line[4:].split("(", 1)[0]
                 msg = f"{xfail[key]!r}"
-                return f"@pytest.mark.xfail({msg!r})\n{line}"
+                return f"@pytest.mark.xfail({msg!r}, strict=True)\n{line}"
             if (
                 line.startswith("from grblas import ")
                 and ("Matrix" in line or "Vector" in line or "Scalar" in line)

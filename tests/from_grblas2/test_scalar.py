@@ -183,7 +183,7 @@ def test_is_empty(s):
         s.is_empty = True
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_update(s):
     s << 1
     assert s == 1
@@ -289,7 +289,7 @@ def test_wait(s):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_expr_is_like_scalar(s):
     v = Vector.from_values([1], [2])
     attrs = {attr for attr, val in inspect.getmembers(s)}
@@ -316,7 +316,7 @@ def test_expr_is_like_scalar(s):
     }
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_ndim(s):
     assert s.ndim == 0
     v = Vector.from_values([1], [2])
