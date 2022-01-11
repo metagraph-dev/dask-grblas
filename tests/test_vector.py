@@ -92,6 +92,42 @@ def test_new():
     compare(lambda x, y: type(x).new(y), (v, o), (dv, o), errors=True)
 
 
+def test_from_values():
+    n = 100
+    I = da.arange(n, chunks=10)
+    f = lambda module, arr: module.Vector.from_values(arr, arr, name="arange")
+    compare(f, (gb, I.compute()), (dgb, I))
+
+    I = [0, 1, 3, 4, 5]
+    V = [1.0, 2.0, 3.0, -4.0, 0.0]
+    I_da = da.from_array(I, chunks=3)
+    V_da = da.from_array(V, chunks=2)
+    f = lambda module, i, v, kwargs: module.Vector.from_values(
+        i, v, name="test-from-values", **kwargs
+    )
+    compare(f, (gb, I, V, {}), (dgb, I_da, V_da, {}))
+    compare(f, (gb, I, V, {}), (dgb, I_da, V_da, {"chunks": 3}))
+
+
+def test_to_values(vs, ws):
+    (v, dvs) = vs
+    (w, dws) = ws
+
+    def f0(v):
+        return v.to_values()[0]
+
+    def f1(v):
+        return v.to_values()[1]
+
+    for dv in dvs:
+        compare(f0, v, dv)
+        compare(f1, v, dv)
+
+    for dw in dws:
+        compare(f0, w, dw)
+        compare(f1, w, dw)
+    
+
 def test_dup(vs):
     v, dvs = vs
     for dv in dvs:

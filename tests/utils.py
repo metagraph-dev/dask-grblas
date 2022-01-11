@@ -1,3 +1,5 @@
+import numpy as np
+
 import grblas as gb
 
 import dask_grblas as dgb
@@ -26,7 +28,7 @@ def compare(func, gb_args, dgb_args, gb_kwargs={}, dgb_kwargs={}, *, compute=Non
             raise
         dgb_result = exc
     if compute:
-        assert dgb_result._meta.nvals == 0
+        assert type(gb_result) is np.ndarray or dgb_result._meta.nvals == 0
         try:
             # compute everything twice to ensure nothing is unexpectedly mutated
             first_dgb_result = dgb_result.compute()  # noqa
@@ -46,6 +48,9 @@ def compare(func, gb_args, dgb_args, gb_kwargs={}, dgb_kwargs={}, *, compute=Non
     elif isinstance(gb_result, Exception):
         assert str(gb_result) == str(dgb_result)
     else:
-        assert gb_result == dgb_result, (gb_result, dgb_result)
+        if type(gb_result) is np.ndarray:
+            assert np.all(gb_result == dgb_result), (gb_result, dgb_result)
+        else:
+            assert gb_result == dgb_result, (gb_result, dgb_result)
     for arg in dgb_objects:
         assert arg._meta.nvals == 0

@@ -356,6 +356,20 @@ def Bs():
     return B, (dB0, dB1, dB2)
 
 
+def test_from_values():
+    rows = [0, 0, 0, 1, 2, 2, 3, 6, 6, 9, 9, 1, 2, 3, 2, 4, 5, 4, 7, 8, 10, 11]
+    cols = [1, 2, 3, 2, 4, 5, 4, 7, 8, 10, 11, 0, 0, 0, 1, 2, 2, 3, 6, 6, 9, 9]
+    vals = [1.0] * 22
+    rows_da = da.from_array(rows, chunks=5)
+    cols_da = da.from_array(cols, chunks=5)
+    vals_da = da.from_array(vals, chunks=5)
+    f = lambda module, r, c, v, kwargs: module.Matrix.from_values(
+        r, c, v, name="test-from-values", **kwargs
+    )
+    compare(f, (gb, rows, cols, vals, {}), (dgb, rows_da, cols_da, vals_da, {}))
+    compare(f, (gb, rows, cols, vals, {}), (dgb, rows_da, cols_da, vals_da, {"chunks": 4}))
+
+
 def test_new():
     A = gb.Matrix.new(int)
     dA = dgb.Matrix.new(int)

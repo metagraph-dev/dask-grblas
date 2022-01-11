@@ -1069,13 +1069,10 @@ class Assigner:
                 band_offset_args = [None, None]
 
             delayed = da.core.blockwise(
-                _assign,
-                assign_ind,
-                x,
-                x_ind,
+                *(_assign, assign_ind),
+                *(x, x_ind),
                 *mask_args,
-                uniquifed,
-                x_ind,
+                *(uniquifed, x_ind),
                 *band_offset_args,
                 band_axis=band_axis,
                 band_selection=band_selection,

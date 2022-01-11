@@ -1,13 +1,14 @@
 import dask.array as da
 import numpy as np
 import grblas as gb
+from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
-from .utils import np_dtype, wrap_inner, build_chunk_offsets_dask_array
+from .utils import np_dtype, get_grblas_type, wrap_inner, build_ranges_dask_array_from_chunks, build_chunk_offsets_dask_array
 
 
 class InnerVector(InnerBaseType):
@@ -93,9 +94,44 @@ class Vector(BaseType):
         size=None,
         dup_op=None,
         dtype=None,
-        chunks=None,
+        chunks="auto",
         name=None,
     ):
+        if type(indices) is da.Array and type(values) is da.Array:
+            implied_size = 1 + da.max(indices).compute()
+            if size is not None and implied_size > size:
+                raise Exception()
+
+            size = implied_size if size is None else size
+            if dtype is None:
+                dtype = gb.Vector.new(values.dtype, size).dtype
+            np_dtype_ = np_dtype(dtype)
+            chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_dtype_)
+            name_ = name
+            name = str(name) if name else ""
+            name = name + "-index-ranges" + tokenize(chunks[0])
+            index_ranges = build_ranges_dask_array_from_chunks(chunks[0], name)
+            fragments = da.core.blockwise(
+                *(_pick1D, "ij"),
+                *(indices, "j"),
+                *(values, "j"),
+                *(index_ranges, "i"),
+                dtype=np_dtype_,
+                meta=np.array([]),
+            )
+            meta = InnerVector(gb.Vector.new(dtype))
+            delayed = da.core.blockwise(
+                *(_from_values1D, "i"),
+                *(fragments, "ij"),
+                *(index_ranges, "i"),
+                concatenate=False,
+                gb_dtype=dtype,
+                dtype=np_dtype_,
+                meta=meta,
+                name=name_,
+            )
+            return Vector(delayed)
+
         vector = gb.Vector.from_values(indices, values, size=size, dup_op=dup_op, dtype=dtype)
         return cls.from_vector(vector, chunks=chunks, name=name)
 
@@ -211,6 +247,21 @@ class Vector(BaseType):
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         other = self._expect_type(other, Vector, within="isclose", argname="other")
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+
+
+def _from_values1D(fragments, index_range, gb_dtype=None):
+    inds = np.concatenate([inds for (inds, _) in fragments])
+    vals = np.concatenate([vals for (_, vals) in fragments])
+    size = index_range[0].stop - index_range[0].start
+    return InnerVector(gb.Vector.from_values(inds, vals, size=size, dtype=gb_dtype))
+
+
+def _pick1D(indices, values, index_range):
+    index_range = index_range[0]
+    indices_in = (index_range.start <= indices) & (indices < index_range.stop)
+    indices = indices[indices_in] - index_range.start
+    values = values[indices_in]
+    return (indices, values)
 
 
 def _get_indices(tuple_extractor):

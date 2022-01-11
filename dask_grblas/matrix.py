@@ -1,12 +1,14 @@
 import dask.array as da
+import numpy as np
 import grblas as gb
+from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
-from .utils import np_dtype, wrap_inner
+from .utils import np_dtype, wrap_inner, build_ranges_dask_array_from_chunks
 
 
 class InnerMatrix(InnerBaseType):
@@ -59,9 +61,55 @@ class Matrix(BaseType):
         ncols=None,
         dup_op=None,
         dtype=None,
-        chunks=None,
+        chunks="auto",
         name=None,
     ):
+        if type(rows) is da.Array and type(columns) is da.Array and type(values) is da.Array:
+            implied_nrows = 1 + da.max(rows).compute()
+            implied_ncols = 1 + da.max(columns).compute()
+            if nrows is not None and implied_nrows > nrows:
+                raise Exception()
+            if ncols is not None and implied_ncols > ncols:
+                raise Exception()
+
+            nrows = implied_nrows if nrows is None else nrows
+            ncols = implied_ncols if ncols is None else ncols
+
+            if dtype is None:
+                dtype = gb.Matrix.new(values.dtype, nrows=nrows, ncols=ncols).dtype
+            np_dtype_ = np_dtype(dtype)
+            chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_dtype_)
+
+            name_ = name
+            name = str(name) if name else ""
+            rname = name + "-row-ranges" + tokenize(chunks[0])
+            cname = name + "-col-ranges" + tokenize(chunks[1])
+            row_ranges = build_ranges_dask_array_from_chunks(chunks[0], rname)
+            col_ranges = build_ranges_dask_array_from_chunks(chunks[1], cname)
+            fragments = da.core.blockwise(
+                *(_pick2D, "ijk"),
+                *(rows, "k"),
+                *(columns, "k"),
+                *(values, "k"),
+                *(row_ranges, "i"),
+                *(col_ranges, "j"),
+                dtype=np_dtype_,
+                meta=np.array([]),
+            )
+            meta = InnerMatrix(gb.Matrix.new(dtype))
+            delayed = da.core.blockwise(
+                *(_from_values2D, "ij"),
+                *(fragments, "ijk"),
+                *(row_ranges, "i"),
+                *(col_ranges, "j"),
+                concatenate=False,
+                gb_dtype=dtype,
+                dtype=np_dtype_,
+                meta=meta,
+                name=name_,
+            )
+            return Matrix(delayed)
+
         matrix = gb.Matrix.from_values(
             rows, columns, values, nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=dtype
         )
@@ -244,6 +292,27 @@ class TransposedMatrix:
     isequal = Matrix.isequal
     isclose = Matrix.isclose
     __getitem__ = Matrix.__getitem__
+
+
+def _from_values2D(fragments, row_range, col_range, gb_dtype=None):
+    rows = np.concatenate([rows for (rows, _, _) in fragments])
+    cols = np.concatenate([cols for (_, cols, _) in fragments])
+    vals = np.concatenate([vals for (_, _, vals) in fragments])
+    nrows = row_range[0].stop - row_range[0].start
+    ncols = col_range[0].stop - col_range[0].start
+    return InnerMatrix(
+        gb.Matrix.from_values(rows, cols, vals, nrows=nrows, ncols=ncols, dtype=gb_dtype)
+    )
+
+
+def _pick2D(rows, cols, values, row_range, col_range):
+    row_range, col_range = row_range[0], col_range[0]
+    rows_in = (row_range.start <= rows) & (rows < row_range.stop)
+    cols_in = (col_range.start <= cols) & (cols < col_range.stop)
+    rows = rows[rows_in & cols_in] - row_range.start
+    cols = cols[rows_in & cols_in] - col_range.start
+    values = values[rows_in & cols_in]
+    return (rows, cols, values)
 
 
 @da.core.concatenate_lookup.register(InnerMatrix)
