@@ -1,3 +1,5 @@
+import inspect
+
 import grblas as gb
 import pytest
 from grblas import dtypes
@@ -178,26 +180,28 @@ def test_update():
         compare(f, (s, v[0]), (ds, dv[0]))
 
 
-@pytest.mark.xfail
-def test_attrs():
-    s = gb.Scalar.from_value(3)
-    ds = dgb.Scalar.from_value(s)
-    assert set(dir(s)) - set(dir(ds)) == {
-        "_is_empty",
-        "_assign_element",
-        "_extract_element",
-        "_is_scalar",
-        "_prep_for_assign",
-        "_prep_for_extract",
-        "gb_obj",
-        "show",
+def test_signatures_match_grblas():
+    def has_signature(x):
+        try:
+            inspect.signature(x)
+        except Exception:
+            return False
+        else:
+            return True
+
+    s1 = gb.Scalar.from_value(1)
+    s2 = dgb.Scalar.from_value(1)
+    skip = {"from_pygraphblas", "to_pygraphblas", "__class__", "__init__"}
+    d1 = {
+        key: inspect.signature(val)
+        for key, val in inspect.getmembers(s1)
+        if has_signature(val) and key not in skip
     }
-    assert set(dir(ds)) - set(dir(s)) == {
-        "_delayed",
-        "_meta",
-        "_optional_dup",
-        "compute",
-        "from_delayed",
-        "persist",
-        "visualize",
+    d2 = {
+        key: inspect.signature(val)
+        for key, val in inspect.getmembers(s2)
+        if has_signature(val) and key not in skip
     }
+    for key, val in d1.items():
+        if not key.startswith("_") or key.startswith("__") and key in d2:
+            assert val == d2[key], (key, str(val), str(d2[key]))
