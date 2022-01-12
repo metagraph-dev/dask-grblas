@@ -144,7 +144,16 @@ class Vector(BaseType):
         return cls.from_vector(vector, chunks=chunks, name=name)
 
     @classmethod
-    def new(cls, dtype, size=0, *, name=None):
+    def new(cls, dtype, size=0, *, chunks='auto', name=None):
+        if size > 0:
+            chunks = da.core.normalize_chunks(chunks, (size,), dtype=int)
+            meta = gb.Vector.new(dtype)
+            vdtype = meta.dtype
+            np_vdtype_ = np_dtype(vdtype)
+            chunksz = build_ranges_dask_array_from_chunks(chunks[0], 'ranges-' + tokenize(chunks))
+            delayed = da.map_blocks(_new_Vector, chunksz, gb_dtype=vdtype, dtype=np_vdtype_, meta=InnerVector(meta))
+            return Vector(delayed)
+
         vector = gb.Vector.new(dtype, size)
         return cls.from_delayed(delayed(vector), vector.dtype, vector.size, name=name)
 
@@ -255,6 +264,10 @@ class Vector(BaseType):
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         other = self._expect_type(other, Vector, within="isclose", argname="other")
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+
+
+def _new_Vector(chunk_range, gb_dtype):
+    return InnerVector(gb.Vector.new(gb_dtype, size=chunk_range[0].stop - chunk_range[0].start))
 
 
 def _from_values1D(fragments, index_range, gb_dtype=None):
