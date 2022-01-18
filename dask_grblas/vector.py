@@ -144,14 +144,16 @@ class Vector(BaseType):
         return cls.from_vector(vector, chunks=chunks, name=name)
 
     @classmethod
-    def new(cls, dtype, size=0, *, chunks='auto', name=None):
+    def new(cls, dtype, size=0, *, chunks="auto", name=None):
         if size > 0:
             chunks = da.core.normalize_chunks(chunks, (size,), dtype=int)
             meta = gb.Vector.new(dtype)
             vdtype = meta.dtype
             np_vdtype_ = np_dtype(vdtype)
-            chunksz = build_ranges_dask_array_from_chunks(chunks[0], 'ranges-' + tokenize(chunks))
-            delayed = da.map_blocks(_new_Vector, chunksz, gb_dtype=vdtype, dtype=np_vdtype_, meta=InnerVector(meta))
+            chunksz = build_ranges_dask_array_from_chunks(chunks[0], "ranges-" + tokenize(chunks))
+            delayed = da.map_blocks(
+                _new_Vector, chunksz, gb_dtype=vdtype, dtype=np_vdtype_, meta=InnerVector(meta)
+            )
             return Vector(delayed)
 
         vector = gb.Vector.new(dtype, size)

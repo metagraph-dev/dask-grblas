@@ -8,7 +8,7 @@ from grblas import binary, monoid, semiring
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
-from .utils import np_dtype, wrap_inner, build_ranges_dask_array_from_chunks
+from .utils import np_dtype, wrap_inner, build_ranges_dask_array_from_chunks, wrap_dataframe
 
 
 class InnerMatrix(InnerBaseType):
@@ -49,6 +49,21 @@ class Matrix(BaseType):
         if chunks is not None:
             raise NotImplementedError()
         return cls.from_delayed(delayed(matrix), matrix.dtype, *matrix.shape, name=name)
+
+    @classmethod
+    def from_file(cls, filename, chunks='auto', nreaders=3):
+        df, nrows, ncols = wrap_dataframe(filename, npartitions=nreaders)
+        rows = df['r'].to_dask_array()
+        cols = df['c'].to_dask_array()
+        vals = df['d'].to_dask_array()
+        return cls.from_values(rows, cols, vals, chunks=chunks, nrows=nrows, ncols=ncols)
+        # chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np.int64)
+        # row_ranges = build_ranges_dask_array_from_chunks(chunks[0], 'chunks-' + tokenize(chunks[0]))
+        # col_ranges = build_ranges_dask_array_from_chunks(chunks[1], 'chunks-' + tokenize(chunks[1]))
+        # dtype = df['d'].dtype
+        # meta = InnerMatrix(gb.Matrix.new(dtype))
+        # delayed = da.core.blockwise(_df_to_chunk, 'ij', row_ranges, 'i', col_ranges, 'j', rcd_df=df, dtype=dtype, meta=meta)
+        # return Matrix(delayed)
 
     @classmethod
     def from_values(
@@ -257,8 +272,7 @@ class Matrix(BaseType):
             other, (Matrix, TransposedMatrix), within="isclose", argname="other"
         )
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
-
-
+    
 class TransposedMatrix:
 
     _is_transposed = True
@@ -328,6 +342,19 @@ def _pick2D(rows, cols, values, row_range, col_range):
     cols = cols[rows_in & cols_in] - col_range.start
     values = values[rows_in & cols_in]
     return (rows, cols, values)
+
+
+def _df_to_chunk(row_range, col_range, rcd_df):
+    row_range, col_range = row_range[0], col_range[0]
+    df = rcd_df[
+        (row_range.start <= rcd_df['r']) & (rcd_df['r'] < row_range.stop) &
+        (col_range.start <= rcd_df['c']) & (rcd_df['c'] < col_range.stop)
+    ]
+    return InnerMatrix(
+        gb.Matrix.from_values(
+            df['r'].to_numpy(), df['c'].to_numpy(), df['d'].to_numpy()
+        )
+    )
 
 
 @da.core.concatenate_lookup.register(InnerMatrix)

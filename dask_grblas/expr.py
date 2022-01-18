@@ -15,6 +15,7 @@ from .utils import (
     wrap_inner,
     build_chunk_offsets_dask_array,
     build_chunk_ranges_dask_array,
+    build_slice_dask_array_from_chunks
 )
 from grblas.exceptions import DimensionMismatch
 from dask.base import tokenize
@@ -376,6 +377,135 @@ class Updater:
             self.parent._update(delayed, accum=self.accum)
         else:
             self.parent._update(delayed, accum=self.accum, mask=self.mask, replace=self.replace)
+
+
+def _csc_chunk(row_range, col_range, indices, red_columns, track_indices=False):
+    row_range = row_range[0]
+    nrows = row_range.stop - row_range.start
+    if type(indices[0]) is slice:
+        s = indices[0]
+        indices = np.arange(s.start, s.stop, s.step, dtype=np.int64)
+    ncols = indices.size
+    idx = indices - row_range.start
+    idx_filter = (0 <= idx) & (idx < nrows)
+    if red_columns is not None:
+        _, red_columns = red_columns.value.to_values()
+        col_range = col_range[0]
+        col_range = np.arange(col_range.start, col_range.stop, dtype=indices.dtype)
+        idx_filter = idx_filter & np.isin(col_range, red_columns)
+    if track_indices:
+        col_range = col_range[0]
+        values = np.arange(col_range.start, col_range.stop, dtype=indices.dtype)
+        values = values[idx_filter]
+        is_iso = False
+    else:
+        values = np.array([1], dtype=indices.dtype)
+        is_iso = True
+    row_indices = idx[idx_filter]
+    indptr = np.empty(ncols + 1, np.int64)
+    indptr[0] = 0
+    np.cumsum(idx_filter, dtype=indptr.dtype, out=indptr[1:])
+    return wrap_inner(
+        gb.Matrix.ss.import_csc(
+            nrows=nrows,
+            ncols=ncols,
+            indptr=indptr,
+            row_indices=row_indices,
+            values=values,
+            is_iso=is_iso,
+            take_ownership=True,
+        )
+    )
+
+
+def _fill(inner_vector, rhs):
+    rhs = rhs.value if isinstance(rhs, InnerBaseType) else rhs
+    inner_vector.value[:] << rhs
+    return inner_vector
+
+
+def reduce_assign(
+    lhs, indices, rhs, dup_op='last', mask=None, accum=None, replace=False
+):
+    # lhs(mask, accum, replace)[i] << rhs
+    rhs_is_scalar = not (isinstance(rhs, BaseType) and type(rhs._meta) is gb.Vector)
+    if type(indices) is slice:
+        chunksz = 'auto' if rhs_is_scalar else rhs._delayed.chunks
+        indices = build_slice_dask_array_from_chunks(indices, lhs.size, chunksz)
+        indices_dtype = np.int64
+    elif type(indices) in {list, np.ndarray}:
+        chunksz = 'auto' if rhs_is_scalar else rhs._delayed.chunks
+        name = 'indices-array' + tokenize(indices, chunksz)
+        indices = da.from_array(np.array(indices), chunks=chunksz, name=name)
+        indices_dtype = indices.dtype
+    else:
+        indices_dtype = indices.dtype
+
+    if rhs_is_scalar:
+        # TODO: optimize this branch by avoiding O(N) fill-operation
+        if isinstance(rhs, BaseType):
+            dtype = rhs._meta.dtype
+            np_dtype_ = np_dtype(dtype)
+            meta = wrap_inner(rhs._meta)
+            rhs = rhs._delayed
+        else:
+            dtype = type(rhs)
+            np_dtype_ = dtype
+            meta = np.array([], dtype=np_dtype_)
+        rhs_vec = get_return_type(lhs).new(dtype, size=indices.size, chunks=(indices.chunks[0],))
+        rhs_vec._delayed = da.map_blocks(_fill, rhs_vec._delayed, rhs, dtype=np_dtype_, meta=meta)
+        rhs = rhs_vec
+
+    # create CSC matrix C from indices:
+    dtype = indices_dtype
+    meta = gb.Matrix.new(dtype)
+    lhs_chunk_ranges = build_chunk_ranges_dask_array(lhs._delayed, 0, "lhs-ranges")
+    # deal with default 
+    dup_ops = {'first': gb.monoid.min, 'last': gb.monoid.max}
+    if dup_op in dup_ops:
+        # remove this branch when near-semirings get supported
+        indices_chunk_ranges = build_chunk_ranges_dask_array(indices, 0, "indices-ranges")
+        delayed = da.core.blockwise(
+            *(_csc_chunk, "ij"),
+            *(lhs_chunk_ranges, "i"),
+            *(indices_chunk_ranges, "j"),
+            *(indices, "j"),
+            *(None, None),
+            track_indices=True,
+            dtype=dtype,
+            meta=wrap_inner(meta),
+        )
+        C = get_return_type(meta)(delayed)
+        red_columns = C.reduce_rowwise(op=dup_ops[dup_op]).new()
+        delayed = da.core.blockwise(
+            *(_csc_chunk, "ij"),
+            *(lhs_chunk_ranges, "i"),
+            *(indices_chunk_ranges, "j"),
+            *(indices, "j"),
+            *(red_columns._delayed, "i"),
+            dtype=dtype,
+            meta=wrap_inner(meta),
+        )
+        C = get_return_type(meta)(delayed)
+        dup_op = gb.monoid.any
+    else:
+        delayed = da.core.blockwise(
+            *(_csc_chunk, "ij"),
+            *(lhs_chunk_ranges, "i"),
+            *(None, None),
+            *(indices, "j"),
+            *(None, None),
+            dtype=dtype,
+            meta=wrap_inner(meta),
+        )
+        C = get_return_type(meta)(delayed)
+        red_columns = C.reduce_rowwise(op=gb.monoid.any).new()
+
+    semiring_dup_op_2nd = gb.operator.get_semiring(dup_op, gb.binary.second)
+    rhs = C.mxv(rhs, semiring_dup_op_2nd).new(mask=mask)
+    if accum is None:
+        rhs(mask=~red_columns.S) << lhs
+    lhs(mask=mask, accum=accum, replace=replace) << rhs
 
 
 class Fragmenter:

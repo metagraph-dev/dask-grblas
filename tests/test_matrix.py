@@ -357,6 +357,19 @@ def Bs():
     return B, (dB0, dB1, dB2)
 
 
+def test_from_file():
+    from scipy.io import mmread, mminfo
+    import pathlib
+
+    path = pathlib.Path(__file__).parent.parent.resolve()
+    filename = str(path / 'notebooks' / 'matrix_A.mtx')
+
+    M = mmread(filename)
+    M = gb.io.from_scipy_sparse_matrix(M)
+    dM = dgb.Matrix.from_file(filename)
+    compare(lambda x: x, M, dM)
+
+
 def test_from_values():
     rows = [0, 0, 0, 1, 2, 2, 3, 6, 6, 9, 9, 1, 2, 3, 2, 4, 5, 4, 7, 8, 10, 11]
     cols = [1, 2, 3, 2, 4, 5, 4, 7, 8, 10, 11, 0, 0, 0, 1, 2, 2, 3, 6, 6, 9, 9]

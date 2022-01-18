@@ -1,6 +1,11 @@
-import dask.array as da
+import os
 import numpy as np
+import pandas as pd
+import dask.array as da
+import dask.dataframe as dd
 from dask.base import tokenize
+from dask.delayed import delayed
+from .io import MMFile
 
 
 def np_dtype(dtype):
@@ -65,6 +70,89 @@ def build_ranges_dask_array_from_chunks(chunks, name, axis=0):
     # x[axis]
     return da.core.Array(ranges.dask, ranges.name, (chunks,), ranges.dtype, meta=ranges._meta)
 
+
+def build_slice_dask_array_from_chunks(s, size, chunks='auto'):
+    start, stop, step = s.indices(size)
+    indx = slice(start, stop, step)
+    chunk_sizes, = da.core.normalize_chunks(chunks, shape=(size,), dtype=int)
+    chunk_offsets = np.roll(np.cumsum(chunk_sizes), 1)
+    chunk_offsets[0] = 0
+    starts = start + step * chunk_offsets
+    stops = start + step * (chunk_offsets + chunk_sizes)
+    indx = np.array(
+        [slice(start, stop, step) for start, stop in zip(starts, stops)]
+    )
+    name = "slice_index-" + tokenize(indx, 0)
+    indx = da.core.from_array(indx, chunks=1, name=name)
+    return da.Array(
+        indx.dask, indx.name, (chunk_sizes,), indx.dtype, meta=indx._meta
+    )
+
+
+def rcd_df(r, c, d):
+    return pd.DataFrame({'r': r, 'c': c, 'd': d})
+
+
+def _read_MMFile_part(filename, line_start=None, line_stop=None, read_begin=None, read_end=None):
+    r, c, d = MMFile().read_part(filename, line_start=line_start, line_stop=line_stop, read_begin=read_begin, read_end=read_end)
+    return rcd_df(r, c, d)
+
+
+def wrap_dataframe(filename, npartitions=None, chunksize=None):
+    from scipy.io import mminfo
+    from math import ceil
+    
+    rows, cols, entries, format, field, symmetry = mminfo(filename)
+    if field == 'complex':
+        raise NotImplementedError()
+    elif field == 'real':
+        field_dtype = np.float64
+    else:
+        field_dtype = np.int64
+
+    if (npartitions is None) == (chunksize is None):
+        raise ValueError("Exactly one of npartitions and chunksize must be specified.")
+
+    if format == 'coordinate':
+        import os
+
+        read_begin = MMFile().get_data_begin(filename)
+        read_end = os.path.getsize(filename)
+
+        if chunksize is None:
+            chunksize = int(ceil((read_end - read_begin)/npartitions))
+        locations = list(range(read_begin, read_end, chunksize)) + [read_end]
+
+        dfs = [
+            delayed(_read_MMFile_part)(filename, read_begin=start, read_end=stop)
+            for (start, stop) in zip(locations[:-1], locations[1:])
+        ]
+    elif format == 'array':
+        if symmetry == 'general':
+            nnz = rows*cols
+        elif symmetry == 'skew':
+            nnz = (rows*cols - rows)//2
+        else:
+            nnz = (rows*cols + rows)//2
+
+        if chunksize is None:
+            chunksize = int(ceil(nnz / npartitions))
+        locations = list(range(0, nnz, chunksize)) + [nnz]
+
+        dfs = [
+            delayed(_read_MMFile_part)(filename, line_start=start, line_stop=stop)
+            for (start, stop) in zip(locations[:-1], locations[1:])
+        ]
+
+    meta = pd.DataFrame({
+        'r': pd.Series(dtype=np.int64),
+        'c': pd.Series(dtype=np.int64),
+        'd': pd.Series(dtype=field_dtype)
+    })
+    df = dd.from_delayed(dfs, meta)
+    mem_usage = df.memory_usage().compute().sum()
+    return df.repartition(partition_size=mem_usage/npartitions), rows, cols
+        
 
 # These will be finished constructed in __init__
 _grblas_types = {}
