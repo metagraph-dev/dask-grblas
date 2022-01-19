@@ -127,6 +127,7 @@ def wrap_dataframe(filename, npartitions=None, chunksize=None):
             delayed(_read_MMFile_part)(filename, read_begin=start, read_end=stop)
             for (start, stop) in zip(locations[:-1], locations[1:])
         ]
+
     elif format == 'array':
         if symmetry == 'general':
             nnz = rows*cols
@@ -150,8 +151,7 @@ def wrap_dataframe(filename, npartitions=None, chunksize=None):
         'd': pd.Series(dtype=field_dtype)
     })
     df = dd.from_delayed(dfs, meta)
-    mem_usage = df.memory_usage().compute().sum()
-    return df.repartition(partition_size=mem_usage/npartitions), rows, cols
+    return df, rows, cols
         
 
 # These will be finished constructed in __init__

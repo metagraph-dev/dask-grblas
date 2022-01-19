@@ -500,14 +500,14 @@ class MMFile(mmio.MMFile):
                         raise ValueError(
                             "Keyword arguments `read_begin` and `read_end` are not applicable "
                             "for this format.  Use `line_start` and `line_stop` instead.\n")
-            start_found = False
+
             if has_symmetry:
                 if is_skew:
-                    i, j = skew_I_J(offset, rows)
+                    i, j = skew_I_J(line_start, rows)
                 else:
-                    i, j = symm_I_J(offset, rows)
+                    i, j = symm_I_J(line_start, rows)
             else:
-                i, j = offset%rows, offset//rows
+                i, j = line_start%rows, line_start//rows
 
             matrix_line_no = -1
             line = 1

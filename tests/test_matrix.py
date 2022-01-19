@@ -358,14 +358,21 @@ def Bs():
 
 
 def test_from_file():
-    from scipy.io import mmread, mminfo
     import pathlib
+    from scipy.io import mmread
+    from scipy.sparse import coo_matrix
 
     path = pathlib.Path(__file__).parent.parent.resolve()
-    filename = str(path / 'notebooks' / 'matrix_A.mtx')
+    filename = str(path / 'notebooks' / 'coo_matrix_A.mtx')
 
     M = mmread(filename)
     M = gb.io.from_scipy_sparse_matrix(M)
+    dM = dgb.Matrix.from_file(filename)
+    compare(lambda x: x, M, dM)
+
+    filename = str(path / 'notebooks' / 'dense_matrix_A.mtx')
+    M = mmread(filename)
+    M = gb.io.from_scipy_sparse_matrix(coo_matrix(M))
     dM = dgb.Matrix.from_file(filename)
     compare(lambda x: x, M, dM)
 
