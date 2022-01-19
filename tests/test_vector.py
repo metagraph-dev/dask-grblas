@@ -1628,13 +1628,14 @@ def test_reduce_assign(vs, ws, vms, sms):
         index2_da,
         index3_da,
     ]:
+
         def f1(x, y):
             if isinstance(x, gb.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, dup_op='last')
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last")
             return x
 
         def g1(m, x, y):
@@ -1643,7 +1644,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(mask=m)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op='last')
+                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op="last")
             return x
 
         def g2(x, y):
@@ -1652,7 +1653,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(accum=gb.binary.plus)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, accum=gb.binary.plus, dup_op='last')
+                dgb.expr.reduce_assign(x, ind, y, accum=gb.binary.plus, dup_op="last")
             return x
 
         def g3(x, y):
@@ -1661,7 +1662,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(replace=True)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, dup_op='last', replace=True)
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last", replace=True)
             return x
 
         def g4(x, y):
@@ -1670,7 +1671,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(replace=False)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, dup_op='last', replace=False)
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last", replace=False)
             return x
 
         def h1(x, y):
@@ -1679,7 +1680,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(accum=gb.binary.plus, replace=True)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, dup_op='last', accum=gb.binary.plus, replace=True)
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last", accum=gb.binary.plus, replace=True)
             return x
 
         def h2(x, y):
@@ -1688,7 +1689,9 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(accum=gb.binary.plus, replace=False)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, dup_op='last', accum=gb.binary.plus, replace=False)
+                dgb.expr.reduce_assign(
+                    x, ind, y, dup_op="last", accum=gb.binary.plus, replace=False
+                )
             return x
 
         def h3(m, x, y):
@@ -1697,7 +1700,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(mask=m, replace=True)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op='last', replace=True)
+                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op="last", replace=True)
             return x
 
         def h4(m, x, y):
@@ -1706,7 +1709,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(mask=m, replace=False)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op='last', replace=False)
+                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op="last", replace=False)
             return x
 
         def h5(m, x, y):
@@ -1715,7 +1718,7 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(mask=m, accum=gb.binary.plus)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, mask=m, accum=gb.binary.plus, dup_op='last')
+                dgb.expr.reduce_assign(x, ind, y, mask=m, accum=gb.binary.plus, dup_op="last")
             return x
 
         def i1(m, x, y):
@@ -1724,7 +1727,9 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(mask=m, accum=gb.binary.plus, replace=True)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, mask=m, accum=gb.binary.plus, replace=True, dup_op='last')
+                dgb.expr.reduce_assign(
+                    x, ind, y, mask=m, accum=gb.binary.plus, replace=True, dup_op="last"
+                )
             return x
 
         def i2(m, x, y):
@@ -1733,7 +1738,9 @@ def test_reduce_assign(vs, ws, vms, sms):
                 x(mask=m, accum=gb.binary.plus, replace=False)[ind] << y
             else:
                 ind = index
-                dgb.expr.reduce_assign(x, ind, y, mask=m, accum=gb.binary.plus, replace=False, dup_op='last')
+                dgb.expr.reduce_assign(
+                    x, ind, y, mask=m, accum=gb.binary.plus, replace=False, dup_op="last"
+                )
             return x
 
         for dv in dvs:

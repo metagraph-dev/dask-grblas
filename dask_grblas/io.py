@@ -1,8 +1,7 @@
 import os
 
 from math import floor, sqrt
-from numpy import (asarray, real, imag, conj, zeros, ndarray, concatenate,
-                   ones, can_cast, empty)
+from numpy import asarray, real, imag, conj, zeros, ndarray, concatenate, ones, can_cast, empty
 from scipy.io import mmio  # noqa
 from scipy.sparse import coo_matrix, isspmatrix
 
@@ -28,7 +27,7 @@ def symm_col(area, n):
     """
     returns largest integer x such that area >= n + (n - 1) + ... + (n - x + 1)
     """
-    return floor((2*n + 1 - sqrt((2*n + 1)**2 - 8*area))/2)
+    return floor((2 * n + 1 - sqrt((2 * n + 1) ** 2 - 8 * area)) / 2)
 
 
 def symm_area(col, n):
@@ -37,7 +36,7 @@ def symm_area(col, n):
     i.e., the number of matrix elements below and including the diagonal and
     from column 0 to column `col`
     """
-    return col*(2*n - col + 1)//2
+    return col * (2 * n - col + 1) // 2
 
 
 def skew_I_J(pos, n):
@@ -61,7 +60,7 @@ def skew_col(area, n):
     """
     returns largest integer x such that area >= (n - 1) + (n - 2) + ... + (n - x)
     """
-    return floor((2*n - 1 - sqrt((2*n - 1)**2 - 8*area))/2)
+    return floor((2 * n - 1 - sqrt((2 * n - 1) ** 2 - 8 * area)) / 2)
 
 
 def skew_area(col, n):
@@ -70,7 +69,7 @@ def skew_area(col, n):
     i.e., the number of matrix elements below the diagonal and
     from column 0 to column `col`
     """
-    return col*(2*n - col - 1)//2
+    return col * (2 * n - col - 1) // 2
 
 
 # -----------------------------------------------------------------------------
@@ -84,7 +83,7 @@ def home(stream, search_window_size=8):
         return
     else:
         stream.seek(-1, os.SEEK_CUR)
-        if stream.read(1) == b'\n':
+        if stream.read(1) == b"\n":
             return
 
     step = min(search_window_size, stream.tell())
@@ -115,7 +114,9 @@ def mmread(source, *, dup_op=None, name=None, row_begin=0, row_end=None, col_beg
         from scipy.sparse import coo_matrix  # noqa
     except ImportError:  # pragma: no cover
         raise ImportError("scipy is required to read Matrix Market files")
-    array = MMFile().read(source, row_begin=row_begin, row_end=row_end, col_begin=col_begin, col_end=col_end)
+    array = MMFile().read(
+        source, row_begin=row_begin, row_end=row_end, col_begin=col_begin, col_end=col_end
+    )
     if isinstance(array, coo_matrix):
         nrows, ncols = array.shape
         return Matrix.from_values(
@@ -180,13 +181,19 @@ class MMFile(mmio.MMFile):
 
         try:
             self._parse_header(stream)
-            return self._parse_body_part(stream, line_start=line_start, line_stop=line_stop, read_begin=read_begin, read_end=read_end)
+            return self._parse_body_part(
+                stream,
+                line_start=line_start,
+                line_stop=line_stop,
+                read_begin=read_begin,
+                read_end=read_end,
+            )
 
         finally:
             if close_it:
                 stream.close()
 
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
     def read_chunk(self, source, row_begin=0, row_end=None, col_begin=0, col_end=None):
         """
         Reads the contents of a Matrix Market file-like 'source' into a matrix.
@@ -207,18 +214,33 @@ class MMFile(mmio.MMFile):
 
         try:
             self._parse_header(stream)
-            return self._parse_body_chunk(stream, row_begin=row_begin, row_end=row_end, col_begin=col_begin, col_end=col_end, line_start=line_start, line_stop=line_stop, read_begin=read_begin, read_end=read_end)
+            return self._parse_body_chunk(
+                stream,
+                row_begin=row_begin,
+                row_end=row_end,
+                col_begin=col_begin,
+                col_end=col_end,
+                line_start=line_start,
+                line_stop=line_stop,
+                read_begin=read_begin,
+                read_end=read_end,
+            )
 
         finally:
             if close_it:
                 stream.close()
 
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
 
     def _parse_body_chunk(self, stream, row_begin=0, row_end=None, col_begin=0, col_end=None):
-        rows, cols, entries, format, field, symm = (self.rows, self.cols,
-                                                    self.entries, self.format,
-                                                    self.field, self.symmetry)
+        rows, cols, entries, format, field, symm = (
+            self.rows,
+            self.cols,
+            self.entries,
+            self.format,
+            self.field,
+            self.symmetry,
+        )
 
         if row_end:
             chunk_rows = row_end - row_begin
@@ -257,7 +279,7 @@ class MMFile(mmio.MMFile):
             while line:
                 line = stream.readline()
                 # line.startswith('%')
-                if not line or line[0] in ['%', 37] or not line.strip():
+                if not line or line[0] in ["%", 37] or not line.strip():
                     continue
                 if is_integer:
                     aij = int(line)
@@ -283,7 +305,7 @@ class MMFile(mmio.MMFile):
                             a[j - row_begin, i - col_begin] = conj(aij)
                         else:
                             a[j - row_begin, i - col_begin] = aij
-                if i < rows-1:
+                if i < rows - 1:
                     i = i + 1
                 else:
                     j = j + 1
@@ -296,7 +318,7 @@ class MMFile(mmio.MMFile):
                             col_is_hit = col_begin <= j and j < col_end
                             if row_is_hit and col_is_hit:
                                 a[i - row_begin, j - col_begin] = 0
-                            if i < rows-1:
+                            if i < rows - 1:
                                 i += 1
 
             if is_skew:
@@ -314,11 +336,11 @@ class MMFile(mmio.MMFile):
             while line:
                 line = stream.readline()
                 # line.startswith('%')
-                if not line or line[0] in ['%', 37] or not line.strip():
+                if not line or line[0] in ["%", 37] or not line.strip():
                     continue
                 l = line.split()
                 i, j = map(int, l[:2])
-                i, j = i-1, j-1
+                i, j = i - 1, j - 1
                 if is_integer:
                     aij = int(l[2])
                 elif is_unsigned_integer:
@@ -352,35 +374,34 @@ class MMFile(mmio.MMFile):
                 # empty matrix
                 return coo_matrix((chunk_rows, chunk_cols), dtype=dtype)
 
-            I = zeros(0, dtype='intc')
-            I2 = zeros(0, dtype='intc')
-            J = zeros(0, dtype='intc')
-            J2 = zeros(0, dtype='intc')
+            I = zeros(0, dtype="intc")
+            I2 = zeros(0, dtype="intc")
+            J = zeros(0, dtype="intc")
+            J2 = zeros(0, dtype="intc")
             if is_pattern:
-                V = ones(0, dtype='int8')
-                V2 = ones(0, dtype='int8')
+                V = ones(0, dtype="int8")
+                V2 = ones(0, dtype="int8")
             elif is_integer:
-                V = zeros(0, dtype='intp')
-                V2 = zeros(0, dtype='intp')
+                V = zeros(0, dtype="intp")
+                V2 = zeros(0, dtype="intp")
             elif is_unsigned_integer:
-                V = zeros(0, dtype='uint64')
-                V2 = zeros(0, dtype='uint64')
+                V = zeros(0, dtype="uint64")
+                V2 = zeros(0, dtype="uint64")
             elif is_complex:
-                V = zeros(0, dtype='complex')
-                V2 = zeros(0, dtype='complex')
+                V = zeros(0, dtype="complex")
+                V2 = zeros(0, dtype="complex")
             else:
-                V = zeros(0, dtype='float')
-                V2 = zeros(0, dtype='float')
+                V = zeros(0, dtype="float")
+                V2 = zeros(0, dtype="float")
 
             entry_number = 0
             for line in stream:
                 # line.startswith('%')
-                if not line or line[0] in ['%', 37] or not line.strip():
+                if not line or line[0] in ["%", 37] or not line.strip():
                     continue
 
-                if entry_number+1 > entries:
-                    raise ValueError("'entries' in header is smaller than "
-                                     "number of entries")
+                if entry_number + 1 > entries:
+                    raise ValueError("'entries' in header is smaller than " "number of entries")
                 l = line.split()
                 i, j = map(int, l[:2])
 
@@ -429,7 +450,7 @@ class MMFile(mmio.MMFile):
             J -= 1
 
             if has_symmetry:
-                mask = (I != J)       # off diagonal mask
+                mask = I != J  # off diagonal mask
                 od_I = I[mask]
                 od_J = J[mask]
                 od_V = V[mask]
@@ -452,7 +473,7 @@ class MMFile(mmio.MMFile):
                     V2 = V2.conjugate()
 
                 V = concatenate((V, od_V, V2))
-                
+
                 I -= row_begin
                 J -= col_begin
 
@@ -462,12 +483,19 @@ class MMFile(mmio.MMFile):
 
         return a
 
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
 
-    def _parse_body_part(self, stream, line_start=None, line_stop=None, read_begin=None, read_end=None):
-        rows, cols, entries, format, field, symm = (self.rows, self.cols,
-                                                    self.entries, self.format,
-                                                    self.field, self.symmetry)
+    def _parse_body_part(
+        self, stream, line_start=None, line_stop=None, read_begin=None, read_end=None
+    ):
+        rows, cols, entries, format, field, symm = (
+            self.rows,
+            self.cols,
+            self.entries,
+            self.format,
+            self.field,
+            self.symmetry,
+        )
 
         dtype = self.DTYPES_BY_FIELD.get(field, None)
 
@@ -479,18 +507,18 @@ class MMFile(mmio.MMFile):
         is_herm = symm == self.SYMMETRY_HERMITIAN
         is_pattern = field == self.FIELD_PATTERN
 
-        I = empty(0, dtype='intc')
-        J = empty(0, dtype='intc')
+        I = empty(0, dtype="intc")
+        J = empty(0, dtype="intc")
         if is_pattern:
-            V = empty(0, dtype='int8')
+            V = empty(0, dtype="int8")
         elif is_integer:
-            V = empty(0, dtype='intp')
+            V = empty(0, dtype="intp")
         elif is_unsigned_integer:
-            V = empty(0, dtype='uint64')
+            V = empty(0, dtype="uint64")
         elif is_complex:
-            V = empty(0, dtype='complex')
+            V = empty(0, dtype="complex")
         else:
-            V = empty(0, dtype='float')
+            V = empty(0, dtype="float")
 
         if format == self.FORMAT_ARRAY:
             if line_start is None:
@@ -499,7 +527,8 @@ class MMFile(mmio.MMFile):
                     if not (read_begin is None and read_end is None):
                         raise ValueError(
                             "Keyword arguments `read_begin` and `read_end` are not applicable "
-                            "for this format.  Use `line_start` and `line_stop` instead.\n")
+                            "for this format.  Use `line_start` and `line_stop` instead.\n"
+                        )
 
             if has_symmetry:
                 if is_skew:
@@ -507,7 +536,7 @@ class MMFile(mmio.MMFile):
                 else:
                     i, j = symm_I_J(line_start, rows)
             else:
-                i, j = line_start%rows, line_start//rows
+                i, j = line_start % rows, line_start // rows
 
             matrix_line_no = -1
             line = 1
@@ -515,7 +544,7 @@ class MMFile(mmio.MMFile):
             while line:
                 line = stream.readline()
                 # line.startswith('%')
-                if not line or line[0] in ['%', 37] or not line.strip():
+                if not line or line[0] in ["%", 37] or not line.strip():
                     continue
 
                 matrix_line_no += 1
@@ -549,7 +578,7 @@ class MMFile(mmio.MMFile):
                         else:
                             # a[j, i] = aij
                             V_ += [aij]
-                if i < rows-1:
+                if i < rows - 1:
                     i = i + 1
                 else:
                     j = j + 1
@@ -558,7 +587,7 @@ class MMFile(mmio.MMFile):
                     else:
                         i = j
                         if is_skew:
-                            if i < rows-1:
+                            if i < rows - 1:
                                 i += 1
 
             I = asarray(I_, dtype=I.dtype)
@@ -573,8 +602,8 @@ class MMFile(mmio.MMFile):
                     if not (line_start is None and line_stop is None):
                         raise ValueError(
                             "Keyword arguments `line_start` and `line_stop` are not applicable "
-                            "for this format.  Use `read_begin` and `read_end` instead.\n")
-
+                            "for this format.  Use `read_begin` and `read_end` instead.\n"
+                        )
 
             if entries == 0:
                 # empty matrix
@@ -604,7 +633,7 @@ class MMFile(mmio.MMFile):
                     # print(f'STOP: {read_begin=}; {read_end=}; {stream.tell()=}')
                     break
 
-                if not line or line[0] in ['%', 37] or not line.strip():
+                if not line or line[0] in ["%", 37] or not line.strip():
                     continue
 
                 # print(f'CONT: {read_begin=}; {read_end=}; {stream.tell()=}')
@@ -637,7 +666,7 @@ class MMFile(mmio.MMFile):
             J -= 1
 
             if has_symmetry:
-                mask = (I != J)       # off diagonal mask
+                mask = I != J  # off diagonal mask
                 od_I = I[mask]
                 od_J = J[mask]
                 od_V = V[mask]

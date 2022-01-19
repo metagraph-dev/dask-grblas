@@ -357,24 +357,44 @@ def Bs():
     return B, (dB0, dB1, dB2)
 
 
-def test_from_file():
+def test_from_MMfile():
     import pathlib
     from scipy.io import mmread
     from scipy.sparse import coo_matrix
 
     path = pathlib.Path(__file__).parent.parent.resolve()
-    filename = str(path / 'notebooks' / 'coo_matrix_A.mtx')
+    filename = str(path / "notebooks" / "coo_matrix_A.mtx")
 
     M = mmread(filename)
     M = gb.io.from_scipy_sparse_matrix(M)
-    dM = dgb.Matrix.from_file(filename)
+    dM = dgb.Matrix.from_MMfile(filename)
     compare(lambda x: x, M, dM)
 
-    filename = str(path / 'notebooks' / 'dense_matrix_A.mtx')
+    filename = str(path / "notebooks" / "dense_matrix_A.mtx")
     M = mmread(filename)
     M = gb.io.from_scipy_sparse_matrix(coo_matrix(M))
-    dM = dgb.Matrix.from_file(filename)
+    dM = dgb.Matrix.from_MMfile(filename)
     compare(lambda x: x, M, dM)
+
+
+def test_to_MMfile(As):
+    import os
+    import pathlib
+    from scipy.io import mmread
+
+    path = pathlib.Path(__file__).parent.parent.resolve()
+    filename0 = "coo_matrix_dA.mtx"
+    filename1 = str(path / "notebooks" / filename0)
+
+    A, dAs = As
+    for target in [filename0, filename1]:
+        for dA in dAs:
+            dA.to_MMfile(target)
+            M = mmread(target)
+            M = gb.io.from_scipy_sparse_matrix(M)
+            A_read = dgb.Matrix.from_matrix(M)
+            compare(lambda x: x, A, A_read)
+            os.remove(target)
 
 
 def test_from_values():

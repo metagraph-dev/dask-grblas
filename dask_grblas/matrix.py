@@ -8,7 +8,13 @@ from grblas import binary, monoid, semiring
 from .base import BaseType, InnerBaseType
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
-from .utils import np_dtype, wrap_inner, build_ranges_dask_array_from_chunks, wrap_dataframe
+from .utils import (
+    np_dtype,
+    wrap_inner,
+    build_ranges_dask_array_from_chunks,
+    build_chunk_ranges_dask_array,
+    wrap_dataframe,
+)
 
 
 class InnerMatrix(InnerBaseType):
@@ -51,11 +57,11 @@ class Matrix(BaseType):
         return cls.from_delayed(delayed(matrix), matrix.dtype, *matrix.shape, name=name)
 
     @classmethod
-    def from_file(cls, filename, chunks='auto', nreaders=3):
-        df, nrows, ncols = wrap_dataframe(filename, npartitions=nreaders)
-        rows = df['r'].to_dask_array()
-        cols = df['c'].to_dask_array()
-        vals = df['d'].to_dask_array()
+    def from_MMfile(cls, filename, chunks="auto", nreaders=3):
+        df, nrows, ncols = wrap_dataframe(filename, nreaders)
+        rows = df["r"].to_dask_array()
+        cols = df["c"].to_dask_array()
+        vals = df["d"].to_dask_array()
         return cls.from_values(rows, cols, vals, chunks=chunks, nrows=nrows, ncols=ncols)
         # chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np.int64)
         # row_ranges = build_ranges_dask_array_from_chunks(chunks[0], 'chunks-' + tokenize(chunks[0]))
@@ -64,6 +70,45 @@ class Matrix(BaseType):
         # meta = InnerMatrix(gb.Matrix.new(dtype))
         # delayed = da.core.blockwise(_df_to_chunk, 'ij', row_ranges, 'i', col_ranges, 'j', rcd_df=df, dtype=dtype, meta=meta)
         # return Matrix(delayed)
+
+    def to_MMfile(self, target):
+        import os
+
+        delayed = self._delayed
+        row_ranges = build_chunk_ranges_dask_array(delayed, 0, "row-ranges-" + tokenize(delayed, 0))
+        col_ranges = build_chunk_ranges_dask_array(delayed, 1, "col-ranges-" + tokenize(delayed, 1))
+        saved = da.core.blockwise(
+            *(_mmwrite_chunk, "ij"),
+            *(delayed, "ij"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            nrows=self.nrows,
+            ncols=self.ncols,
+            final_target=target,
+            adjust_chunks={"i": 4, "j": 0},
+            dtype=object,
+            meta=np.array([], dtype=object),
+        )
+        saved = da.reduction(
+            saved,
+            _identity,
+            _concatenate_files,
+            axis=(1,),
+            concatenate=False,
+            dtype=object,
+            meta=np.array([], dtype=object),
+        )
+        saved = da.reduction(
+            saved,
+            _identity,
+            _concatenate_files,
+            axis=(0,),
+            concatenate=False,
+            dtype=object,
+            meta=np.array([], dtype=object),
+        ).compute()
+
+        os.rename(saved[0], target)
 
     @classmethod
     def from_values(
@@ -272,7 +317,8 @@ class Matrix(BaseType):
             other, (Matrix, TransposedMatrix), within="isclose", argname="other"
         )
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
-    
+
+
 class TransposedMatrix:
 
     _is_transposed = True
@@ -347,14 +393,105 @@ def _pick2D(rows, cols, values, row_range, col_range):
 def _df_to_chunk(row_range, col_range, rcd_df):
     row_range, col_range = row_range[0], col_range[0]
     df = rcd_df[
-        (row_range.start <= rcd_df['r']) & (rcd_df['r'] < row_range.stop) &
-        (col_range.start <= rcd_df['c']) & (rcd_df['c'] < col_range.stop)
+        (row_range.start <= rcd_df["r"])
+        & (rcd_df["r"] < row_range.stop)
+        & (col_range.start <= rcd_df["c"])
+        & (rcd_df["c"] < col_range.stop)
     ]
     return InnerMatrix(
-        gb.Matrix.from_values(
-            df['r'].to_numpy(), df['c'].to_numpy(), df['d'].to_numpy()
-        )
+        gb.Matrix.from_values(df["r"].to_numpy(), df["c"].to_numpy(), df["d"].to_numpy())
     )
+
+
+def _mmwrite_chunk(chunk, row_range, col_range, nrows, ncols, final_target):
+    import os
+    from scipy.sparse import coo_matrix
+    from scipy.io import mmwrite
+
+    row_range, col_range = row_range[0], col_range[0]
+
+    r, c, d = chunk.value.to_values()
+    coo = coo_matrix(
+        (d, (row_range.start + r, col_range.start + c)),
+        shape=(nrows, ncols)
+    )
+
+    path, basename = os.path.split(final_target)
+    basename = (
+        f"i{row_range.start}-{row_range.stop}"
+        f"j{col_range.start}-{col_range.stop}"
+        f"_{basename}.{tokenize(chunk)}.mtx"
+    )
+    chunk_target = os.path.join(path, basename)
+
+    mmwrite(chunk_target, coo, symmetry="general")
+    return np.array([chunk_target, final_target, row_range, col_range])
+
+
+def _identity(chunk, keepdims=None, axis=None):
+    return chunk
+
+
+def _concatenate_files(chunk_files, keepdims=None, axis=None):
+    import os
+    import shutil
+    from scipy.io.mmio import MMFile, mminfo
+
+    chunk_files = chunk_files if type(chunk_files) is list else [chunk_files]
+    first_chunk_file, _, row_range_first, col_range_first = chunk_files[0]
+    _, final_target, row_range_last, col_range_last = chunk_files[-1]
+
+    if axis == (0,):
+        row_range = slice(row_range_first.start, row_range_last.stop)
+        col_range = col_range_first
+    else:
+        row_range = row_range_first
+        col_range = slice(col_range_first.start, col_range_last.stop)
+
+    path, basename = os.path.split(final_target)
+    basename = (
+        f"i{row_range.start}-{row_range.stop}"
+        f"j{col_range.start}-{col_range.stop}"
+        f"_{basename}.{tokenize(chunk_files)}.mtx"
+    )
+    temp_target = os.path.join(path, basename)
+
+    # compute shape spec
+    nnz = 0
+    for source, _, _, _ in chunk_files:
+        nrows, ncols, entries, _, _, _ = mminfo(source)
+        nnz += entries
+
+    with open(temp_target, "wb") as outstream:
+        # copy header lines from the first chunk file:
+        stream, close_it = MMFile()._open(first_chunk_file)
+
+        while stream.read(1) == b"%":
+            stream.seek(-1, os.SEEK_CUR)
+            data = stream.readline()
+            outstream.write(data)
+
+        # write shape specs:
+        data = "%i %i %i\n" % (nrows, ncols, nnz)
+        outstream.write(data.encode("latin1"))
+
+        if close_it:
+            stream.close()
+
+        for source, _, _, _ in chunk_files:
+            MMf = MMFile()
+            instream, close_it = MMf._open(source)
+
+            try:
+                MMf._parse_header(instream)
+                shutil.copyfileobj(instream, outstream)
+
+            finally:
+                if close_it:
+                    instream.close()
+                os.remove(source)
+
+    return np.array([temp_target, final_target, row_range, col_range])
 
 
 @da.core.concatenate_lookup.register(InnerMatrix)

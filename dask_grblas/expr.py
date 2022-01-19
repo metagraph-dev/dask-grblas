@@ -15,7 +15,7 @@ from .utils import (
     wrap_inner,
     build_chunk_offsets_dask_array,
     build_chunk_ranges_dask_array,
-    build_slice_dask_array_from_chunks
+    build_slice_dask_array_from_chunks,
 )
 from grblas.exceptions import DimensionMismatch
 from dask.base import tokenize
@@ -424,18 +424,16 @@ def _fill(inner_vector, rhs):
     return inner_vector
 
 
-def reduce_assign(
-    lhs, indices, rhs, dup_op='last', mask=None, accum=None, replace=False
-):
+def reduce_assign(lhs, indices, rhs, dup_op="last", mask=None, accum=None, replace=False):
     # lhs(mask, accum, replace)[i] << rhs
     rhs_is_scalar = not (isinstance(rhs, BaseType) and type(rhs._meta) is gb.Vector)
     if type(indices) is slice:
-        chunksz = 'auto' if rhs_is_scalar else rhs._delayed.chunks
+        chunksz = "auto" if rhs_is_scalar else rhs._delayed.chunks
         indices = build_slice_dask_array_from_chunks(indices, lhs.size, chunksz)
         indices_dtype = np.int64
     elif type(indices) in {list, np.ndarray}:
-        chunksz = 'auto' if rhs_is_scalar else rhs._delayed.chunks
-        name = 'indices-array' + tokenize(indices, chunksz)
+        chunksz = "auto" if rhs_is_scalar else rhs._delayed.chunks
+        name = "indices-array" + tokenize(indices, chunksz)
         indices = da.from_array(np.array(indices), chunks=chunksz, name=name)
         indices_dtype = indices.dtype
     else:
@@ -460,8 +458,8 @@ def reduce_assign(
     dtype = indices_dtype
     meta = gb.Matrix.new(dtype)
     lhs_chunk_ranges = build_chunk_ranges_dask_array(lhs._delayed, 0, "lhs-ranges")
-    # deal with default 
-    dup_ops = {'first': gb.monoid.min, 'last': gb.monoid.max}
+    # deal with default
+    dup_ops = {"first": gb.monoid.min, "last": gb.monoid.max}
     if dup_op in dup_ops:
         # remove this branch when near-semirings get supported
         indices_chunk_ranges = build_chunk_ranges_dask_array(indices, 0, "indices-ranges")
