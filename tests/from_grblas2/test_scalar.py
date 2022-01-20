@@ -214,6 +214,7 @@ def test_not_hashable(s):
         hash(s)
 
 
+@pytest.mark.xfail("'Should work in upcoming grblas release'", strict=False)
 def test_cscalar():
     c1 = _CScalar(Scalar.from_value(5))
     assert c1 == _CScalar(Scalar.from_value(5))

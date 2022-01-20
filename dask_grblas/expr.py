@@ -673,7 +673,7 @@ def _uniquify(ndim, index, obj, mask=None):
                 indx = list(unique_indx)
                 if isinstance(obj, BaseType):
                     obj = extract(obj, obj_indx, axis)
-                if mask:
+                if mask is not None:
                     mask = extract(mask, obj_indx, axis)
         unique_indices_tuple += (indx,)
     return unique_indices_tuple, obj, mask

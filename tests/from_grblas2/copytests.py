@@ -75,6 +75,7 @@ XFAIL_TESTS = {
         "test_update": "Needs investigated",
         "test_expr_is_like_scalar": "Needs investigated",
         "test_ndim": "Needs investigated",
+        "test_cscalar": "Should work in upcoming grblas release",
     },
     "test_vector.py": {
         "test_resize": "Needs investigated",
@@ -116,6 +117,7 @@ XFAIL_TESTS = {
 }
 NOT_STRICT = {
     "test_numpyops.py": {"test_npunary"},
+    "test_scalar.py": {"test_cscalar"},
 }
 
 
