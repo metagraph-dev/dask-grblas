@@ -308,7 +308,7 @@ def test_monoid_parameterized():
 
 
 @pytest.mark.slow
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_semiring_parameterized():
     def plus_plus_x(x=0):
         def inner(left, right):

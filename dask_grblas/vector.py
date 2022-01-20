@@ -226,4 +226,5 @@ def _concat_vector(seq, axis=0):
     return InnerVector(value)
 
 
+gb.utils._output_types[Vector] = gb.Vector
 from .matrix import InnerMatrix  # noqa isort:skip
