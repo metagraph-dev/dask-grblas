@@ -263,3 +263,7 @@ def _concat_matrix(seq, axis=0):
     else:
         value = gb.ss.concat([[item.value for item in seq]])
     return InnerMatrix(value)
+
+
+gb.utils._output_types[Matrix] = gb.Matrix
+gb.utils._output_types[TransposedMatrix] = gb.matrix.TransposedMatrix

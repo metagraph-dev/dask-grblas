@@ -60,6 +60,8 @@ XFAIL_TESTS = {
         "test_lastk": "Needs investigated",
         "test_deprecated": "Needs investigated",
         "test_ndim": "Expressions need .ndim",
+        "test_compactify": "Needs investigated",
+        "test_sizeof": "Needs investigated",
     },
     "test_op.py": {
         "test_semiring_parameterized": "Needs investigated",
@@ -67,6 +69,7 @@ XFAIL_TESTS = {
     "test_resolving.py": {
         "test_bad_extract_with_updater": "Needs investigated",
         "test_updater_on_rhs": "Needs investigated",
+        "test_py_indices": "Needs investigated",
     },
     "test_scalar.py": {
         "test_update": "Needs investigated",
@@ -80,12 +83,10 @@ XFAIL_TESTS = {
         "test_ewise_add": "Needs investigated",
         "test_extract_input_mask": "Needs investigated",
         "test_remove_element": "Needs investigated",
-        "test_extract_with_vector": "Needs investigated",
         "test_assign": "Needs investigated",
         "test_assign_scalar": "Needs investigated",
         "test_assign_scalar_mask": "Needs investigated",
         "test_assign_scalar_with_mask": "Needs investigated",
-        "test_reduce_agg": "Needs investigated",
         "test_del": "Needs investigated",
         "test_import_export": "Needs investigated",
         "test_import_export_auto": "Needs investigated",
@@ -107,8 +108,14 @@ XFAIL_TESTS = {
         "test_concat": "Needs investigated",
         "test_split": "Needs investigated",
         "test_ndim": "Expressions need .ndim",
+        "test_compactify": "Needs investigated",
+        "test_sizeof": "Needs investigated",
+        "test_extract_negative_indices": "Needs investigated",
     },
-    "test_numpyops.py": {},
+    "test_numpyops.py": {"test_npunary": "sometimes works, sometimes fails?"},
+}
+NOT_STRICT = {
+    "test_numpyops.py": {"test_npunary"},
 }
 
 
@@ -123,7 +130,8 @@ def main():
             if line.startswith("def test_") and line[4:].split("(", 1)[0] in xfail:
                 key = line[4:].split("(", 1)[0]
                 msg = f"{xfail[key]!r}"
-                return f"@pytest.mark.xfail({msg!r}, strict=True)\n{line}"
+                is_strict = filename not in NOT_STRICT or key not in NOT_STRICT[filename]
+                return f"@pytest.mark.xfail({msg!r}, strict={is_strict})\n{line}"
             if (
                 line.startswith("from grblas import ")
                 and ("Matrix" in line or "Vector" in line or "Scalar" in line)

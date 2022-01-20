@@ -1,6 +1,7 @@
 import inspect
 import itertools
 import pickle
+import sys
 import weakref
 
 import grblas
@@ -2951,3 +2952,8 @@ def test_ndim(A):
     assert A.ewise_mult(A).ndim == 2
     assert (A & A).ndim == 2
     assert (A @ A).ndim == 2
+
+
+@pytest.mark.xfail("'Needs investigated'", strict=True)
+def test_sizeof(A):
+    assert sys.getsizeof(A) > A.nvals * 16

@@ -110,19 +110,27 @@ class Scalar(BaseType):
         )
         return Scalar(delayed)
 
+    def _persist(self, *args, **kwargs):
+        """Since scalars are small, persist them if they need to be computed"""
+        self._delayed = self._delayed.persist(*args, **kwargs)
+
     def __eq__(self, other):
         return self.isequal(other).compute()
 
     def __bool__(self):
+        self._persist()
         return bool(self.compute())
 
     def __float__(self):
+        self._persist()
         return float(self.compute())
 
     def __int__(self):
+        self._persist()
         return int(self.compute())
 
     def __complex__(self):
+        self._persist()
         return complex(self.compute())
 
     __index__ = __int__
@@ -138,6 +146,7 @@ class Scalar(BaseType):
         return Scalar(delayed, meta=meta)
 
     def __array__(self, dtype=None):
+        self._persist()
         if dtype is None:
             dtype = self.dtype.np_type
         return np.array(self.value.compute(), dtype=dtype)
@@ -185,8 +194,11 @@ class Scalar(BaseType):
 class PythonScalar:
     __init__ = Scalar.__init__
     __bool__ = Scalar.__bool__
-    # __int__?
-    # __float__?
+    __int__ = Scalar.__int__
+    __float__ = Scalar.__float__
+    __complex__ = Scalar.__complex__
+    __index__ = Scalar.__index__
+    _persist = Scalar._persist
 
     @classmethod
     def from_delayed(cls, scalar, dtype, *, name=None):
@@ -223,3 +235,7 @@ def _neg(x):
 
 def _invert(x):
     return InnerScalar(~x.value)
+
+
+gb.utils._output_types[Scalar] = gb.Scalar
+gb.utils._output_types[PythonScalar] = gb.Scalar
