@@ -235,6 +235,20 @@ class Matrix(BaseType):
     def __setitem__(self, index, delayed):
         Updater(self)[index] = delayed
 
+    def __contains__(self, index):
+        extractor = self[index]
+        if not extractor.resolved_indexes.is_single_element:
+            raise TypeError(
+                f"Invalid index to Matrix contains: {index!r}.  A 2-tuple of ints is expected.  "
+                "Doing `(i, j) in my_matrix` checks whether a value is present at that index."
+            )
+        scalar = extractor.new(name="s_contains")
+        return not scalar.is_empty
+
+    def __iter__(self):
+        rows, columns, _ = self.to_values()
+        return zip(rows.flat, columns.flat)
+
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
         assert type(other) is Matrix  # TODO: or TransposedMatrix
         meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
@@ -318,6 +332,24 @@ class Matrix(BaseType):
         )
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
+    def _delete_element(self, resolved_indexes):
+        row = resolved_indexes.indices[0]
+        col = resolved_indexes.indices[1]
+        delayed = self._optional_dup()
+        row_ranges = build_chunk_ranges_dask_array(delayed, 0, "index-ranges-" + tokenize(delayed, 0))
+        col_ranges = build_chunk_ranges_dask_array(delayed, 1, "index-ranges-" + tokenize(delayed, 1))
+        deleted = da.core.blockwise(
+            *(_delitem_chunk, "ij"),
+            *(delayed, "ij"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            *(row.index, None),
+            *(col.index, None),
+            dtype=delayed.dtype,
+            meta=delayed._meta,
+        )
+        self._delayed = deleted
+
 
 class TransposedMatrix:
 
@@ -369,6 +401,17 @@ class TransposedMatrix:
     name = Matrix.name
 
 
+def _delitem_chunk(inner_mat, row_range, col_range, row, col):
+    if isinstance(row, gb.Scalar):
+        row = row.value
+    if isinstance(col, gb.Scalar):
+        col = col.value
+    if row_range[0].start <= row and row < row_range[0].stop:
+        if col_range[0].start <= col and col < col_range[0].stop:
+            del inner_mat.value[row - row_range[0].start, col - col_range[0].start]
+    return InnerMatrix(inner_mat.value)
+
+
 def _from_values2D(fragments, row_range, col_range, gb_dtype=None):
     rows = np.concatenate([rows for (rows, _, _) in fragments])
     cols = np.concatenate([cols for (_, cols, _) in fragments])
@@ -411,10 +454,7 @@ def _mmwrite_chunk(chunk, row_range, col_range, nrows, ncols, final_target):
     row_range, col_range = row_range[0], col_range[0]
 
     r, c, d = chunk.value.to_values()
-    coo = coo_matrix(
-        (d, (row_range.start + r, col_range.start + c)),
-        shape=(nrows, ncols)
-    )
+    coo = coo_matrix((d, (row_range.start + r, col_range.start + c)), shape=(nrows, ncols))
 
     path, basename = os.path.split(final_target)
     basename = (

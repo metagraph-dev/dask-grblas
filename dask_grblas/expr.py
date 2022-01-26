@@ -1,9 +1,13 @@
+from collections import namedtuple
 from functools import partial, reduce
-from numbers import Number
-import dask.array as da
-import grblas as gb
-import numpy as np
+from numbers import Number, Integral
 
+import dask.array as da
+import numpy as np
+import grblas as gb
+
+from grblas.exceptions import DimensionMismatch
+from dask.base import tokenize
 
 from .base import BaseType, InnerBaseType
 from .mask import Mask
@@ -17,8 +21,6 @@ from .utils import (
     build_chunk_ranges_dask_array,
     build_slice_dask_array_from_chunks,
 )
-from grblas.exceptions import DimensionMismatch
-from dask.base import tokenize
 
 
 class GbDelayed:
@@ -28,6 +30,7 @@ class GbDelayed:
         self.args = args
         self.kwargs = kwargs
         self._meta = meta
+        self.output_type = get_return_type(meta.output_type.new(int))
 
     def _matmul(self, meta, mask=None):
         left_operand = self.parent
@@ -341,6 +344,135 @@ class GbDelayed:
         return self.new().value
 
 
+AxisIndex = namedtuple("AxisIndex", ["size", "index"])
+
+
+class IndexerResolver:
+    def __init__(self, obj, indices):
+        self.obj = obj
+        if indices is Ellipsis:
+            from .vector import Vector
+
+            if type(obj) is Vector:
+                normalized = slice(None).indices(obj._size)
+                self.indices = [AxisIndex(obj._size, slice(*normalized))]
+            else:
+                normalized0 = slice(None).indices(obj._nrows)
+                normalized1 = slice(None).indices(obj._ncols)
+                self.indices = [
+                    AxisIndex(obj._nrows, slice(normalized0)),
+                    AxisIndex(obj._ncols, slice(normalized1)),
+                ]
+        else:
+            self.indices = self.parse_indices(indices, obj.shape)
+
+    @property
+    def is_single_element(self):
+        for idx in self.indices:
+            if idx.size is not None:
+                return False
+        return True
+
+    def parse_indices(self, indices, shape):
+        """
+        Returns
+            [(rows, rowsize), (cols, colsize)] for Matrix
+            [(idx, idx_size)] for Vector
+
+        Within each tuple, if the index is of type int, the size will be None
+        """
+        if len(shape) == 1:
+            if type(indices) is tuple:
+                raise TypeError(f"Index for {type(self.obj).__name__} cannot be a tuple")
+            # Convert to tuple for consistent processing
+            indices = (indices,)
+        else:  # len(shape) == 2
+            if type(indices) is not tuple or len(indices) != 2:
+                raise TypeError(f"Index for {type(self.obj).__name__} must be a 2-tuple")
+
+        out = []
+        for i, idx in enumerate(indices):
+            typ = type(idx)
+            if typ is tuple:
+                raise TypeError(
+                    f"Index in position {i} cannot be a tuple; must use slice or list or int"
+                )
+            out.append(self.parse_index(idx, typ, shape[i]))
+        return out
+
+    def parse_index(self, index, typ, size):
+        if np.issubdtype(typ, np.integer):
+            if index >= size:
+                raise IndexError(f"Index out of range: index={index}, size={size}")
+            if index < 0:
+                index += size
+                if index < 0:
+                    raise IndexError(f"Index out of range: index={index - size}, size={size}")
+            return AxisIndex(None, int(index))
+        if typ is list:
+            pass
+        elif typ is slice:
+            normalized = index.indices(size)
+            return AxisIndex(len(range(*normalized)), slice(*normalized))
+
+        elif typ in {np.ndarray, da.Array}:
+            if len(index.shape) != 1:
+                raise TypeError(f"Invalid number of dimensions for index: {len(index.shape)}")
+            if not np.issubdtype(index.dtype, np.integer):
+                raise TypeError(f"Invalid dtype for index: {index.dtype}")
+            return AxisIndex(index.shape[0], index)
+        else:
+            from .scalar import Scalar
+
+            if typ is Scalar:
+                if index.dtype.name.startswith("F"):
+                    raise TypeError(f"An integer is required for indexing.  Got: {index.dtype}")
+                return AxisIndex(None, index)
+
+            from .matrix import Matrix, TransposedMatrix
+            from .vector import Vector
+
+            if typ is Vector or typ is Matrix:
+                raise TypeError(
+                    f"Invalid type for index: {typ.__name__}.\n"
+                    f"If you want to apply a mask, perhaps do something like "
+                    f"`x.dup(mask={index.name}.S)`.\n"
+                    f"If you want to assign with a mask, perhaps do something like "
+                    f"`x(mask={index.name}.S) << value`."
+                )
+            elif typ is TransposedMatrix:
+                raise TypeError(f"Invalid type for index: {typ.__name__}.")
+            try:
+                index = list(index)
+            except Exception:
+                from .mask import Mask
+
+                if isinstance(index, Mask):
+                    raise TypeError(
+                        f"Invalid type for index: {typ.__name__}.\n"
+                        f"If you want to apply a mask, perhaps do something like "
+                        f"`x.dup(mask={index.name})`.\n"
+                        f"If you want to assign with a mask, perhaps do something like "
+                        f"`x(mask={index.name}) << value`."
+                    )
+                raise TypeError(f"Invalid type for index: {typ}; unable to convert to list")
+        return AxisIndex(len(index), index)
+
+    def get_index(self, dim):
+        """Return a new IndexerResolver with index for the selected dimension"""
+        rv = object.__new__(IndexerResolver)
+        rv.obj = self.obj
+        rv.indices = (self.indices[dim],)
+        return rv
+
+    @classmethod
+    def validate_types(cls, indices):
+        for i in indices:
+            if not isinstance(i, Integral) and type(i) not in {list, slice, np.ndarray, da.Array}:
+                raise TypeError(f'Invalid type for index: {type(i).__name__}.')
+        return
+
+
 class Updater:
     def __init__(self, parent, *, mask=None, accum=None, replace=False, input_mask=None):
         self.parent = parent
@@ -351,6 +483,16 @@ class Updater:
         else:
             self.replace = replace
         self._meta = parent._meta(mask=get_meta(mask), accum=accum, replace=replace)
+
+    def __delitem__(self, keys):
+        # Occurs when user calls `del C(params)[index]`
+        if self.parent._is_scalar:
+            raise TypeError("Indexing not supported for Scalars")
+        resolved_indexes = IndexerResolver(self.parent, keys)
+        if resolved_indexes.is_single_element:
+            self.parent._delete_element(resolved_indexes)
+        else:
+            raise TypeError("Remove Element only supports a single index")
 
     def __getitem__(self, keys):
         return Assigner(self, keys)
@@ -363,8 +505,17 @@ class Updater:
         self.update(delayed)
 
     def update(self, delayed):
-        # Occurs when user calls C(params).update(delayed)
-        # self.parent._update(delayed, **self.kwargs)
+        # Occurs when user calls C(params) << delayed
+        if isinstance(delayed, Number) or (
+            isinstance(delayed, BaseType) and get_meta(delayed)._is_scalar
+        ):
+            if len(self.parent.shape) > 0:
+                self.__setitem__(slice(None), delayed)
+            elif self.accum is not None:
+                raise TypeError('Accumulating into Scalars is not supported')
+            elif self.mask is not None:
+                raise TypeError('Mask not allowed for Scalars')
+            return
         if self.mask is None and self.accum is None:
             return self.parent.update(delayed)
         self.parent._meta._update(
@@ -531,11 +682,11 @@ def _squeeze(tupl):
 def _shape(x, indices):
     shape = ()
     for axis, index in enumerate(indices):
-        if isinstance(index, Number):
+        if isinstance(index, Integral):
             shape += ()
         elif type(index) is slice:
             start, stop, step = index.indices(x.shape[axis])
-            shape += (_ceildiv(stop - start, step),)
+            shape += (len(range(start, stop, step)),)
         elif type(index) in {list, np.ndarray}:
             shape += (len(index),)
         elif type(index) is da.Array:
@@ -557,7 +708,7 @@ def fuse_index_pair(i, j, length=None):
         return i[j]
     if length is None:
         raise ValueError("Length argument is missing")
-    if type(i) is slice and isinstance(j, Number):
+    if type(i) is slice and isinstance(j, Integral):
         a0, _, e0 = i.indices(length)
         return a0 + j * e0
     if type(i) is slice and type(j) in {list, np.ndarray}:
@@ -574,6 +725,8 @@ def _chunk_in_slice(chunk_begin, chunk_end, slice_start, slice_stop, slice_step)
     """returns the part of the chunk that lies within the slice,
     also returning True if it exists, otherwise False"""
 
+    if len(range(slice_start, slice_stop, slice_step)) == 0:
+        return False, None
     if slice_step > 0:
         cb = chunk_begin
         ce = chunk_end
@@ -587,7 +740,7 @@ def _chunk_in_slice(chunk_begin, chunk_end, slice_start, slice_stop, slice_step)
             rem = (cb - start) % step
             start = cb + (step - rem) if rem > 0 else cb
         stop = min(ce, stop)
-        idx_within = _ceildiv(stop - start, step) > 0
+        idx_within = len(range(start, stop, step)) > 0
         if idx_within:
             idx = slice(start, stop, step) if slice_step > 0 else slice(-start, -stop, -step)
         else:
@@ -663,7 +816,7 @@ def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes):
                 start = s.start - idx_offset
                 stop = s.stop - idx_offset
                 idx_within, idx = _chunk_in_slice(data_begin, data_end, start, stop, s.step)
-        elif isinstance(indices[axis], Number):
+        elif isinstance(indices[axis], Integral):
             # CASE: number
             idx = indices[axis] - idx_offset
             idx_within = (idx >= 0) & (idx < axis_len)
@@ -784,7 +937,7 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
                     mask_idx = np.argwhere(idx_filter)[:, 0]
                 else:
                     break
-        elif isinstance(index, Number):
+        elif isinstance(index, Integral):
             idx = index - offset
             idx_within = (idx >= 0) and (idx < x.shape[axis])
             idx = np.array([idx], dtype=np.int64)
@@ -820,6 +973,9 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
                 s = idx[0]
                 # this branch needs more efficient-handling: (e.g. we should avoid use of np.arange)
                 idx = np.arange(s.start, s.stop, s.step, dtype=np.int64)
+                if idx.size == 0:
+                    index_tuple += (s,)
+                    continue
 
             # Needed when idx is unsigned
             idx = idx.astype(np.int64)
@@ -848,11 +1004,14 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
 
 class AmbiguousAssignOrExtract:
     def __init__(self, parent, index):
+        self.resolved_indexes = IndexerResolver(parent, index)
         self.parent = parent
         self.index = index
+        self.index = (index,) if type(index) is not tuple else index
+        IndexerResolver.validate_types(self.index)
         self._meta = parent._meta[index]
 
-    def new(self, *, dtype=None, mask=None):
+    def new(self, *, dtype=None, mask=None, name=None):
         if mask is not None:
             assert isinstance(mask, Mask)
             assert self.parent._meta.nvals == 0
@@ -866,10 +1025,7 @@ class AmbiguousAssignOrExtract:
 
         ndim = len(self.parent.shape)
         dtype = np_dtype(meta.dtype)
-        if ndim == 1 and type(self.index) is not tuple:
-            indices = (self.index,)
-        else:
-            indices = self.index
+        indices = self.index
         if ndim in [1, 2]:
             x = self.parent._delayed
             # prepare arguments for blockwise:
@@ -895,8 +1051,8 @@ class AmbiguousAssignOrExtract:
                     # convert slice to dask array
                     start, stop, step = indx.indices(x.shape[axis])
                     indx = slice(start, stop, step)
-                    if mask is None:
-                        slice_len = _ceildiv(abs(stop - start), abs(step))
+                    slice_len = len(range(start, stop, step))
+                    if slice_len == 0 or mask is None:
                         chunk_sizes = (slice_len,)
                         indx = np.array([indx])
                     else:
@@ -925,15 +1081,13 @@ class AmbiguousAssignOrExtract:
             x_ind = tuple(range(ndim))
             fragments_ind = x_ind + new_axes
             mask_args = [delayed_mask, new_axes if mask is not None else None]
-            index_is_a_number = [isinstance(i, Number) for i in indices]
+            index_is_a_number = [isinstance(i, Integral) for i in indices]
 
             # this blockwise is essentially a cartesian product of data chunks and index chunks
             # both index and data chunks are fragmented in the process
             fragments = da.core.blockwise(
-                _data_x_index_meshpoint_4extract,
-                fragments_ind,
-                x,
-                x_ind,
+                *(_data_x_index_meshpoint_4extract, fragments_ind),
+                *(x, x_ind),
                 *indices_args,
                 *mask_args,
                 *offset_args,
@@ -948,11 +1102,9 @@ class AmbiguousAssignOrExtract:
             # this blockwise is essentially an aggregation over the data chunk axes
             extracts_ind = tuple((i + ndim) for i in x_ind if i in cat_axes)
             delayed = da.core.blockwise(
-                _defrag_to_index_chunk,
-                extracts_ind,
+                *(_defrag_to_index_chunk, extracts_ind),
                 *indices_args,
-                fragments,
-                fragments_ind,
+                *(fragments, fragments_ind),
                 x_chunks=x.chunks,
                 cat_axes=cat_axes,
                 concatenate=True,
@@ -995,7 +1147,7 @@ def _uniquify(ndim, index, obj, mask=None):
     obj_axis = 0
     for axis in range(ndim):
         indx = index[axis]
-        if type(indx) is not slice and not isinstance(indx, Number):
+        if type(indx) is not slice and not isinstance(indx, Integral):
             if type(indx) is da.Array:
                 reverse_indx = indx[::-1]
                 unique_indx, obj_indx = da.routines.unique(reverse_indx, return_index=True)
@@ -1019,12 +1171,22 @@ def _identity_func(x, axis, keepdims):
     return x
 
 
+def _get_type_with_ndims(n):
+    if n == 0:
+        return get_return_type(gb.Scalar.new(int))
+    elif n == 1:
+        return get_return_type(gb.Vector.new(int))
+    else:
+        return get_return_type(gb.Matrix.new(int))
+
+
 class Assigner:
     def __init__(self, updater, index, subassign=False):
         self.updater = updater
         self.parent = updater.parent
-        self.index = index
-        self._meta = updater.parent._meta[index]
+        self.index = (index,) if type(index) is not tuple else index
+        IndexerResolver.validate_types(self.index)
+        self._meta = updater.parent._meta
         self.subassign = subassign
 
     def update(self, obj):
@@ -1033,28 +1195,41 @@ class Assigner:
         replace = self.updater.replace
         subassign = self.subassign
         indices = self.index
+        meta = self._meta
+        if not (isinstance(obj, BaseType) or isinstance(obj, Number)):
+            raise TypeError('Bad type for argument `obj`')
         obj_is_scalar = not (
             isinstance(obj, BaseType) and type(obj._meta) in {gb.Vector, gb.Matrix}
         )
+        out_shape = _shape(parent, indices)
         if mask is not None:
+            if subassign:
+                if out_shape == ():
+                    raise TypeError('Single element assign does not accept a submask')
+                out_dim = len(out_shape)
+                if len(out_shape) != len(mask.mask.shape):
+                    raise TypeError(
+                        f'Mask object must be type {_get_type_with_ndims(out_dim).__name__}'
+                    )
+                if out_shape != mask.mask.shape:
+                    raise DimensionMismatch()
+            else:
+                if parent.shape != mask.mask.shape:
+                    raise DimensionMismatch()
+                
             assert isinstance(mask, Mask)
-            assert parent._meta.nvals == 0
-            meta = self._meta.new(mask=mask._meta)
+            assert meta.nvals == 0
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
         else:
-            meta = self._meta.new()
             delayed_mask = None
             grblas_mask_type = None
 
+        if not obj_is_scalar and out_shape != obj.shape:
+            raise DimensionMismatch()
+
         ndim = len(parent.shape)
         dtype = np_dtype(meta.dtype)
-        if ndim == 1 and type(self.index) is not tuple:
-            indices = (self.index,)
-        else:
-            indices = self.index
-        if not obj_is_scalar and _shape(parent, indices) != obj.shape:
-            raise DimensionMismatch()
         if ndim in [1, 2]:
             # prepare arguments for blockwise:
             x = parent._optional_dup()
@@ -1065,6 +1240,8 @@ class Assigner:
                 if mask is not None and not obj_is_scalar:
                     # align mask and obj in order to fix obj_offsets
                     # before calculating them
+                    if mask.mask.shape != obj.shape:
+                        raise DimensionMismatch()
                     ind = tuple(range(obj._delayed.ndim))
                     _, (obj._delayed, delayed_mask) = da.core.unify_chunks(
                         obj._delayed, ind, delayed_mask, ind
@@ -1072,7 +1249,10 @@ class Assigner:
             elif mask is not None:
                 # align `x` and its mask in order to fix offsets
                 # of `x` before calculating them
-                mask_ind = tuple(i for i in x_ind if not isinstance(indices[i], Number))
+                if mask.mask.shape != parent.shape:
+                    raise DimensionMismatch()
+                all_ints = np.all(tuple(isinstance(i, Integral) for i in x_ind))
+                mask_ind = tuple(i for i in x_ind if all_ints or not isinstance(indices[i], Integral))
                 _, (x, delayed_mask) = da.core.unify_chunks(x, x_ind, delayed_mask, mask_ind)
 
             indices_args = []
@@ -1101,6 +1281,8 @@ class Assigner:
                         obj_offset_args += [obj_offset, (ndim + axis,)]
                         obj_offset_axes += (axis,)
                     elif subassign and mask is not None:
+                        if mask.mask.shape[obj_axis] != len(range(start, stop, step)):
+                            raise DimensionMismatch()
                         obj_offset = build_chunk_offsets_dask_array(
                             delayed_mask, obj_axis, "obj_offset-"
                         )
@@ -1114,7 +1296,7 @@ class Assigner:
                     indx = da.core.from_array(indx, chunks="auto", name=name)
                     indices_args += [indx, (ndim + axis,)]
                     index_axes += (ndim + axis,)
-                elif isinstance(indx, Number):
+                elif isinstance(indx, Integral):
                     indices_args += [indx, None]
                     obj_axis -= 1
                 else:
@@ -1144,8 +1326,7 @@ class Assigner:
             # for subassign: index, obj, and mask chunks are fragmented in the process
             fragments_ind = x_ind + index_axes
             fragments = da.core.blockwise(
-                _data_x_index_meshpoint_4assign,
-                fragments_ind,
+                *(_data_x_index_meshpoint_4assign, fragments_ind),
                 *x_ranges_args,
                 *indices_args,
                 *mask_args,
@@ -1185,10 +1366,10 @@ class Assigner:
             else:
                 mask_args = [delayed_mask, mask_ind]
             # for row or column assign:
-            band_axis = [axis for axis, i in enumerate(indices) if isinstance(i, Number)]
+            band_axis = [axis for axis, i in enumerate(indices) if isinstance(i, Integral)]
             is_row_or_col_assign = len(band_axis) == 1
             if is_row_or_col_assign:
-                band_selection = [i if isinstance(i, Number) else slice(None) for i in indices]
+                band_selection = [i if isinstance(i, Integral) else slice(None) for i in indices]
                 band_axis = band_axis[0]
                 band_offset_args = x_ranges_args[2 * band_axis : 2 * band_axis + 2]
             else:
@@ -1212,8 +1393,8 @@ class Assigner:
                 meta=wrap_inner(parent._meta),
             )
             parent._delayed = delayed
-            return
-        raise NotImplementedError()
+        else:
+            raise TypeError("Assignment to Scalars is not supported.")
 
     def __lshift__(self, obj):
         self.update(obj)
@@ -1506,7 +1687,7 @@ def _concat_fragmenter(seq, axis=0):
             )
 
         non_singleton_axes = [
-            axis for axis, index in enumerate(seq_[0].index) if not isinstance(index, Number)
+            axis for axis, index in enumerate(seq_[0].index) if not isinstance(index, Integral)
         ]
         base_axis = non_singleton_axes[axis]
         return reduce(partial(concatenate_fragments, axis=axis, base_axis=base_axis), seq_)

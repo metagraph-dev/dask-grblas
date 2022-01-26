@@ -143,7 +143,7 @@ def test_clear(v):
     assert v.size == 7
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_resize(v):
     assert v.size == 7
     assert v.nvals == 4
@@ -164,7 +164,7 @@ def test_nvals(v):
     assert v.nvals == 4
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_build(v):
     assert v.nvals == 4
     v.clear()
@@ -184,7 +184,7 @@ def test_build(v):
     assert w.isequal(Vector.from_values([0, 11], [1, 1]))
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_build_scalar(v):
     with pytest.raises(OutputNotEmpty):
         v.ss.build_scalar([1, 5], 3)
@@ -214,7 +214,7 @@ def test_extract_values(v):
     assert vals.dtype == np.float64
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_extract_input_mask():
     v = Vector.from_values([0, 1, 2], [0, 1, 2])
     m = Vector.from_values([0, 2], [0, 2])
@@ -249,7 +249,6 @@ def test_set_element(v):
     assert v[1].new() == 9
 
 
-@pytest.mark.xfail("'Needs investigated'")
 def test_remove_element(v):
     assert v[1].value == 1
     del v[1]
@@ -355,7 +354,6 @@ def test_ewise_mult_change_dtype(v):
     assert w3.isequal(result3), w3
 
 
-@pytest.mark.xfail("'Needs investigated'")
 def test_ewise_add(v):
     # Binary, Monoid, and Semiring
     v2 = Vector.from_values([0, 3, 5, 6], [2, 3, 2, 1])
@@ -401,7 +399,7 @@ def test_extract_array(v):
     assert w.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+# @pytest.mark.xfail("'Needs investigation'")
 def test_extract_with_vector(v):
     with pytest.raises(TypeError, match="Invalid type for index"):
         v[v].new()
@@ -440,7 +438,7 @@ def test_extract_fancy_scalars(v):
         t(accum=binary.plus) << v[0]
 
 
-@pytest.mark.xfail("'Needs investigated'")
+# @pytest.mark.xfail("'Needs investigation'")
 def test_assign(v):
     u = Vector.from_values([0, 2], [9, 8])
     result = Vector.from_values([0, 1, 3, 4, 6], [9, 1, 1, 8, 0])
@@ -456,7 +454,7 @@ def test_assign(v):
         w[w] = 1
 
 
-@pytest.mark.xfail("'Needs investigated'")
+# @pytest.mark.xfail("'Needs investigation'")
 def test_assign_scalar(v):
     result = Vector.from_values([1, 3, 4, 5, 6], [9, 9, 2, 9, 0])
     w = v.dup()
@@ -479,7 +477,6 @@ def test_assign_scalar(v):
     assert w.isequal(Vector.from_values([0, 1, 2], [2, 2, 2]))
 
 
-@pytest.mark.xfail("'Needs investigated'")
 def test_assign_scalar_mask(v):
     mask = Vector.from_values([1, 2, 5, 6], [0, 0, 1, 0])
     result = Vector.from_values([1, 3, 4, 5, 6], [1, 1, 2, 5, 0])
@@ -552,7 +549,6 @@ def test_subassign(A):
     v[0](v.S, replace=True)
 
 
-@pytest.mark.xfail("'Needs investigated'")
 def test_assign_scalar_with_mask():
     v = Vector.from_values([0, 1, 2], [1, 2, 3])
     m = Vector.from_values([0, 2], [False, True])
@@ -635,7 +631,7 @@ def test_reduce(v):
         b1.reduce()
 
 
-@pytest.mark.xfail("'Needs investigated'")
+# @pytest.mark.xfail("'Needs investigation'")
 def test_reduce_agg(v):
     s = v.reduce(agg.sum).new()
     assert s.dtype == "INT64"
@@ -836,7 +832,7 @@ def test_incompatible_shapes(A, v):
         u.ewise_mult(v)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_del(capsys):
     # Exceptions in __del__ are printed to stderr
     import gc
@@ -861,7 +857,7 @@ def test_del(capsys):
 
 @pytest.mark.parametrize("do_iso", [False, True])
 @pytest.mark.parametrize("methods", [("export", "import"), ("unpack", "pack")])
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_import_export(v, do_iso, methods):
     if do_iso:
         v(v.S) << 1
@@ -1004,7 +1000,7 @@ def test_import_export(v, do_iso, methods):
 
 @pytest.mark.parametrize("do_iso", [False, True])
 @pytest.mark.parametrize("methods", [("export", "import"), ("unpack", "pack")])
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_import_export_auto(v, do_iso, methods):
     if do_iso:
         v(v.S) << 1
@@ -1087,7 +1083,7 @@ def test_import_export_auto(v, do_iso, methods):
     assert w_orig.ss.is_iso is do_iso
 
 
-@pytest.mark.xfail("'Needs investigated'")
+# @pytest.mark.xfail("'Needs investigation'")
 def test_contains(v):
     assert 0 not in v
     assert 1 in v
@@ -1097,7 +1093,7 @@ def test_contains(v):
         (0,) in v
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_iter(v):
     assert set(v) == {1, 3, 4, 6}
 
@@ -1129,7 +1125,7 @@ def test_not_to_array(v):
         np.array(v)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_vector_index_with_scalar():
     v = Vector.from_values([0, 1, 2], [10, 20, 30])
     expected = Vector.from_values([0, 1], [20, 10])
@@ -1145,7 +1141,7 @@ def test_vector_index_with_scalar():
             v[s]
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_diag(v):
     indices, values = v.to_values()
     for k in range(-5, 5):
@@ -1163,12 +1159,12 @@ def test_diag(v):
         assert w.dtype == "FP64"
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_nbytes(v):
     assert v.ss.nbytes > 0
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_inner(v):
     R = Matrix.new(v.dtype, nrows=1, ncols=v.size)  # row vector
     C = Matrix.new(v.dtype, nrows=v.size, ncols=1)  # column vector
@@ -1179,7 +1175,7 @@ def test_inner(v):
     assert expected.isequal((v @ v).new())
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_outer(v):
     R = Matrix.new(v.dtype, nrows=1, ncols=v.size)  # row vector
     C = Matrix.new(v.dtype, nrows=v.size, ncols=1)  # column vector
@@ -1193,7 +1189,7 @@ def test_outer(v):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_auto(v):
     v = v.dup(dtype=bool)
     expected = binary.land(v & v).new()
@@ -1268,7 +1264,7 @@ def test_auto(v):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_auto_assign(v):
     expected = v.dup()
     w = v[1:4].new(dtype=bool)
@@ -1282,7 +1278,7 @@ def test_auto_assign(v):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_expr_is_like_vector(v):
     w = v.dup(dtype=bool)
     attrs = {attr for attr, val in inspect.getmembers(w)}
@@ -1318,7 +1314,7 @@ def test_expr_is_like_vector(v):
     }
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_random(v):
     r1 = Vector.from_values([1], [1], size=v.size)
     r2 = Vector.from_values([3], [1], size=v.size)
@@ -1353,7 +1349,7 @@ def test_random(v):
         v.ss.selectk("bad", 1)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_firstk(v):
     data = [[1, 3, 4, 6], [1, 1, 2, 0]]
     iso_data = [[1, 3, 4, 6], [1, 1, 1, 1]]
@@ -1368,7 +1364,7 @@ def test_firstk(v):
         v.ss.selectk("first", -1)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_lastk(v):
     data = [[1, 3, 4, 6], [1, 1, 2, 0]]
     iso_data = [[1, 3, 4, 6], [1, 1, 1, 1]]
@@ -1381,7 +1377,7 @@ def test_lastk(v):
             assert x.isequal(expected)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_largestk(v):
     w = v.ss.selectk("largest", 1)
     expected = Vector.from_values([4], [2], size=v.size)
@@ -1397,7 +1393,7 @@ def test_largestk(v):
     assert w.isequal(expected)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_smallestk(v):
     w = v.ss.selectk("smallest", 1)
     expected = Vector.from_values([6], [0], size=v.size)
@@ -1427,7 +1423,7 @@ def test_slice():
     assert w.isequal(expected)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_concat(v):
     expected = Vector.new(v.dtype, size=2 * v.size)
     expected[: v.size] = v
@@ -1441,7 +1437,7 @@ def test_concat(v):
         w2.ss.concat([[v, v]])
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigation'")
 def test_split(v):
     w1, w2 = v.ss.split(4)
     expected1 = Vector.from_values([1, 3], 1)

@@ -1,3 +1,4 @@
+from numbers import Number
 import dask.array as da
 import numpy as np
 import grblas as gb
@@ -13,6 +14,7 @@ from .utils import (
     get_grblas_type,
     wrap_inner,
     build_ranges_dask_array_from_chunks,
+    build_chunk_ranges_dask_array,
     build_chunk_offsets_dask_array,
 )
 
@@ -191,8 +193,10 @@ class Vector(BaseType):
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
 
-    def __delitem__(self, index):
-        del self._meta[index]
+    def __delitem__(self, keys):
+        del Updater(self)[keys]
+
+        # del self._meta[index]
         # delayed = self._optional_dup()
         # TODO: normalize index
         # delayed = delayed.map_blocks(
@@ -200,10 +204,24 @@ class Vector(BaseType):
         #     index,
         #     dtype=np_dtype(self.dtype),
         # )
-        raise NotImplementedError()
+        # raise NotImplementedError()
 
     def __setitem__(self, index, delayed):
         Assigner(Updater(self), index).update(delayed)
+
+    def __contains__(self, index):
+        extractor = self[index]
+        if not extractor.resolved_indexes.is_single_element:
+            raise TypeError(
+                f"Invalid index to Vector contains: {index!r}.  An integer is expected.  "
+                "Doing `index in my_vector` checks whether a value is present at that index."
+            )
+        scalar = extractor.new(name="s_contains")
+        return not scalar.is_empty
+
+    def __iter__(self):
+        indices, values = self.to_values()
+        return indices.flat
 
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
         assert type(other) is Vector
@@ -214,6 +232,59 @@ class Vector(BaseType):
         assert type(other) is Vector
         meta = self._meta.ewise_mult(other._meta, op=op)
         return GbDelayed(self, "ewise_mult", other, op, meta=meta)
+
+    # Unofficial methods
+    def inner(self, other, op=semiring.plus_times):
+        """
+        Vector-vector inner (or dot) product. Result is a Scalar.
+
+        Default op is semiring.plus_times
+
+        *This is not a standard GraphBLAS function*
+        """
+        pass
+        # method_name = "inner"
+        # other = self._expect_type(other, Vector, within=method_name, argname="other", op=op)
+        # op = get_typed_op(op, self.dtype, other.dtype, kind="semiring")
+        # self._expect_op(op, "Semiring", within=method_name, argname="op")
+        # expr = ScalarExpression(
+        #     method_name,
+        #     "GrB_vxm",
+        #     [self, _VectorAsMatrix(other)],
+        #     op=op,
+        # )
+        # if self._size != other._size:
+        #     expr.new(name="")  # incompatible shape; raise now
+        # return expr
+
+    def outer(self, other, op=binary.times):
+        """
+        Vector-vector outer (or cross) product. Result is a Matrix.
+
+        Default op is binary.times
+
+        *This is not a standard GraphBLAS function*
+        """
+        pass
+        # from .matrix import MatrixExpression
+        #
+        # method_name = "outer"
+        # other = self._expect_type(other, Vector, within=method_name, argname="other", op=op)
+        # op = get_typed_op(op, self.dtype, other.dtype, kind="binary")
+        # self._expect_op(op, ("BinaryOp", "Monoid"), within=method_name, argname="op")
+        # if op.opclass == "Monoid":
+        #     op = op.binaryop
+        # op = get_semiring(monoid.any, op)
+        # expr = MatrixExpression(
+        #     method_name,
+        #     "GrB_mxm",
+        #     [_VectorAsMatrix(self), _VectorAsMatrix(other)],
+        #     op=op,
+        #     nrows=self._size,
+        #     ncols=other._size,
+        #     bt=True,
+        # )
+        # return expr
 
     def vxm(self, other, op=semiring.plus_times):
         from .matrix import Matrix, TransposedMatrix
@@ -248,13 +319,13 @@ class Vector(BaseType):
         vector.build(indices, values, dup_op=dup_op)
         self._delayed = Vector.from_vector(vector)._delayed
 
-    def to_values(self):
+    def to_values(self, dtype=None):
         delayed = self._delayed
-        dtype = np_dtype(self.dtype)
-        meta_i, meta_v = self._meta.to_values()
+        dtype_ = np_dtype(self.dtype)
+        meta_i, meta_v = self._meta.to_values(dtype)
         meta = np.array([])
         offsets = build_chunk_offsets_dask_array(delayed, 0, "index_offset-")
-        x = da.map_blocks(TupleExtractor, delayed, offsets, dtype=dtype, meta=meta)
+        x = da.map_blocks(TupleExtractor, delayed, offsets, gb_dtype=dtype, dtype=dtype_, meta=meta)
         indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
         values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta)
         return indices, values
@@ -266,6 +337,41 @@ class Vector(BaseType):
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         other = self._expect_type(other, Vector, within="isclose", argname="other")
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+
+    def _delete_element(self, resolved_indexes):
+        idx = resolved_indexes.indices[0]
+        delayed = self._optional_dup()
+        index_ranges = build_chunk_ranges_dask_array(delayed, 0, "index-ranges-" + tokenize(delayed, 0))
+        deleted = da.core.blockwise(
+            *(_delitem_chunk, "i"),
+            *(delayed, "i"),
+            *(index_ranges, "i"),
+            *(idx.index, None),
+            dtype=delayed.dtype,
+            meta=delayed._meta,
+        )
+        self._delayed = deleted
+
+    @property
+    def _carg(self):
+        pass
+        # return self.gb_obj[0]
+
+    @property
+    def _nvals(self):
+        pass
+        # """Like nvals, but doesn't record calls"""
+        # n = ffi_new("GrB_Index*")
+        # check_status(lib.GrB_Vector_nvals(n, self.gb_obj[0]), self)
+        # return n[0]
+
+
+def _delitem_chunk(inner_vec, chunk_range, index):
+    if isinstance(index, gb.Scalar):
+        index = index.value
+    if chunk_range[0].start <= index and index < chunk_range[0].stop:
+        del inner_vec.value[index - chunk_range[0].start]
+    return InnerVector(inner_vec.value)
 
 
 def _new_Vector(chunk_range, gb_dtype):
@@ -311,8 +417,8 @@ def _concat_vector(seq, axis=0):
 
 
 class TupleExtractor:
-    def __init__(self, grblas_inner_vector, index_offset):
-        self.indices, self.values = grblas_inner_vector.value.to_values()
+    def __init__(self, grblas_inner_vector, index_offset, gb_dtype=None):
+        self.indices, self.values = grblas_inner_vector.value.to_values(gb_dtype)
         self.indices += index_offset[0]
 
 

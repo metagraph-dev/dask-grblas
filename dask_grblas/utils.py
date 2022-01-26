@@ -105,7 +105,7 @@ def wrap_dataframe(filename, nreaders):
     from math import ceil
 
     if nreaders is None:
-        raise ValueError("nreaders must be specified.")
+        raise ValueError("nreaders (the number of parallel readers) must be specified.")
 
     rows, cols, entries, format, field, symmetry = mminfo(filename)
 
