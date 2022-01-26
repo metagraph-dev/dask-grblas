@@ -30,9 +30,15 @@ class GbDelayed:
         self.args = args
         self.kwargs = kwargs
         self._meta = meta
-        self.output_type = get_return_type(meta.output_type.new(int))
+        # infix expression requirements:
         self.output_type = meta.output_type
         self.ndim = len(meta.shape)
+        if self.ndim == 1:
+            self._size = meta.size
+        elif self.ndim == 2:
+            self._nrows = meta.nrows
+            self._ncols = meta.ncols
+        
 
     def _matmul(self, meta, mask=None):
         left_operand = self.parent
@@ -681,12 +687,28 @@ def _squeeze(tupl):
     return tupl
 
 
+def _get_type_with_ndims(n):
+    if n == 0:
+        return get_return_type(gb.Scalar.new(int))
+    elif n == 1:
+        return get_return_type(gb.Vector.new(int))
+    else:
+        return get_return_type(gb.Matrix.new(int))
+
+
+def _get_grblas_type_with_ndims(n):
+    if n == 0:
+        return gb.Scalar
+    elif n == 1:
+        return gb.Vector
+    else:
+        return gb.Matrix
+
+
 def _shape(x, indices):
     shape = ()
     for axis, index in enumerate(indices):
-        if isinstance(index, Integral):
-            shape += ()
-        elif type(index) is slice:
+        if type(index) is slice:
             start, stop, step = index.indices(x.shape[axis])
             shape += (len(range(start, stop, step)),)
         elif type(index) in {list, np.ndarray}:
@@ -698,10 +720,10 @@ def _shape(x, indices):
 
 def fuse_slice_pair(slice0, slice1, length):
     """computes slice `s` such that array[s] = array[s0][s1] where array has length `length`"""
-    a0, o0, e0 = slice0.indices(length)
-    a1, o1, e1 = slice1.indices(_ceildiv(abs(o0 - a0), abs(e0)))
-    o01 = a0 + o1 * e0
-    return slice(a0 + a1 * e0, None if o01 < 0 else o01, e0 * e1)
+    start0, stop0, step0 = slice0.indices(length)
+    start1, stop1, step1 = slice1.indices(len(range(start0, stop0, step0)))
+    stop01 = start0 + stop1 * step0
+    return slice(start0 + start1 * step0, None if stop01 < 0 else stop01, step0 * step1)
 
 
 def fuse_index_pair(i, j, length=None):
@@ -1008,10 +1030,18 @@ class AmbiguousAssignOrExtract:
     def __init__(self, parent, index):
         self.resolved_indexes = IndexerResolver(parent, index)
         self.parent = parent
-        self.index = index
         self.index = (index,) if type(index) is not tuple else index
         IndexerResolver.validate_types(self.index)
         self._meta = parent._meta[index]
+        # infix expression requirements:
+        shape = _shape(parent, self.index)
+        self.ndim = len(shape)
+        self.output_type = _get_grblas_type_with_ndims(self.ndim)
+        if self.ndim == 1:
+            self._size = shape[0]
+        elif self.ndim == 2:
+            self._nrows = shape[0]
+            self._ncols = shape[1]
 
     def new(self, *, dtype=None, mask=None, name=None):
         if mask is not None:
@@ -1171,15 +1201,6 @@ def _uniquify(ndim, index, obj, mask=None):
 
 def _identity_func(x, axis, keepdims):
     return x
-
-
-def _get_type_with_ndims(n):
-    if n == 0:
-        return get_return_type(gb.Scalar.new(int))
-    elif n == 1:
-        return get_return_type(gb.Vector.new(int))
-    else:
-        return get_return_type(gb.Matrix.new(int))
 
 
 class Assigner:
