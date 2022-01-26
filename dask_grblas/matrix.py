@@ -34,7 +34,7 @@ class InnerMatrix(InnerBaseType):
 
 
 class Matrix(BaseType):
-
+    ndim = 2
     _is_transposed = False
 
     @classmethod
@@ -352,7 +352,7 @@ class Matrix(BaseType):
 
 
 class TransposedMatrix:
-
+    ndim = 2
     _is_transposed = True
 
     def __init__(self, matrix):
@@ -569,3 +569,7 @@ def _concat_matrix(seq, axis=0):
             ]
         value = gb.ss.concat([[item.value for item in seq]])
     return InnerMatrix(value)
+
+
+gb.utils._output_types[Matrix] = gb.Matrix
+gb.utils._output_types[TransposedMatrix] = gb.matrix.TransposedMatrix

@@ -201,6 +201,15 @@ class BaseType:
         return Updater(self, mask=mask, accum=accum, replace=replace, input_mask=input_mask)
 
     __array__ = gb.base.BaseType.__array__
+    __bool__ = gb.base.BaseType.__bool__
+    # TODO: get these to work so we can do things like `gb.op.plus(v | w)`
+    __or__ = gb.base.BaseType.__or__
+    __ror__ = gb.base.BaseType.__ror__
+    __and__ = gb.base.BaseType.__and__
+    __rand__ = gb.base.BaseType.__rand__
+    __matmul__ = gb.base.BaseType.__matmul__
+    __rmatmul__ = gb.base.BaseType.__rmatmul__
+    __imatmul__ = gb.base.BaseType.__imatmul__
 
     def _optional_dup(self):
         # TODO: maybe try to create an optimization pass that remove these if they are unnecessary

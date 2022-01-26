@@ -1,6 +1,7 @@
 import inspect
 import itertools
 import pickle
+import sys
 import weakref
 
 import grblas
@@ -9,9 +10,10 @@ import pytest
 from grblas import agg, binary, dtypes, monoid, semiring, unary
 from grblas.exceptions import (
     DimensionMismatch,
-    DomainMismatch,
+    EmptyObject,
     IndexOutOfBound,
     InvalidValue,
+    NotImplementedException,
     OutputNotEmpty,
 )
 from numpy.testing import assert_array_equal
@@ -127,7 +129,7 @@ def test_from_values():
         Matrix.from_values([0], [1, 2], [0])
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_from_values_scalar():
     C = Matrix.from_values([0, 1, 3], [1, 1, 2], 7)
     assert C.nrows == 4
@@ -156,7 +158,7 @@ def test_clear(A):
     assert A.ncols == 7
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_resize(A):
     assert A.nrows == 7
     assert A.ncols == 7
@@ -184,7 +186,7 @@ def test_nvals(A):
     assert A.nvals == 12
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_build(A):
     assert A.nvals == 12
     A.clear()
@@ -207,7 +209,7 @@ def test_build(A):
     assert C.isequal(Matrix.from_values([0, 0], [0, 11], [1, 1], nrows=2))
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_build_scalar(A):
     assert A.nvals == 12
     with pytest.raises(OutputNotEmpty):
@@ -219,11 +221,11 @@ def test_build_scalar(A):
     A.clear()
     with pytest.raises(ValueError, match="lengths must match"):
         A.ss.build_scalar([0, 6], [0, 1, 2], 1)
-    with pytest.raises(InvalidValue):
+    with pytest.raises(EmptyObject):
         A.ss.build_scalar([0, 5], [0, 1], None)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_extract_values(A):
     rows, cols, vals = A.to_values(dtype=int)
     np.testing.assert_array_equal(rows, (0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 6))
@@ -241,7 +243,7 @@ def test_extract_values(A):
     assert Tvals.dtype == np.float64
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_extract_element(A):
     assert A[3, 0].new() == 3
     assert A[1, 6].value == 4
@@ -263,7 +265,7 @@ def test_set_element(A):
     assert A[3, 0].new() == -5
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_remove_element(A):
     assert A[3, 0].value == 3
     del A[3, 0]
@@ -410,7 +412,7 @@ def test_extract(A):
     assert C2.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_extract_row(A):
     w = Vector.new(A.dtype, 3)
     result = Vector.from_values([1, 2], [5, 3], size=3)
@@ -433,7 +435,7 @@ def test_extract_row(A):
         A[6, np.array([[0, 2, 4]])]
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_extract_column(A):
     w = Vector.new(A.dtype, 3)
     result = Vector.from_values([1, 2], [3, 1], size=3)
@@ -447,7 +449,7 @@ def test_extract_column(A):
     assert w2.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_extract_input_mask():
     # A       M
     # 0 1 2   _ 0 1
@@ -578,7 +580,7 @@ def test_extract_with_matrix(A):
         A[[0], A.V].new()
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_assign(A):
     B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
     result = Matrix.from_values(
@@ -619,7 +621,7 @@ def test_assign_row(A, v):
     assert C.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_subassign_row_col():
     A = Matrix.from_values(
         [0, 0, 0, 1, 1, 1, 2, 2, 2],
@@ -681,7 +683,7 @@ def test_subassign_row_col():
     assert A.isequal(result6)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_subassign_matrix():
     A = Matrix.from_values(
         [0, 0, 0, 1, 1, 1, 2, 2, 2],
@@ -755,7 +757,7 @@ def test_assign_column(A, v):
     assert C.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_assign_row_scalar(A, v):
     C = A.dup()
     C[0, :](v.S) << v
@@ -798,7 +800,7 @@ def test_assign_row_scalar(A, v):
     assert C.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_assign_row_col_matrix_mask():
     # A         B       v1      v2
     # 0 1       4 _     100     10
@@ -941,7 +943,7 @@ def test_assign_row_col_matrix_mask():
         C[0, 0](B.S) << 100
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_assign_column_scalar(A, v):
     C = A.dup()
     C[:, 0](v.S) << v
@@ -1017,7 +1019,7 @@ def test_assign_scalar(A):
     assert C.isequal(result_column)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_assign_bad(A):
     with pytest.raises(TypeError, match="Bad type"):
         A[0, 0] = object()
@@ -1094,7 +1096,7 @@ def test_reduce_row(A):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_reduce_agg(A):
     result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
     w1 = A.reduce_rowwise(agg.sum).new()
@@ -1179,7 +1181,7 @@ def test_reduce_agg(A):
     assert s3.isclose(s1.value * s2.value)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_reduce_agg_argminmax(A):
     # reduce_rowwise
     expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [1, 6, 5, 0, 5, 2, 4])
@@ -1231,7 +1233,7 @@ def test_reduce_agg_argminmax(A):
         A.reduce_scalar(silly).new()
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_reduce_agg_firstlast(A):
     # reduce_rowwise
     w1 = A.reduce_rowwise(agg.first).new()
@@ -1287,7 +1289,7 @@ def test_reduce_agg_firstlast(A):
     assert s3.isequal(s1.value + s2.value)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_reduce_agg_firstlast_index(A):
     # reduce_rowwise
     w1 = A.reduce_rowwise(agg.first_index).new()
@@ -1334,7 +1336,7 @@ def test_reduce_agg_firstlast_index(A):
         A.reduce_scalar(silly).new()
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_reduce_agg_empty():
     A = Matrix.new("UINT8", nrows=3, ncols=4)
     for B in [A, A.T]:
@@ -1355,7 +1357,7 @@ def test_reduce_agg_empty():
 def test_reduce_row_udf(A):
     result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
     binop = grblas.operator.BinaryOp.register_anonymous(lambda x, y: x + y)
-    with pytest.raises(DomainMismatch):
+    with pytest.raises(NotImplementedException):
         # Although allowed by the spec, SuiteSparse doesn't like user-defined binarops here
         A.reduce_rowwise(binop).new()
     # If the user creates a monoid from the binop, then we can use the monoid instead
@@ -1401,7 +1403,7 @@ def test_reduce_scalar(A):
     assert t == 48.23
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_transpose(A):
     # C << A.T
     rows, cols, vals = A.to_values()
@@ -1416,7 +1418,7 @@ def test_transpose(A):
     assert C3.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_kronecker():
     # A  0 1     B  0 1 2
     # 0 [1 -]    0 [- 2 3]
@@ -1445,7 +1447,7 @@ def test_simple_assignment(A):
     assert C.isequal(A)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_assign_transpose(A):
     C = Matrix.new(A.dtype, A.ncols, A.nrows)
     C << A.T
@@ -1531,7 +1533,7 @@ def test_isclose(A, v):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_transpose_equals(A):
     data = [
         [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
@@ -1550,7 +1552,7 @@ def test_transpose_equals(A):
     assert A.T.isclose(A.T)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_transpose_exceptional():
     A = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [True, True, False, True])
     B = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [1, 2, 3, 4])
@@ -1585,18 +1587,18 @@ def test_nested_matrix_operations():
     A.ewise_mult(A.ewise_mult(A.ewise_mult(A.ewise_mult(A).new()).new()).new())
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_bad_init():
     with pytest.raises(TypeError, match="CData"):
         Matrix(None, float, name="bad_matrix")
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_equals(A):
     assert (A == A).new().reduce_scalar(monoid.land).new()
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_bad_update(A):
     with pytest.raises(TypeError, match="Assignment value must be a valid expression"):
         A << None
@@ -1612,7 +1614,7 @@ def test_incompatible_shapes(A):
         A.ewise_mult(B)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_del(capsys):
     # Exceptions in __del__ are printed to stderr
     import gc
@@ -1637,7 +1639,7 @@ def test_del(capsys):
 
 @pytest.mark.parametrize("do_iso", [False, True])
 @pytest.mark.parametrize("methods", [("export", "import"), ("unpack", "pack")])
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_import_export(A, do_iso, methods):
     if do_iso:
         A(A.S) << 1
@@ -1972,14 +1974,14 @@ def test_import_export(A, do_iso, methods):
     assert E.isequal(D)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_import_on_view():
     A = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [1, 2, 3, 4])
     B = Matrix.ss.import_any(nrows=2, ncols=2, values=np.array([1, 2, 3, 4, 99, 99, 99])[:4])
     assert A.isequal(B)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_import_export_empty():
     A = Matrix.new(int, 2, 3)
     A1 = A.dup()
@@ -2079,7 +2081,7 @@ def test_import_export_empty():
 
 @pytest.mark.parametrize("do_iso", [False, True])
 @pytest.mark.parametrize("methods", [("export", "import"), ("unpack", "pack")])
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_import_export_auto(A, do_iso, methods):
     if do_iso:
         A(A.S) << 1
@@ -2187,7 +2189,7 @@ def test_import_export_auto(A, do_iso, methods):
     assert C_orig.ss.is_iso is do_iso
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_no_bool_or_eq(A):
     with pytest.raises(TypeError, match="not defined"):
         bool(A)
@@ -2215,7 +2217,7 @@ def test_no_bool_or_eq(A):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_bool_eq_on_scalar_expressions(A):
     expr = A.reduce_scalar()
     assert expr == 47
@@ -2244,7 +2246,7 @@ def test_bool_eq_on_scalar_expressions(A):
         range(expr)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_bool_eq_on_scalar_expressions_no_auto(A):
     expr = A.reduce_scalar()
     with pytest.raises(TypeError, match="autocompute"):
@@ -2255,7 +2257,7 @@ def test_bool_eq_on_scalar_expressions_no_auto(A):
         int(expr)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_contains(A):
     assert (0, 1) in A
     assert (1, 0) in A.T
@@ -2271,7 +2273,7 @@ def test_contains(A):
         (1, [1, 2]) in A
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_iter(A):
     assert set(A) == set(
         zip(
@@ -2333,7 +2335,7 @@ def test_not_to_array(A):
         (-10, [], []),
     ],
 )
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_diag(A, params):
     k, indices, values = params
     expected = Vector.from_values(indices, values, dtype=A.dtype, size=max(0, A.nrows - abs(k)))
@@ -2390,7 +2392,7 @@ def test_normalize_chunks():
         normalize_chunks([10, np.array([-1, 2])], shape)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_split(A):
     results = A.ss.split([4, 3])
     for results in [A.ss.split([4, 3]), A.ss.split([[4, None], 3], name="split")]:
@@ -2404,7 +2406,7 @@ def test_split(A):
         A.ss.split([[5, 5], 3])
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_concat(A, v):
     B1 = grblas.ss.concat([[A, A]], dtype=float)
     assert B1.dtype == "FP64"
@@ -2463,13 +2465,13 @@ def test_concat(A, v):
         grblas.ss.concat([[v], v])
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_nbytes(A):
     assert A.ss.nbytes > 0
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_auto(A, v):
     expected = binary.land[bool](A & A).new()
     B = A.dup(dtype=bool)
@@ -2550,7 +2552,7 @@ def test_auto(A, v):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_auto_assign(A):
     expected = A.dup()
     B = A[1:4, 1:4].new(dtype=bool)
@@ -2569,7 +2571,7 @@ def test_auto_assign(A):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_expr_is_like_matrix(A):
     B = A.dup(dtype=bool)
     attrs = {attr for attr, val in inspect.getmembers(B)}
@@ -2606,13 +2608,13 @@ def test_expr_is_like_matrix(A):
     }
     # TransposedMatrix is used differently than other expressions,
     # so maybe it shouldn't support everything.
-    assert attrs - transposed_attrs == (expected | {"S", "V", "ss", "to_pygraphblas", "wait"}) - {
+    assert attrs - transposed_attrs == (expected | {"S", "V", "ss", "to_pygraphblas"}) - {
         "_prep_for_extract",
         "_extract_element",
     }
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_flatten(A):
     data = [
         [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
@@ -2664,7 +2666,7 @@ def test_flatten(A):
         v.ss.reshape(A.shape + (1,))
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_autocompute_argument_messages(A, v):
     with pytest.raises(TypeError, match="autocompute"):
         A.ewise_mult(A & A)
@@ -2673,7 +2675,7 @@ def test_autocompute_argument_messages(A, v):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_infix_sugar(A):
     assert type(A + 1) is not Matrix
     assert binary.plus(A, 1).isequal(A + 1)
@@ -2802,7 +2804,7 @@ def test_infix_sugar(A):
 
 
 @pytest.mark.slow
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_random(A):
     R = A.ss.selectk_rowwise("random", 1)
     counts = R.reduce_rowwise(agg.count).new()
@@ -2834,7 +2836,7 @@ def test_random(A):
         A.ss.selectk_columnwise("random", -1)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_firstk(A):
     B = A.ss.selectk_rowwise("first", 1)
     expected = Matrix.from_values(
@@ -2883,7 +2885,7 @@ def test_firstk(A):
     assert B.isequal(A)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_lastk(A):
     B = A.ss.selectk_rowwise("last", 1)
     expected = Matrix.from_values(
@@ -2932,7 +2934,142 @@ def test_lastk(A):
     assert B.isequal(A)
 
 
-@pytest.mark.xfail("'Needs investigated'")
+@pytest.mark.parametrize("do_iso", [False, True])
+@pytest.mark.slow
+@pytest.mark.xfail("'Needs investigated'", strict=True)
+def test_compactify(A, do_iso):
+    if do_iso:
+        r, c, v = A.to_values()
+        A = Matrix.from_values(r, c, 1)
+    rows = [0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 6]
+    new_cols = [0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 2]
+    orig_cols = [1, 3, 4, 6, 5, 0, 2, 5, 2, 2, 3, 4]
+
+    def check(A, expected, *args, stop=0, **kwargs):
+        B = A.ss.compactify_rowwise(*args, **kwargs)
+        assert B.isequal(expected)
+        for n in reversed(range(stop, 4)):
+            expected = expected[:, :n].new()
+            B = A.ss.compactify_rowwise(*args, ncols=n, **kwargs)
+            assert B.isequal(expected)
+
+    def reverse(A):
+        return A[:, ::-1].new().ss.compactify_rowwise("first", A.ncols)
+
+    def check_reverse(A, expected, *args, stop=0, **kwargs):
+        B = A.ss.compactify_rowwise(*args, reverse=True, **kwargs)
+        C = reverse(expected)
+        assert B.isequal(C)
+        for n in reversed(range(stop, 4)):
+            C = reverse(expected[:, :n].new())
+            B = A.ss.compactify_rowwise(*args, ncols=n, reverse=True, **kwargs)
+            assert B.isequal(C)
+
+    expected = Matrix.from_values(
+        rows,
+        new_cols,
+        1 if do_iso else [2, 3, 8, 4, 1, 3, 3, 7, 1, 5, 7, 3],
+        nrows=A.nrows,
+        ncols=3,
+    )
+    check(A, expected, "first")
+    check_reverse(A, expected, "first")
+    check(A, reverse(expected), "last")
+    check_reverse(A, reverse(expected), "last")
+
+    expected = Matrix.from_values(
+        rows,
+        new_cols,
+        orig_cols,
+        nrows=A.nrows,
+        ncols=3,
+    )
+    check(A, expected, "first", asindex=True)
+    check_reverse(A, expected, "first", asindex=True)
+    check(A, reverse(expected), "last", asindex=True)
+    check_reverse(A, reverse(expected), "last", asindex=True)
+
+    expected = Matrix.from_values(
+        rows,
+        new_cols,
+        1 if do_iso else [2, 3, 4, 8, 1, 3, 3, 7, 1, 3, 5, 7],
+        nrows=A.nrows,
+        ncols=3,
+    )
+    check(A, expected, "smallest")
+    check_reverse(A, expected, "smallest")
+    check(A, reverse(expected), "largest")
+    check_reverse(A, reverse(expected), "largest")
+
+    if not do_iso:
+        expected = Matrix.from_values(
+            rows,
+            new_cols,
+            [1, 3, 6, 4, 5, 0, 2, 5, 2, 4, 2, 3],
+            nrows=A.nrows,
+            ncols=3,
+        )
+        check(A, expected, "smallest", asindex=True, stop=2)
+        check_reverse(A, expected, "smallest", asindex=True, stop=2)
+        check(A, reverse(expected), "largest", asindex=True, stop=2)
+        check_reverse(A, reverse(expected), "largest", asindex=True, stop=2)
+
+    def compare(A, expected, isequal=True, **kwargs):
+        for _ in range(1000):
+            B = A.ss.compactify_rowwise("random", **kwargs)
+            if B.isequal(expected) == isequal:
+                break
+        else:
+            raise AssertionError("random failed")
+
+    with pytest.raises(AssertionError):
+        compare(A, A[:, ::-1].new())
+
+    for asindex in [False, True]:
+        compare(A, A.ss.compactify_rowwise("first", asindex=asindex), asindex=asindex)
+        compare(A, A.ss.compactify_rowwise("first", 3, asindex=asindex), ncols=3, asindex=asindex)
+        compare(A, A.ss.compactify_rowwise("first", 2, asindex=asindex), ncols=2, asindex=asindex)
+        compare(
+            A,
+            A.ss.compactify_rowwise("first", 2, asindex=asindex),
+            ncols=2,
+            asindex=asindex,
+            isequal=do_iso,
+        )
+        compare(A, A.ss.compactify_rowwise("first", 1, asindex=asindex), ncols=1, asindex=asindex)
+        compare(
+            A,
+            A.ss.compactify_rowwise("first", 1, asindex=asindex),
+            ncols=1,
+            asindex=asindex,
+            isequal=do_iso,
+        )
+        compare(A, A.ss.compactify_rowwise("last", 1, asindex=asindex), ncols=1, asindex=asindex)
+        compare(
+            A, A.ss.compactify_rowwise("smallest", 1, asindex=asindex), ncols=1, asindex=asindex
+        )
+        compare(A, A.ss.compactify_rowwise("largest", 1, asindex=asindex), ncols=1, asindex=asindex)
+        compare(A, A.ss.compactify_rowwise("first", 0, asindex=asindex), ncols=0, asindex=asindex)
+
+    B = A.ss.compactify_columnwise("first", nrows=1)
+    expected = Matrix.from_values(
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 2, 3, 4, 5, 6],
+        1 if do_iso else [3, 2, 3, 3, 8, 1, 4],
+    )
+    assert B.isequal(expected)
+    B = A.ss.compactify_columnwise("last", nrows=1, asindex=True)
+    expected = Matrix.from_values(
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 2, 3, 4, 5, 6],
+        [3, 0, 6, 6, 6, 4, 1],
+    )
+    assert B.isequal(expected)
+    with pytest.raises(ValueError):
+        A.ss.compactify_rowwise("bad_how")
+
+
+@pytest.mark.xfail("'Needs investigated'", strict=True)
 def test_deprecated(A):
     with pytest.warns(DeprecationWarning):
         A.reduce_rows()
@@ -2942,3 +3079,16 @@ def test_deprecated(A):
         A.ss.scan_rows()
     with pytest.warns(DeprecationWarning):
         A.ss.scan_columns()
+
+
+@pytest.mark.xfail("'Expressions need .ndim'", strict=True)
+def test_ndim(A):
+    assert A.ndim == 2
+    assert A.ewise_mult(A).ndim == 2
+    assert (A & A).ndim == 2
+    assert (A @ A).ndim == 2
+
+
+@pytest.mark.xfail("'Needs investigated'", strict=True)
+def test_sizeof(A):
+    assert sys.getsizeof(A) > A.nvals * 16

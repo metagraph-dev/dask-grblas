@@ -74,6 +74,8 @@ class InnerVector(InnerBaseType):
 
 
 class Vector(BaseType):
+    ndim = 1
+
     @classmethod
     def from_delayed(cls, vector, dtype, size, *, name=None):
         if not isinstance(vector, Delayed):
@@ -422,4 +424,5 @@ class TupleExtractor:
         self.indices += index_offset[0]
 
 
+gb.utils._output_types[Vector] = gb.Vector
 from .matrix import InnerMatrix  # noqa isort:skip

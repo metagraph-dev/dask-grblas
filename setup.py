@@ -12,6 +12,6 @@ setup(
     packages=["dask_grblas"],
     license="Apache License 2.0",
     setup_requires=[],
-    install_requires=["grblas >= 1.3.14", "dask[array]"],
+    install_requires=["grblas >= 1.3.15", "dask[array]"],
     tests_require=["pytest"],
 )
