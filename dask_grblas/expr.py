@@ -31,6 +31,8 @@ class GbDelayed:
         self.kwargs = kwargs
         self._meta = meta
         self.output_type = get_return_type(meta.output_type.new(int))
+        self.output_type = meta.output_type
+        self.ndim = len(meta.shape)
 
     def _matmul(self, meta, mask=None):
         left_operand = self.parent

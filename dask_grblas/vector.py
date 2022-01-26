@@ -170,6 +170,7 @@ class Vector(BaseType):
         if meta is None:
             meta = gb.Vector.new(delayed.dtype, delayed.shape[0])
         self._meta = meta
+        self._size = meta.size
         self.dtype = meta.dtype
 
     @property

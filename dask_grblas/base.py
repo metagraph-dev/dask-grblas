@@ -106,60 +106,6 @@ class BaseType:
         )
         return type(self)(delayed)
 
-    def __or__(self, other):
-        if self._is_scalar:
-            return NotImplemented
-        from .infix import _ewise_infix_expr
-
-        return _ewise_infix_expr(self, other, method="ewise_add", within="__or__")
-
-    def __ror__(self, other):
-        if self._is_scalar:
-            return NotImplemented
-        from .infix import _ewise_infix_expr
-
-        return _ewise_infix_expr(other, self, method="ewise_add", within="__ror__")
-
-    def __and__(self, other):
-        if self._is_scalar:
-            return NotImplemented
-        from .infix import _ewise_infix_expr
-
-        return _ewise_infix_expr(self, other, method="ewise_mult", within="__and__")
-
-    def __rand__(self, other):
-        if self._is_scalar:
-            return NotImplemented
-        from .infix import _ewise_infix_expr
-
-        return _ewise_infix_expr(self, other, method="ewise_mult", within="__rand__")
-
-    def __matmul__(self, other):
-        if self._is_scalar:
-            return NotImplemented
-        from .infix import _matmul_infix_expr
-
-        return _matmul_infix_expr(self, other, within="__matmul__")
-
-    def __rmatmul__(self, other):
-        if self._is_scalar:
-            return NotImplemented
-        from .infix import _matmul_infix_expr
-
-        return _matmul_infix_expr(other, self, within="__rmatmul__")
-
-    def __imatmul__(self, other):
-        if self._is_scalar:
-            raise TypeError("'__imatmul__' not supported for Scalar")
-        self << self @ other
-        return self
-
-    def __bool__(self):
-        raise TypeError(
-            f"__bool__ not defined for objects of type {type(self)}.  "
-            "Perhaps use .nvals attribute instead."
-        )
-
     def __lshift__(self, expr):
         self.update(expr)
 

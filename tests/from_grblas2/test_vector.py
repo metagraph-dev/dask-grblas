@@ -469,7 +469,6 @@ def test_assign(v):
         w[w] = 1
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_assign_scalar(v):
     result = Vector.from_values([1, 3, 4, 5, 6], [9, 9, 2, 9, 0])
     w = v.dup()
