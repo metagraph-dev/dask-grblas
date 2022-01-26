@@ -1423,7 +1423,7 @@ def test_smallestk(v):
 
 
 @pytest.mark.parametrize("do_iso", [False, True])
-@pytest.mark.xfail("'Needs investigated'", strict=True)
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_compactify(do_iso):
     orig_indices = [1, 3, 4, 6]
     new_indices = [0, 1, 2, 3]
@@ -1566,6 +1566,6 @@ def test_ndim(A, v):
     assert (A @ v).ndim == 1
 
 
-@pytest.mark.xfail("'Needs investigated'", strict=True)
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_sizeof(v):
     assert sys.getsizeof(v) > v.nvals * 16
