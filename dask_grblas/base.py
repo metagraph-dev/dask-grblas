@@ -11,6 +11,18 @@ from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
 _expect_type = gb.base._expect_type
 
 
+def _check_mask(mask, output=None):
+    if not isinstance(mask, Mask):
+        if isinstance(mask, BaseType):
+            raise TypeError("Mask must indicate values (M.V) or structure (M.S)")
+        raise TypeError(f"Invalid mask: {type(mask)}")
+    if output is not None:
+        from .vector import Vector
+
+        if type(output) is Vector and type(mask.mask) is not Vector:
+            raise TypeError(f"Mask object must be type Vector; got {type(mask.mask)}")
+
+
 class InnerBaseType:
     def astype(self, dtype):
         return wrap_inner(self.value.dup(dtype))
@@ -135,6 +147,7 @@ class BaseType:
             raise TypeError("Got multiple values for argument 'mask'")
         if mask_arg is not None:
             mask = mask_arg
+            _check_mask(mask)
         if accum_arg is not None:
             if accum is not None:
                 raise TypeError("Got multiple values for argument 'accum'")
@@ -200,7 +213,16 @@ class BaseType:
 
     def update(self, expr):
         if isinstance(expr, Number):
-            Updater(self)[:] << expr
+            if self.ndim == 2:
+                raise TypeError(
+                    "Warning: updating a Matrix with a scalar without a mask will "
+                    "make the Matrix dense.  This may use a lot of memory and probably "
+                    "isn't what you want.  Perhaps you meant:"
+                    "\n\n    M(M.S) << s\n\n"
+                    "If you do wish to make a dense matrix, then please be explicit:"
+                    "\n\n    M[:, :] = s"
+                )
+            Updater(self)[...] << expr
             return
         self._meta.update(expr._meta)
         self._meta.clear()

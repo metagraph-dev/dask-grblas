@@ -361,7 +361,26 @@ class TransposedMatrix:
         self._meta = matrix._meta.T
 
     def new(self, *, dtype=None, mask=None):
-        raise NotImplementedError("A.T.new()")
+        gb_dtype = dtype if dtype is not None else self._matrix.dtype
+        dtype = np_dtype(gb_dtype)
+        delayed = self._matrix._delayed
+        if mask is None:
+            mask_ind = None
+            mask_type = None
+        else:
+            mask = mask.mask
+            mask_ind = "ji"
+            mask_type = get_grblas_type(mask)
+        delayed = da.core.blockwise(
+            *(_transpose, "ji"),
+            *(delayed, "ij"),
+            *(mask, mask_ind),
+            mask_type=mask_type,
+            gb_dtype=gb_dtype,
+            dtype=dtype,
+            meta=delayed._meta
+        )
+        return Matrix(delayed)
 
     @property
     def T(self):
@@ -399,6 +418,11 @@ class TransposedMatrix:
     __getitem__ = Matrix.__getitem__
     __array__ = Matrix.__array__
     name = Matrix.name
+
+
+def _transpose(chunk, mask, mask_type, gb_dtype):
+    mask = None if mask is None else mask_type(mask.value)
+    return InnerMatrix(chunk.value.T.new(mask=mask, dtype=gb_dtype))
 
 
 def _delitem_chunk(inner_mat, row_range, col_range, row, col):

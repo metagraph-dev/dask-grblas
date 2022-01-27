@@ -155,10 +155,10 @@ class Vector(BaseType):
             vdtype = meta.dtype
             np_vdtype_ = np_dtype(vdtype)
             chunksz = build_ranges_dask_array_from_chunks(chunks[0], "ranges-" + tokenize(chunks))
-            delayed = da.map_blocks(
+            delayed_ = da.map_blocks(
                 _new_Vector, chunksz, gb_dtype=vdtype, dtype=np_vdtype_, meta=InnerVector(meta)
             )
-            return Vector(delayed)
+            return Vector(delayed_)
 
         vector = gb.Vector.new(dtype, size)
         return cls.from_delayed(delayed(vector), vector.dtype, vector.size, name=name)
@@ -172,6 +172,24 @@ class Vector(BaseType):
         self._meta = meta
         self._size = meta.size
         self.dtype = meta.dtype
+
+    def _as_matrix(self):
+        """Cast this Vector to a Matrix (such as a column vector).
+
+        This is SuiteSparse-specific and may change in the future.
+        This copies the vector.
+        """
+        from .matrix import Matrix
+
+        x = self._delayed
+        x = x.map_blocks(
+            _as_matrix,
+            chunks=(x.chunks[0], (1,)),
+            new_axis=1,
+            dtype=x.dtype,
+            meta=InnerMatrix(gb.Matrix.new(self.dtype))
+        )
+        return Matrix(x)
 
     @property
     def S(self):
@@ -367,6 +385,10 @@ class Vector(BaseType):
         # n = ffi_new("GrB_Index*")
         # check_status(lib.GrB_Vector_nvals(n, self.gb_obj[0]), self)
         # return n[0]
+
+
+def _as_matrix(x):
+    return InnerMatrix(x.value._as_matrix())
 
 
 def _delitem_chunk(inner_vec, chunk_range, index):

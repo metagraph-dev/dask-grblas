@@ -9,7 +9,7 @@ import grblas as gb
 from grblas.exceptions import DimensionMismatch
 from dask.base import tokenize
 
-from .base import BaseType, InnerBaseType
+from .base import BaseType, InnerBaseType, _check_mask
 from .mask import Mask
 from .utils import (
     get_grblas_type,
@@ -39,7 +39,6 @@ class GbDelayed:
             self._nrows = meta.nrows
             self._ncols = meta.ncols
         
-
     def _matmul(self, meta, mask=None):
         left_operand = self.parent
         right_operand = self.args[0]
@@ -202,7 +201,7 @@ class GbDelayed:
 
     def new(self, *, dtype=None, mask=None):
         if mask is not None:
-            assert isinstance(mask, Mask)
+            _check_mask(mask)
             meta = self._meta.new(dtype=dtype, mask=mask._meta)
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
@@ -517,8 +516,9 @@ class Updater:
         if isinstance(delayed, Number) or (
             isinstance(delayed, BaseType) and get_meta(delayed)._is_scalar
         ):
-            if len(self.parent.shape) > 0:
-                self.__setitem__(slice(None), delayed)
+            ndim = len(self.parent.shape)
+            if ndim > 0:
+                self.__setitem__(_squeeze((slice(None),) * ndim), delayed)
             elif self.accum is not None:
                 raise TypeError('Accumulating into Scalars is not supported')
             elif self.mask is not None:
@@ -670,11 +670,12 @@ class Fragmenter:
     stores only that part of the data-chunk selected by the index
     """
 
-    def __init__(self, ndim=None, index=None, mask=None, obj=None):
+    def __init__(self, ndim=None, index=None, mask=None, obj=None, ot=False):
         self.ndim = ndim
         self.index = index
         self.mask = mask
         self.obj = obj
+        self.ot = ot
 
 
 def _ceildiv(a, b):
@@ -774,7 +775,7 @@ def _chunk_in_slice(chunk_begin, chunk_end, slice_start, slice_stop, slice_step)
         return False, np.array([], dtype=int)
 
 
-def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes):
+def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes, ot):
     x_ranges = args[0:x_ndim]
     indices = args[x_ndim : 2 * x_ndim]
 
@@ -792,6 +793,7 @@ def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes):
         y = mask_
 
     obj_ = obj
+    T = (1, 0) if ot else (0, 1)
     if isinstance(obj, InnerBaseType):
         obj_ = obj.value
         if obj.ndim > 0:
@@ -823,7 +825,7 @@ def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes):
             if (subassign and mask is not None) or not obj_is_scalar:
                 # Here mask and obj are already aligned if both exist
                 obj_begin = s.start + s.step * obj_offsets[axis]
-                obj_end = s.start + s.step * (obj_offsets[axis] + y.shape[obj_axis])
+                obj_end = s.start + s.step * (obj_offsets[axis] + y.shape[T[obj_axis]])
                 obj_begin = obj_begin - idx_offset
                 obj_end = obj_end - idx_offset
                 idx_within, idx = _chunk_in_slice(data_begin, data_end, obj_begin, obj_end, s.step)
@@ -853,25 +855,28 @@ def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes):
         if not idx_within:
             break
         index_tuple += (idx,)
-
+    # ---------------- end for loop --------------------------
     if idx_within:
         if not obj_is_scalar:
-            obj_ = obj_[_squeeze(obj_index_tuple)].new()
+            if ot:
+                obj_ = obj_[obj_index_tuple[::-1]].new()
+            else:
+                obj_ = obj_[_squeeze(obj_index_tuple)].new()
         if subassign and mask is not None:
             mask_ = mask_[_squeeze(obj_index_tuple)].new()
-            index_tuple, obj_, mask_ = _uniquify(x_ndim, index_tuple, obj_, mask_)
+            index_tuple, obj_, mask_ = _uniquify(x_ndim, index_tuple, obj_, mask_, ot)
         else:
             mask_ = None
-            index_tuple, obj_, _ = _uniquify(x_ndim, index_tuple, obj_)
-        return Fragmenter(x_ndim, index_tuple, mask_, obj_)
+            index_tuple, obj_, _ = _uniquify(x_ndim, index_tuple, obj_, None, ot)
+        return Fragmenter(x_ndim, index_tuple, mask_, obj_, ot)
     else:
         return Fragmenter(x_ndim)
 
 
-def _uniquify_merged(x, axis=None, keepdims=None, computing_meta=None):
+def _uniquify_merged(ot, x, axis=None, keepdims=None, computing_meta=None):
     if x.index is None:
         return x
-    x.index, x.obj, x.mask = _uniquify(x.ndim, x.index, x.obj, x.mask)
+    x.index, x.obj, x.mask = _uniquify(x.ndim, x.index, x.obj, x.mask, ot)
     return x
 
 
@@ -886,6 +891,7 @@ def _assign(
     mask_type,
     replace,
     accum,
+    ot,
 ):
     x = old_data.value
 
@@ -913,7 +919,7 @@ def _assign(
         normalized_index += (i,)
     index = _squeeze(normalized_index)
 
-    obj = new_data.obj
+    obj = new_data.obj.T if ot else new_data.obj
 
     if subassign:
         x[index](mask=mask, replace=replace, accum=accum) << obj
@@ -973,6 +979,7 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
 
         index_tuple += (idx,)
         mask_index_tuple += (mask_idx,)
+    # ---------------- end for loop --------------------------
     x = x.value
     if idx_within:
         index_tuple = _squeeze(index_tuple)
@@ -1022,6 +1029,7 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
                     chunk_output_offset += idx_cum[-1]
 
             index_tuple += (idx_final,)
+    # ---------------- end for loop --------------------------
     index_tuple = _squeeze(index_tuple)
     return wrap_inner(fused_fragments[index_tuple].new())
 
@@ -1030,11 +1038,11 @@ class AmbiguousAssignOrExtract:
     def __init__(self, parent, index):
         self.resolved_indexes = IndexerResolver(parent, index)
         self.parent = parent
-        self.index = (index,) if type(index) is not tuple else index
-        IndexerResolver.validate_types(self.index)
+        self.index = index
+        # IndexerResolver.validate_types(self.index)
         self._meta = parent._meta[index]
         # infix expression requirements:
-        shape = _shape(parent, self.index)
+        shape = tuple(i.size for i in self.resolved_indexes.indices if i.size)
         self.ndim = len(shape)
         self.output_type = _get_grblas_type_with_ndims(self.ndim)
         if self.ndim == 1:
@@ -1057,7 +1065,7 @@ class AmbiguousAssignOrExtract:
 
         ndim = len(self.parent.shape)
         dtype = np_dtype(meta.dtype)
-        indices = self.index
+        indices = tuple(i.index for i in IndexerResolver(self.parent, self.index).indices)
         if ndim in [1, 2]:
             x = self.parent._delayed
             # prepare arguments for blockwise:
@@ -1081,7 +1089,7 @@ class AmbiguousAssignOrExtract:
                     cat_axes += [axis]
                 elif type(indx) is slice:
                     # convert slice to dask array
-                    start, stop, step = indx.indices(x.shape[axis])
+                    start, stop, step = indx.start, indx.stop, indx.step
                     indx = slice(start, stop, step)
                     slice_len = len(range(start, stop, step))
                     if slice_len == 0 or mask is None:
@@ -1110,6 +1118,7 @@ class AmbiguousAssignOrExtract:
                 offset = build_chunk_offsets_dask_array(x, axis, "offset-")
                 offset_args += [offset, (axis,)]
 
+            # ---------------- end for loop --------------------------
             x_ind = tuple(range(ndim))
             fragments_ind = x_ind + new_axes
             mask_args = [delayed_mask, new_axes if mask is not None else None]
@@ -1162,7 +1171,7 @@ class AmbiguousAssignOrExtract:
         return self.new().value
 
 
-def _uniquify(ndim, index, obj, mask=None):
+def _uniquify(ndim, index, obj, mask=None, ot=False):
     # here we follow the SuiteSparse:GraphBLAS specification for
     # duplicate index entries: ignore all but the last unique entry
     def extract(obj, indices, axis):
@@ -1175,6 +1184,7 @@ def _uniquify(ndim, index, obj, mask=None):
         return obj[indices].new()
 
     index = index if type(index) is tuple else (index,)
+    T = (1, 0) if ot else (0, 1)
     unique_indices_tuple = ()
     obj_axis = 0
     for axis in range(ndim):
@@ -1188,14 +1198,14 @@ def _uniquify(ndim, index, obj, mask=None):
                 unique_indx, obj_indx = np.unique(reverse_indx, return_index=True)
             if unique_indx.size < reverse_indx.size:
                 indx = list(unique_indx)
-                if (isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType)) and len(
-                    obj.shape
-                ) > 0:
-                    obj = extract(obj, obj_indx, obj_axis)
+                if ((isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType))
+                        and len(obj.shape) > 0):
+                    obj = extract(obj, obj_indx, T[obj_axis])
                 if mask is not None:
                     mask = extract(mask, obj_indx, obj_axis)
             obj_axis += 1
         unique_indices_tuple += (indx,)
+    # ---------------- end for loop --------------------------
     return unique_indices_tuple, obj, mask
 
 
@@ -1207,39 +1217,90 @@ class Assigner:
     def __init__(self, updater, index, subassign=False):
         self.updater = updater
         self.parent = updater.parent
-        self.index = (index,) if type(index) is not tuple else index
-        IndexerResolver.validate_types(self.index)
+        self.resolved_indices = IndexerResolver(self.parent, index).indices
+        self.index = tuple(i.index for i in self.resolved_indices)
         self._meta = updater.parent._meta
         self.subassign = subassign
 
     def update(self, obj):
+        if not (isinstance(obj, BaseType) or isinstance(obj, Number)):
+            try:
+                obj_transposed = obj._is_transposed
+            except AttributeError:
+                raise TypeError('Bad type for argument `obj`')
+            obj = obj._matrix
+        else:
+            obj_transposed = False
+        obj_is_scalar = not (isinstance(obj, BaseType) and obj.ndim > 0)
         parent = self.parent
         mask = self.updater.mask
         replace = self.updater.replace
         subassign = self.subassign
         indices = self.index
         meta = self._meta
-        if not (isinstance(obj, BaseType) or isinstance(obj, Number)):
-            raise TypeError('Bad type for argument `obj`')
-        obj_is_scalar = not (
-            isinstance(obj, BaseType) and type(obj._meta) in {gb.Vector, gb.Matrix}
-        )
         out_shape = _shape(parent, indices)
+        ndim = len(parent.shape)
+        out_dim = len(out_shape)
+        dtype = np_dtype(meta.dtype)
         if mask is not None:
+            if out_shape == ():
+                if ndim > 1:
+                    if mask.mask.ndim == 2:
+                        raise TypeError('Single element assign does not accept a submask')
+                    mask_collection_type = type(mask.mask).__name__
+                    parent_type = type(parent).__name__
+                    raise TypeError(
+                        f'Unable to use {mask_collection_type} mask on single element '
+                        f'assignment to a {parent_type}'
+                    )
             if subassign:
                 if out_shape == ():
-                    raise TypeError('Single element assign does not accept a submask')
-                out_dim = len(out_shape)
-                if len(out_shape) != len(mask.mask.shape):
-                    raise TypeError(
-                        f'Mask object must be type {_get_type_with_ndims(out_dim).__name__}'
-                    )
+                    if ndim == 1:
+                        raise TypeError('Single element assign does not accept a submask')
+                if out_dim != mask.mask.ndim:
+                    if ndim == 1:
+                        raise TypeError(
+                            f'Mask object must be type {_get_type_with_ndims(out_dim).__name__}'
+                        )
+                    elif mask.mask.ndim == 1:
+                        raise TypeError(
+                            f'Unable to use Vector mask on Matrix assignment to a Matrix'
+                        )
+                    else:
+                        raise TypeError(
+                            f'Indices for subassign imply Vector submask, but got Matrix mask instead'
+                        )
                 if out_shape != mask.mask.shape:
                     raise DimensionMismatch()
             else:
                 if parent.shape != mask.mask.shape:
-                    raise DimensionMismatch()
-                
+                    if not (ndim == 2 and out_dim == 1):
+                        raise DimensionMismatch()
+                    else:
+                        rem_axis, = [
+                            axis for axis, index in enumerate(self.resolved_indices)
+                            if index.size is not None
+                        ]
+                        if parent.shape[rem_axis] != out_shape[0]:
+                            raise DimensionMismatch()
+                else:
+                    if ndim == 2 and out_dim == 1:
+                        int_axis, = [
+                            axis for axis, index in enumerate(self.resolved_indices)
+                            if index.size is None
+                        ]
+                        indices = list(indices)
+                        indices[int_axis] = [indices[int_axis]]
+                        indices = tuple(indices)
+                        out_shape = _shape(parent, indices)
+                        out_dim = 2
+                        if not obj_is_scalar:
+                            obj = obj._as_matrix()
+                            if int_axis == 0:
+                                obj_transposed = True
+                            else:
+                                obj_transposed = False
+
             assert isinstance(mask, Mask)
             assert meta.nvals == 0
             delayed_mask = mask.mask._delayed
@@ -1248,11 +1309,17 @@ class Assigner:
             delayed_mask = None
             grblas_mask_type = None
 
-        if not obj_is_scalar and out_shape != obj.shape:
-            raise DimensionMismatch()
+        if not obj_is_scalar:
+            obj_shape = obj.shape[::-1] if obj_transposed else obj.shape
+            if len(obj_shape) != out_dim:
+                raise TypeError(
+                    f"Bad type of RHS in single element assignment.\n"
+                    f"    - Expected type: Number or Scalar.\n"
+                    f"    - Got: {type(obj)}."
+                )
+            if out_shape != obj_shape:
+                raise DimensionMismatch()
 
-        ndim = len(parent.shape)
-        dtype = np_dtype(meta.dtype)
         if ndim in [1, 2]:
             # prepare arguments for blockwise:
             x = parent._optional_dup()
@@ -1263,18 +1330,17 @@ class Assigner:
                 if mask is not None and not obj_is_scalar:
                     # align mask and obj in order to fix obj_offsets
                     # before calculating them
-                    if mask.mask.shape != obj.shape:
+                    if mask.mask.shape != obj_shape:
                         raise DimensionMismatch()
-                    ind = tuple(range(obj._delayed.ndim))
+                    mask_ind = tuple(range(obj._delayed.ndim))
+                    obj_ind = mask_ind[::-1] if obj_transposed else mask_ind
                     _, (obj._delayed, delayed_mask) = da.core.unify_chunks(
-                        obj._delayed, ind, delayed_mask, ind
+                        obj._delayed, obj_ind, delayed_mask, mask_ind
                     )
             elif mask is not None:
                 # align `x` and its mask in order to fix offsets
                 # of `x` before calculating them
-                if mask.mask.shape != parent.shape:
-                    raise DimensionMismatch()
-                all_ints = np.all(tuple(isinstance(i, Integral) for i in x_ind))
+                all_ints = np.all(tuple(isinstance(i, Integral) for i in indices))
                 mask_ind = tuple(i for i in x_ind if all_ints or not isinstance(indices[i], Integral))
                 _, (x, delayed_mask) = da.core.unify_chunks(x, x_ind, delayed_mask, mask_ind)
 
@@ -1285,6 +1351,7 @@ class Assigner:
             index_axes = ()
             # Note: the blockwise kwarg `new_axes` is non-empty only in one case:
             # where index is a slice and obj is a scalar and there is no mask
+            T = (1, 0) if obj_transposed else (0, 1)
             new_axes = dict()
             obj_axis = 0
             for axis in range(ndim):
@@ -1294,17 +1361,16 @@ class Assigner:
                     index_axes += (ndim + axis,)
                 elif type(indx) is slice:
                     s = indx
-                    start, stop, step = s.indices(x.shape[axis])
-                    indices_args += [slice(start, stop, step), None]
+                    indices_args += [s, None]
                     index_axes += (ndim + axis,)
                     if not obj_is_scalar:
                         obj_offset = build_chunk_offsets_dask_array(
-                            obj._delayed, obj_axis, "obj_offset-"
+                            obj._delayed, T[obj_axis], "obj_offset-"
                         )
                         obj_offset_args += [obj_offset, (ndim + axis,)]
                         obj_offset_axes += (axis,)
                     elif subassign and mask is not None:
-                        if mask.mask.shape[obj_axis] != len(range(start, stop, step)):
+                        if mask.mask.shape[obj_axis] != len(range(s.start, s.stop, s.step)):
                             raise DimensionMismatch()
                         obj_offset = build_chunk_offsets_dask_array(
                             delayed_mask, obj_axis, "obj_offset-"
@@ -1329,13 +1395,15 @@ class Assigner:
                 x_ranges_args += [x_ranges, (axis,)]
                 obj_axis += 1
 
+            # ---------------- end for loop --------------------------
             if subassign:
                 mask_args = [delayed_mask, (index_axes if mask is not None else None)]
             else:
                 mask_args = [None, None]
 
             if not obj_is_scalar:
-                obj_args = [obj._delayed, index_axes]
+                dxn = -1 if obj_transposed else 1
+                obj_args = [obj._delayed, index_axes[::dxn]]
             elif isinstance(obj, BaseType):  # dask_grblas.Scalar
                 obj_args = [obj._delayed, None]
             else:  # Number: int, float, etc.
@@ -1358,6 +1426,7 @@ class Assigner:
                 x_ndim=ndim,
                 subassign=subassign,
                 obj_offset_axes=obj_offset_axes,
+                ot=obj_transposed,
                 new_axes=new_axes if new_axes else None,
                 dtype=dtype,
                 meta=wrap_inner(meta),
@@ -1370,7 +1439,7 @@ class Assigner:
             uniquifed = fragments
             for axis in red_axes[::-1]:
                 if uniquifed.numblocks[axis] > 1:
-                    aggregate_func = _uniquify_merged
+                    aggregate_func = partial(_uniquify_merged, obj_transposed)
                 else:
                     aggregate_func = _identity_func
                 uniquifed = da.reduction(
@@ -1412,6 +1481,7 @@ class Assigner:
                 mask_type=grblas_mask_type,
                 replace=replace,
                 accum=self.updater.accum,
+                ot=obj_transposed,
                 dtype=dtype,
                 meta=wrap_inner(parent._meta),
             )
@@ -1686,10 +1756,13 @@ def _concat_fragmenter(seq, axis=0):
         out.index = tuple(out_index)
 
         obj = frag1.obj
+        ot = frag1.ot
+        T = (1, 0) if ot else (0, 1)
         if isinstance(obj, gb.base.BaseType) and type(obj) in {gb.Vector, gb.Matrix}:
             concat = da.core.concatenate_lookup.dispatch(type(wrap_inner(obj)))
-            obj = concat([wrap_inner(frag1.obj), wrap_inner(frag2.obj)], axis=axis).value
+            obj = concat([wrap_inner(frag1.obj), wrap_inner(frag2.obj)], axis=T[axis]).value
         out.obj = obj
+        out.ot = ot
 
         mask = frag1.mask
         if mask is not None:

@@ -1557,7 +1557,6 @@ def test_split(v):
     assert x2.name == "split_1"
 
 
-@pytest.mark.xfail("'Expressions need .ndim'", strict=True)
 def test_ndim(A, v):
     assert v.ndim == 1
     assert v.ewise_mult(v).ndim == 1
