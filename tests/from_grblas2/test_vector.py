@@ -450,11 +450,10 @@ def test_extract_fancy_scalars(v):
         t(accum=binary.plus) << v[0]
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_negative_indices(v):
     assert v[-1].value == 0
     assert compute(v[-v.size].value) is None
-    assert v[[-v.size]].new().nvals == 0
+    assert v[-v.size].new().nvals.compute() == 0
     assert v[Scalar.from_value(-4)].value == 1
     w = v[[-1, -3]].new()
     assert w.isequal(Vector.from_values([0, 1], [0, 2]))

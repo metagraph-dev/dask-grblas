@@ -415,9 +415,10 @@ class IndexerResolver:
                 index += size
                 if index < 0:
                     raise IndexError(f"Index out of range: index={index - size}, size={size}")
-            return AxisIndex(None, int(index))
+            return AxisIndex(None, IndexerResolver.normalize_index(index, size))
         if typ is list:
-            pass
+            index = [IndexerResolver.normalize_index(i, size) for i in index]
+            return AxisIndex(len(index), index)
         elif typ is slice:
             normalized = index.indices(size)
             return AxisIndex(len(range(*normalized)), slice(*normalized))
@@ -434,7 +435,8 @@ class IndexerResolver:
             if typ is Scalar:
                 if index.dtype.name.startswith("F"):
                     raise TypeError(f"An integer is required for indexing.  Got: {index.dtype}")
-                return AxisIndex(None, index)
+                index = index.value.compute()
+                return AxisIndex(None, IndexerResolver.normalize_index(index, size))
 
             from .matrix import Matrix, TransposedMatrix
             from .vector import Vector
@@ -463,6 +465,7 @@ class IndexerResolver:
                         f"`x(mask={index.name}) << value`."
                     )
                 raise TypeError(f"Invalid type for index: {typ}; unable to convert to list")
+            index = [IndexerResolver.normalize_index(i, size) for i in index]
         return AxisIndex(len(index), index)
 
     def get_index(self, dim):
@@ -478,6 +481,16 @@ class IndexerResolver:
             if not isinstance(i, Integral) and type(i) not in {list, slice, np.ndarray, da.Array}:
                 raise TypeError(f"Invalid type for index: {type(i).__name__}.")
         return
+
+    @classmethod
+    def normalize_index(cls, index, size):
+        if index >= size:
+            raise IndexError(f"Index out of range: index={index}, size={size}")
+        if index < 0:
+            index += size
+            if index < 0:
+                raise IndexError(f"Index out of range: index={index - size}, size={size}")
+        return int(index)
 
 
 class Updater:
