@@ -215,7 +215,6 @@ def test_extract_values(v):
     assert vals.dtype == np.float64
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_input_mask():
     v = Vector.from_values([0, 1, 2], [0, 1, 2])
     m = Vector.from_values([0, 2], [0, 2])

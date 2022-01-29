@@ -32,6 +32,19 @@ def wrap_inner(val):
     return _inner_types[type(val)](val)
 
 
+def build_block_index_dask_array(x, axis, name):
+    """
+    Calculate block-index for each chunk of x along axis `axis`
+    e.g. chunks=(..., (5, 3, 4), ...) -> x_axis_indices=[0, 1, 2]
+    """
+    # it is vital to give a unique name to this dask array
+    name = name + tokenize(x, axis, x.numblocks[axis])
+    indices = da.arange(x.numblocks[axis], chunks=1, name=name)
+    # Tamper with the declared chunks of `indices` to make blockwise align it with
+    # x[axis]
+    return da.core.Array(indices.dask, indices.name, (x.chunks[axis],), indices.dtype, meta=x._meta)
+
+
 def build_chunk_offsets_dask_array(x, axis, name):
     """
     Calculate offsets at which each chunk of x starts along axis `axis`

@@ -6,7 +6,7 @@ from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 
-from .base import BaseType, InnerBaseType
+from .base import BaseType, InnerBaseType, _nvals
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from .utils import (
@@ -187,7 +187,7 @@ class Vector(BaseType):
             chunks=(x.chunks[0], (1,)),
             new_axis=1,
             dtype=x.dtype,
-            meta=InnerMatrix(gb.Matrix.new(self.dtype))
+            meta=InnerMatrix(gb.Matrix.new(self.dtype)),
         )
         return Matrix(x)
 
@@ -340,16 +340,61 @@ class Vector(BaseType):
         vector.build(indices, values, dup_op=dup_op)
         self._delayed = Vector.from_vector(vector)._delayed
 
-    def to_values(self, dtype=None):
-        delayed = self._delayed
+    def to_values(self, dtype=None, chunks='auto'):
+        x = self._delayed
+        nvals_array = da.core.blockwise(
+            *(_nvals, "i"),
+            *(x, "i"),
+            adjust_chunks={"i": 1},
+            dtype=np.int64,
+            meta=np.array([])
+        ).compute()
+
+        stops = np.cumsum(nvals_array)
+        starts = np.roll(stops, 1)
+        starts[0] = 0
+        nnz = stops[-1]
+
+        starts = starts.reshape(nvals_array.shape)
+        starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
+        starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+        
+        stops = stops.reshape(nvals_array.shape)
+        stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
+        stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
+
+        chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
+        output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
+
         dtype_ = np_dtype(self.dtype)
+        index_offsets = build_chunk_offsets_dask_array(x, 0, "index_offset-")
+        x = da.core.blockwise(
+            *(VectorTupleExtractor, "ij"),
+            *(output_ranges, "j"),
+            *(x, "i"),
+            *(index_offsets, "i"),
+            *(starts, "i"),
+            *(stops, "i"),
+            gb_dtype=dtype,
+            dtype=dtype_,
+            meta=np.array([[]]),
+        )
+        x = da.reduction(x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([]))
+
         meta_i, meta_v = self._meta.to_values(dtype)
-        meta = np.array([])
-        offsets = build_chunk_offsets_dask_array(delayed, 0, "index_offset-")
-        x = da.map_blocks(TupleExtractor, delayed, offsets, gb_dtype=dtype, dtype=dtype_, meta=meta)
-        indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
-        values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta)
+        indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta_i)
+        values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta_v)
         return indices, values
+
+        # delayed = self._delayed
+        # dtype_ = np_dtype(self.dtype)
+        # meta_i, meta_v = self._meta.to_values(dtype)
+        # meta = np.array([])
+        # offsets = build_chunk_offsets_dask_array(delayed, 0, "index_offset-")
+        # x = da.map_blocks(TupleExtractor, delayed, offsets, gb_dtype=dtype, dtype=dtype_, meta=meta)
+        # indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
+        # values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta)
+        # return indices, values
 
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(other, Vector, within="isequal", argname="other")
@@ -362,7 +407,9 @@ class Vector(BaseType):
     def _delete_element(self, resolved_indexes):
         idx = resolved_indexes.indices[0]
         delayed = self._optional_dup()
-        index_ranges = build_chunk_ranges_dask_array(delayed, 0, "index-ranges-" + tokenize(delayed, 0))
+        index_ranges = build_chunk_ranges_dask_array(
+            delayed, 0, "index-ranges-" + tokenize(delayed, 0)
+        )
         deleted = da.core.blockwise(
             *(_delitem_chunk, "i"),
             *(delayed, "i"),
@@ -439,6 +486,35 @@ def _concat_vector(seq, axis=0):
         value[start:end] = x.value
         start = end
     return InnerVector(value)
+
+
+def _identity(chunk, keepdims=None, axis=None):
+    return chunk
+
+
+def _flatten(x, axis=None, keepdims=None):
+    if type(x) is list:
+        x[0].indices = np.concatenate([y.indices for y in x])
+        x[0].values = np.concatenate([y.values for y in x])
+        return x[0]
+    else:
+        return x
+
+
+class VectorTupleExtractor:
+    def __init__(self, output_range, grblas_inner_vector, index_offset, nval_start, nval_stop, gb_dtype=None):
+        self.indices, self.values = grblas_inner_vector.value.to_values(gb_dtype)
+        if output_range[0].start < nval_stop[0] and nval_start[0] < output_range[0].stop:
+            start = max(output_range[0].start, nval_start[0])
+            stop = min(output_range[0].stop, nval_stop[0])
+            self.indices += index_offset[0]
+            start = start - nval_start[0]
+            stop = stop - nval_start[0]
+            self.indices = self.indices[start: stop]
+            self.values = self.values[start: stop]
+        else:
+            self.indices = np.array([], dtype=self.indices.dtype)
+            self.values = np.array([], dtype=self.values.dtype)
 
 
 class TupleExtractor:

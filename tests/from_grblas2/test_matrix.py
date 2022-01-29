@@ -449,7 +449,6 @@ def test_extract_column(A):
     assert w2.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_input_mask():
     # A       M
     # 0 1 2   _ 0 1
@@ -570,6 +569,44 @@ def test_extract_input_mask():
     result(input_mask=MT.V) << A.T[[1, 2], 0]
     assert result.isequal(expected)
 
+    # With transpose input value
+    # Matrix structure mask
+    A = Matrix.from_values(
+        [0, 0, 0, 1, 1, 1],
+        [0, 1, 2, 0, 1, 2],
+        [0, 1, 2, 3, 4, 5],
+    )
+    M = Matrix.from_values(
+        [0, 0, 1, 1],
+        [1, 2, 0, 1],
+        [0, 1, 2, 3],
+    )
+    A.rechunk(chunks=((1, 1), (2, 1)))
+    result = A.T[[0, 1], 0].new(input_mask=MT.S)
+    expected = Vector.from_values([1], [1])
+    assert result.isequal(expected)
+    # again
+    result.clear()
+    result(input_mask=MT.S) << A.T[[0, 1], 0]
+    assert result.isequal(expected)
+
+    # Vector mask
+    result = A.T[[0, 1], 0].new(input_mask=m.S)
+    assert result.isequal(expected)
+    # again
+    result.clear()
+    result(input_mask=m.S) << A.T[[0, 1], 0]
+    assert result.isequal(expected)
+
+    # Matrix value mask
+    result = A.T[[1, 2], 0].new(input_mask=MT.V)
+    expected = Vector.from_values([1], [2], size=2)
+    assert result.isequal(expected)
+    # again
+    result.clear()
+    result(input_mask=MT.V) << A.T[[1, 2], 0]
+    assert result.isequal(expected)
+
 
 def test_extract_with_matrix(A):
     with pytest.raises(TypeError, match="Invalid type for index"):
@@ -580,7 +617,6 @@ def test_extract_with_matrix(A):
         A[[0], A.V].new()
 
 
-# @pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_assign(A):
     B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
     result = Matrix.from_values(
@@ -602,6 +638,22 @@ def test_assign(A):
     assert C.reduce_scalar().new() == nvals
     with pytest.raises(TypeError, match="Invalid type for index"):
         C[C, [1]] = C
+
+    B = B.T.new()
+    C = A.dup()
+    C()[[0, 2], [0, 5]] = B.T
+    assert C.isequal(result)
+    C = A.dup()
+    C[:3:2, :6:5]() << B.T
+    assert C.isequal(result)
+
+    B.rechunk(chunks=1)
+    C = A.dup()
+    C()[[0, 2], [0, 5]] = B.T
+    assert C.isequal(result)
+    C = A.dup()
+    C[:3:2, :6:5]() << B.T
+    assert C.isequal(result)
 
 
 def test_assign_wrong_dims(A):
@@ -3088,7 +3140,6 @@ def test_deprecated(A):
         A.ss.scan_columns()
 
 
-@pytest.mark.xfail("'Expressions need .ndim'", strict=True)
 def test_ndim(A):
     assert A.ndim == 2
     assert A.ewise_mult(A).ndim == 2

@@ -5,12 +5,13 @@ from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 
-from .base import BaseType, InnerBaseType
+from .base import BaseType, InnerBaseType, _nvals
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
 from .utils import (
     np_dtype,
     wrap_inner,
+    build_chunk_offsets_dask_array,
     build_ranges_dask_array_from_chunks,
     build_chunk_ranges_dask_array,
     wrap_dataframe,
@@ -196,6 +197,8 @@ class Matrix(BaseType):
         if meta is None:
             meta = gb.Matrix.new(delayed.dtype, *delayed.shape)
         self._meta = meta
+        self._nrows = meta.nrows
+        self._ncols = meta.ncols
         self.dtype = meta.dtype
 
     @property
@@ -316,10 +319,63 @@ class Matrix(BaseType):
         self._delayed = m._delayed
         self._meta = m._meta
 
-    def to_values(self, dtype=None):
-        # TODO: make this lazy; can we do something smart with this?
-        return self.compute().to_values(dtype=dtype)
+    def to_values(self, dtype=None, chunks='auto'):
+        x = self._delayed
+        nvals_2D = da.core.blockwise(
+            *(_nvals, "ij"),
+            *(x, "ij"),
+            adjust_chunks={"i": 1, "j": 1},
+            dtype=np.int64,
+            meta=np.array([[]])
+        ).compute()
+        nvals_1D = nvals_2D.flatten()
 
+        stops = np.cumsum(nvals_1D)
+        starts = np.roll(stops, 1)
+        starts[0] = 0
+        nnz = stops[-1]
+
+        starts = starts.reshape(nvals_2D.shape)
+        starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
+        starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+
+        stops = stops.reshape(nvals_2D.shape)
+        stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
+        stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
+
+        chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
+        output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
+
+        dtype_ = np_dtype(self.dtype)
+        row_offsets = build_chunk_offsets_dask_array(x, 0, "row_offset-")
+        col_offsets = build_chunk_offsets_dask_array(x, 1, "col_offset-")
+        x = da.core.blockwise(
+            *(MatrixTupleExtractor, "ijk"),
+            *(output_ranges, "k"),
+            *(x, "ij"),
+            *(row_offsets, "i"),
+            *(col_offsets, "j"),
+            *(starts, "ij"),
+            *(stops, "ij"),
+            gb_dtype=dtype,
+            dtype=dtype_,
+            meta=np.array([[[]]]),
+        )
+        x = da.reduction(x, _identity, _flatten, axis=1, concatenate=False, dtype=dtype_, meta=np.array([[]]))
+        x = da.reduction(x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([]))
+
+        meta_i, meta_j, meta_v = self._meta.to_values(dtype)
+        rows = da.map_blocks(_get_rows, x, dtype=meta_i.dtype, meta=meta_i)
+        cols = da.map_blocks(_get_cols, x, dtype=meta_j.dtype, meta=meta_j)
+        vals = da.map_blocks(_get_vals, x, dtype=meta_v.dtype, meta=meta_v)
+        return rows, cols, vals
+
+    def rechunk(self, chunks="auto"):
+        chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
+        rcd = self.to_values()
+        new = Matrix.from_values(*rcd, chunks=chunks)
+        self._delayed = new._delayed
+        
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(
             other, (Matrix, TransposedMatrix), within="isequal", argname="other"
@@ -336,8 +392,12 @@ class Matrix(BaseType):
         row = resolved_indexes.indices[0]
         col = resolved_indexes.indices[1]
         delayed = self._optional_dup()
-        row_ranges = build_chunk_ranges_dask_array(delayed, 0, "index-ranges-" + tokenize(delayed, 0))
-        col_ranges = build_chunk_ranges_dask_array(delayed, 1, "index-ranges-" + tokenize(delayed, 1))
+        row_ranges = build_chunk_ranges_dask_array(
+            delayed, 0, "index-ranges-" + tokenize(delayed, 0)
+        )
+        col_ranges = build_chunk_ranges_dask_array(
+            delayed, 1, "index-ranges-" + tokenize(delayed, 1)
+        )
         deleted = da.core.blockwise(
             *(_delitem_chunk, "ij"),
             *(delayed, "ij"),
@@ -378,7 +438,7 @@ class TransposedMatrix:
             mask_type=mask_type,
             gb_dtype=gb_dtype,
             dtype=dtype,
-            meta=delayed._meta
+            meta=delayed._meta,
         )
         return Matrix(delayed)
 
@@ -593,6 +653,47 @@ def _concat_matrix(seq, axis=0):
             ]
         value = gb.ss.concat([[item.value for item in seq]])
     return InnerMatrix(value)
+
+
+def _get_rows(tuple_extractor):
+    return tuple_extractor.rows
+
+
+def _get_cols(tuple_extractor):
+    return tuple_extractor.cols
+
+
+def _get_vals(tuple_extractor):
+    return tuple_extractor.vals
+
+
+def _flatten(x, axis=None, keepdims=None):
+    if type(x) is list:
+        x[0].rows = np.concatenate([y.rows for y in x])
+        x[0].cols = np.concatenate([y.cols for y in x])
+        x[0].vals = np.concatenate([y.vals for y in x])
+        return x[0]
+    else:
+        return x
+
+
+class MatrixTupleExtractor:
+    def __init__(self, output_range, grblas_inner_matrix, row_offset, col_offset, nval_start, nval_stop, gb_dtype=None):
+        self.rows, self.cols, self.vals = grblas_inner_matrix.value.to_values(gb_dtype)
+        if output_range[0].start < nval_stop[0, 0] and nval_start[0, 0] < output_range[0].stop:
+            start = max(output_range[0].start, nval_start[0, 0])
+            stop = min(output_range[0].stop, nval_stop[0, 0])
+            self.rows += row_offset[0]
+            self.cols += col_offset[0]
+            start = start - nval_start[0, 0]
+            stop = stop - nval_start[0, 0]
+            self.rows = self.rows[start: stop]
+            self.cols = self.cols[start: stop]
+            self.vals = self.vals[start: stop]
+        else:
+            self.rows = np.array([], dtype=self.rows.dtype)
+            self.cols = np.array([], dtype=self.cols.dtype)
+            self.vals = np.array([], dtype=self.vals.dtype)
 
 
 gb.utils._output_types[Matrix] = gb.Matrix

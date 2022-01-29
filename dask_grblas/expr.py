@@ -38,7 +38,7 @@ class GbDelayed:
         elif self.ndim == 2:
             self._nrows = meta.nrows
             self._ncols = meta.ncols
-        
+
     def _matmul(self, meta, mask=None):
         left_operand = self.parent
         right_operand = self.args[0]
@@ -476,14 +476,20 @@ class IndexerResolver:
     def validate_types(cls, indices):
         for i in indices:
             if not isinstance(i, Integral) and type(i) not in {list, slice, np.ndarray, da.Array}:
-                raise TypeError(f'Invalid type for index: {type(i).__name__}.')
+                raise TypeError(f"Invalid type for index: {type(i).__name__}.")
         return
 
 
 class Updater:
     def __init__(self, parent, *, mask=None, accum=None, replace=False, input_mask=None):
+        if input_mask is not None and mask is not None:
+            raise TypeError("mask and input_mask arguments cannot both be given")
+        if input_mask is not None and not isinstance(input_mask, Mask):
+            raise TypeError(r"Mask must indicate values (M.V) or structure (M.S)")
+
         self.parent = parent
         self.mask = mask
+        self.input_mask = input_mask
         self.accum = accum
         if mask is None:
             self.replace = None
@@ -502,9 +508,15 @@ class Updater:
             raise TypeError("Remove Element only supports a single index")
 
     def __getitem__(self, keys):
+        if self.input_mask is not None:
+            raise TypeError("`input_mask` argument may only be used for extract")
+
         return Assigner(self, keys)
 
     def __setitem__(self, keys, obj):
+        if self.input_mask is not None:
+            raise TypeError("`input_mask` argument may only be used for extract")
+
         Assigner(self, keys).update(obj)
 
     def __lshift__(self, delayed):
@@ -513,6 +525,19 @@ class Updater:
 
     def update(self, delayed):
         # Occurs when user calls C(params) << delayed
+        if self.input_mask is not None:
+            if type(delayed) is AmbiguousAssignOrExtract:
+                # w(input_mask) << v[index]
+                self.parent._update(
+                    delayed.new(mask=self.mask, input_mask=self.input_mask),
+                    accum=self.accum,
+                    mask=self.mask,
+                    replace=self.replace,
+                )
+                return
+            else:
+                raise TypeError("`input_mask` argument may only be used for extract")
+
         if isinstance(delayed, Number) or (
             isinstance(delayed, BaseType) and get_meta(delayed)._is_scalar
         ):
@@ -520,10 +545,11 @@ class Updater:
             if ndim > 0:
                 self.__setitem__(_squeeze((slice(None),) * ndim), delayed)
             elif self.accum is not None:
-                raise TypeError('Accumulating into Scalars is not supported')
+                raise TypeError("Accumulating into Scalars is not supported")
             elif self.mask is not None:
-                raise TypeError('Mask not allowed for Scalars')
+                raise TypeError("Mask not allowed for Scalars")
             return
+
         if self.mask is None and self.accum is None:
             return self.parent.update(delayed)
         self.parent._meta._update(
@@ -929,24 +955,28 @@ def _assign(
     return wrap_inner(x)
 
 
-def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dtype, gb_meta):
+def _data_x_index_meshpoint_4extract(
+    *args, xt, input_mask_type, mask_type, index_is_a_number, gb_dtype, gb_meta
+):
     """returns only that part of the data-chunk selected by the index"""
-    x = args[0]
-    indices = args[1 : x.ndim + 1]
-    mask = args[x.ndim + 1]
-    x_offsets = args[x.ndim + 2 :]
+    x = args[0][0] if type(args[0]) is list else args[0]
+    input_mask = args[1][0] if type(args[1]) is list else args[1]
+    indices = args[2 : x.ndim + 2]
+    mask = args[x.ndim + 2]
+    x_offsets = args[x.ndim + 3 :]
+    T = (1, 0) if xt else (0, 1)
     index_tuple = ()
     mask_index_tuple = ()
     idx_within = True
     for axis in range(x.ndim):
         index = indices[axis]
-        offset = x_offsets[axis][0]
+        offset = x_offsets[T[axis]][0][0] if type(x_offsets[T[axis]]) is list else x_offsets[T[axis]][0]
         if type(index) is np.ndarray:
             if type(index[0]) is slice:
                 # Note: slice is already aligned with mask if it exists
                 s = index[0]
                 idx_within, idx = _chunk_in_slice(
-                    offset, offset + x.shape[axis], s.start, s.stop, s.step
+                    offset, offset + x.shape[T[axis]], s.start, s.stop, s.step
                 )
                 if idx_within:
                     mask_begin = _ceildiv(idx.start - s.start, s.step)
@@ -960,7 +990,7 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
                     break
             else:
                 idx = np.array(index) - offset
-                idx_filter = (idx >= 0) & (idx < x.shape[axis])
+                idx_filter = (idx >= 0) & (idx < x.shape[T[axis]])
                 idx_within = np.any(idx_filter)
                 if idx_within:
                     idx = idx[idx_filter]
@@ -969,8 +999,7 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
                     break
         elif isinstance(index, Integral):
             idx = index - offset
-            idx_within = (idx >= 0) and (idx < x.shape[axis])
-            idx = np.array([idx], dtype=np.int64)
+            idx_within = (idx >= 0) and (idx < x.shape[T[axis]])
             mask_idx = None
             if not idx_within:
                 break
@@ -985,7 +1014,9 @@ def _data_x_index_meshpoint_4extract(*args, mask_type, index_is_a_number, gb_dty
         index_tuple = _squeeze(index_tuple)
         mask_index_tuple = _squeeze(mask_index_tuple)
         mask = mask_type(mask.value[mask_index_tuple].new()) if mask is not None else None
-        return wrap_inner(x[index_tuple].new(gb_dtype, mask=mask))
+        input_mask = input_mask_type(input_mask.value) if input_mask is not None else None
+        x = x.T if xt else x
+        return wrap_inner(x[index_tuple].new(gb_dtype, mask=mask, input_mask=input_mask))
     else:
         return wrap_inner(gb_meta.new(gb_dtype))
 
@@ -997,9 +1028,7 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
     fused_fragments = args[ndim].value
     index_tuple = ()
     for axis, idx in enumerate(indices):
-        if axis not in cat_axes:
-            index_tuple += (0,)
-        else:
+        if axis in cat_axes:
             if type(idx) is np.ndarray and type(idx[0]) is slice:
                 s = idx[0]
                 # this branch needs more efficient-handling: (e.g. we should avoid use of np.arange)
@@ -1036,13 +1065,13 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
 
 class AmbiguousAssignOrExtract:
     def __init__(self, parent, index):
-        self.resolved_indexes = IndexerResolver(parent, index)
+        self.resolved_indices = IndexerResolver(parent, index)
         self.parent = parent
         self.index = index
         # IndexerResolver.validate_types(self.index)
         self._meta = parent._meta[index]
         # infix expression requirements:
-        shape = tuple(i.size for i in self.resolved_indexes.indices if i.size)
+        shape = tuple(i.size for i in self.resolved_indices.indices if i.size)
         self.ndim = len(shape)
         self.output_type = _get_grblas_type_with_ndims(self.ndim)
         if self.ndim == 1:
@@ -1051,7 +1080,26 @@ class AmbiguousAssignOrExtract:
             self._nrows = shape[0]
             self._ncols = shape[1]
 
-    def new(self, *, dtype=None, mask=None, name=None):
+    def new(self, *, dtype=None, mask=None, input_mask=None, name=None):
+        parent = self.parent
+        xt = False
+        dxn = 1
+        T = (0, 1)
+        if parent.ndim == 2 and parent._is_transposed:
+            parent = parent._matrix
+            xt = True
+            dxn = -1
+            T = (1, 0)
+        x = parent._delayed
+        x_shape = parent.shape[::dxn]
+        input_shape = x_shape
+        input_ndim = len(input_shape)
+        axes = tuple(range(input_ndim))
+        x_axes = axes[::dxn]
+        indices = tuple(i.index for i in self.resolved_indices.indices)
+        out_ghost_shape = tuple(i.size for i in self.resolved_indices.indices)
+        out_shape = tuple(i.size for i in self.resolved_indices.indices if i.size is not None)
+        out_ndim = len(out_shape)
         if mask is not None:
             assert isinstance(mask, Mask)
             assert self.parent._meta.nvals == 0
@@ -1063,29 +1111,74 @@ class AmbiguousAssignOrExtract:
             delayed_mask = None
             grblas_mask_type = None
 
-        ndim = len(self.parent.shape)
+        if input_mask is not None:
+            if mask is not None:
+                raise TypeError("mask and input_mask arguments cannot both be given")
+            if not isinstance(input_mask, Mask):
+                raise TypeError(r"Mask must indicate values (M.V) or structure (M.S)")
+
+            delayed_input_mask = input_mask.mask._delayed
+            grblas_input_mask_type = get_grblas_type(input_mask)
+            input_mask_ndim = len(input_mask.mask.shape)
+            if out_ndim == 0:
+                raise TypeError("mask is not allowed for single element extraction")
+
+            if input_ndim == input_mask_ndim:
+                if x_shape != input_mask.mask.shape:
+                    raise ValueError("Shape of `input_mask` does not match shape of input")
+                    
+                # align `x` and its input_mask in order to fix offsets
+                # of `x` before calculating them
+                input_mask_axes = axes
+                _, (x, delayed_input_mask) = da.core.unify_chunks(x, x_axes, delayed_input_mask, input_mask_axes)
+                if input_ndim == 1:
+                    if parent.size != input_mask.mask.size:
+                        raise ValueError("Size of `input_mask` does not match size of input")
+            elif input_ndim < input_mask_ndim:
+                if input_ndim == 1:
+                    raise TypeError("Mask object must be type Vector")
+                else:
+                    raise ValueError("Shape of `input_mask` does not match shape of input")
+            else:    
+                if out_ndim == input_ndim:
+                    raise TypeError("Got Vector `input_mask` when extracting a submatrix from a Matrix")
+                elif out_ndim < input_ndim:
+                    (rem_axis,) = [
+                        axis for axis, index in enumerate(self.resolved_indices.indices)
+                        if index.size is not None
+                    ]
+                    if out_ndim == input_mask_ndim:
+                        if input_shape[rem_axis] != input_mask.mask.shape[0]:
+                            if rem_axis == 0:
+                                raise ValueError("Size of `input_mask` Vector does not match nrows of Matrix")
+                            else:
+                                raise ValueError("Size of `input_mask` Vector does not match ncols of Matrix")
+                    input_mask_axes = (axes[rem_axis],)
+                    _, (x, delayed_input_mask) = da.core.unify_chunks(x, x_axes, delayed_input_mask, input_mask_axes)
+        else:
+            delayed_input_mask = None
+            grblas_input_mask_type = None
+
         dtype = np_dtype(meta.dtype)
-        indices = tuple(i.index for i in IndexerResolver(self.parent, self.index).indices)
-        if ndim in [1, 2]:
-            x = self.parent._delayed
+        if input_ndim in [1, 2]:
             # prepare arguments for blockwise:
             indices_args = []
             offset_args = []
             cat_axes = []
             new_axes = ()
-            for axis in range(ndim):
+            for axis in range(input_ndim):
                 indx = indices[axis]
                 if type(indx) is da.Array:
-                    indices_args += [indx, (ndim + axis,)]
-                    new_axes += (ndim + axis,)
+                    indices_args += [indx, (input_ndim + axis,)]
+                    new_axes += (input_ndim + axis,)
                     cat_axes += [axis]
                 elif type(indx) in {list, np.ndarray}:
                     # convert list or numpy array to dask array
                     indx = np.array(indx)
                     name = "list_index-" + tokenize(indx, axis)
                     indx = da.core.from_array(indx, chunks="auto", name=name)
-                    indices_args += [indx, (ndim + axis,)]
-                    new_axes += (ndim + axis,)
+                    indices_args += [indx, (input_ndim + axis,)]
+                    new_axes += (input_ndim + axis,)
                     cat_axes += [axis]
                 elif type(indx) is slice:
                     # convert slice to dask array
@@ -1109,29 +1202,32 @@ class AmbiguousAssignOrExtract:
                     indx = da.Array(
                         indx.dask, indx.name, (chunk_sizes,), indx.dtype, meta=indx._meta
                     )
-                    indices_args += [indx, (ndim + axis,)]
-                    new_axes += (ndim + axis,)
+                    indices_args += [indx, (input_ndim + axis,)]
+                    new_axes += (input_ndim + axis,)
                     cat_axes += [axis]
                 else:
                     indices_args += [indx, None]
 
                 offset = build_chunk_offsets_dask_array(x, axis, "offset-")
-                offset_args += [offset, (axis,)]
+                offset_args += [offset, (T[axis],)]
 
             # ---------------- end for loop --------------------------
-            x_ind = tuple(range(ndim))
-            fragments_ind = x_ind + new_axes
+            fragments_ind = tuple(cat_axes) + new_axes
             mask_args = [delayed_mask, new_axes if mask is not None else None]
+            input_mask_args = [delayed_input_mask, input_mask_axes if input_mask is not None else None]
             index_is_a_number = [isinstance(i, Integral) for i in indices]
 
             # this blockwise is essentially a cartesian product of data chunks and index chunks
             # both index and data chunks are fragmented in the process
             fragments = da.core.blockwise(
                 *(_data_x_index_meshpoint_4extract, fragments_ind),
-                *(x, x_ind),
+                *(x, x_axes),
+                *input_mask_args,
                 *indices_args,
                 *mask_args,
                 *offset_args,
+                xt=xt,
+                input_mask_type=grblas_input_mask_type,
                 mask_type=grblas_mask_type,
                 index_is_a_number=index_is_a_number,
                 gb_dtype=dtype,
@@ -1141,12 +1237,12 @@ class AmbiguousAssignOrExtract:
             )
 
             # this blockwise is essentially an aggregation over the data chunk axes
-            extracts_ind = tuple((i + ndim) for i in x_ind if i in cat_axes)
+            extracts_axes = tuple((i + input_ndim) for i in x_axes if i in cat_axes)
             delayed = da.core.blockwise(
-                *(_defrag_to_index_chunk, extracts_ind),
+                *(_defrag_to_index_chunk, extracts_axes),
                 *indices_args,
                 *(fragments, fragments_ind),
-                x_chunks=x.chunks,
+                x_chunks=x.chunks[::dxn],
                 cat_axes=cat_axes,
                 concatenate=True,
                 dtype=dtype,
@@ -1198,8 +1294,9 @@ def _uniquify(ndim, index, obj, mask=None, ot=False):
                 unique_indx, obj_indx = np.unique(reverse_indx, return_index=True)
             if unique_indx.size < reverse_indx.size:
                 indx = list(unique_indx)
-                if ((isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType))
-                        and len(obj.shape) > 0):
+                if (isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType)) and len(
+                    obj.shape
+                ) > 0:
                     obj = extract(obj, obj_indx, T[obj_axis])
                 if mask is not None:
                     mask = extract(mask, obj_indx, obj_axis)
@@ -1227,7 +1324,7 @@ class Assigner:
             try:
                 obj_transposed = obj._is_transposed
             except AttributeError:
-                raise TypeError('Bad type for argument `obj`')
+                raise TypeError("Bad type for argument `obj`")
             obj = obj._matrix
         else:
             obj_transposed = False
@@ -1246,29 +1343,29 @@ class Assigner:
             if out_shape == ():
                 if ndim > 1:
                     if mask.mask.ndim == 2:
-                        raise TypeError('Single element assign does not accept a submask')
+                        raise TypeError("Single element assign does not accept a submask")
                     mask_collection_type = type(mask.mask).__name__
                     parent_type = type(parent).__name__
                     raise TypeError(
-                        f'Unable to use {mask_collection_type} mask on single element '
-                        f'assignment to a {parent_type}'
+                        f"Unable to use {mask_collection_type} mask on single element "
+                        f"assignment to a {parent_type}"
                     )
             if subassign:
                 if out_shape == ():
                     if ndim == 1:
-                        raise TypeError('Single element assign does not accept a submask')
+                        raise TypeError("Single element assign does not accept a submask")
                 if out_dim != mask.mask.ndim:
                     if ndim == 1:
                         raise TypeError(
-                            f'Mask object must be type {_get_type_with_ndims(out_dim).__name__}'
+                            f"Mask object must be type {_get_type_with_ndims(out_dim).__name__}"
                         )
                     elif mask.mask.ndim == 1:
                         raise TypeError(
-                            f'Unable to use Vector mask on Matrix assignment to a Matrix'
+                            f"Unable to use Vector mask on Matrix assignment to a Matrix"
                         )
                     else:
                         raise TypeError(
-                            f'Indices for subassign imply Vector submask, but got Matrix mask instead'
+                            f"Indices for subassign imply Vector submask, but got Matrix mask instead"
                         )
                 if out_shape != mask.mask.shape:
                     raise DimensionMismatch()
@@ -1277,16 +1374,18 @@ class Assigner:
                     if not (ndim == 2 and out_dim == 1):
                         raise DimensionMismatch()
                     else:
-                        rem_axis, = [
-                            axis for axis, index in enumerate(self.resolved_indices)
+                        (rem_axis,) = [
+                            axis
+                            for axis, index in enumerate(self.resolved_indices)
                             if index.size is not None
                         ]
                         if parent.shape[rem_axis] != out_shape[0]:
                             raise DimensionMismatch()
                 else:
                     if ndim == 2 and out_dim == 1:
-                        int_axis, = [
-                            axis for axis, index in enumerate(self.resolved_indices)
+                        (int_axis,) = [
+                            axis
+                            for axis, index in enumerate(self.resolved_indices)
                             if index.size is None
                         ]
                         indices = list(indices)
@@ -1341,7 +1440,9 @@ class Assigner:
                 # align `x` and its mask in order to fix offsets
                 # of `x` before calculating them
                 all_ints = np.all(tuple(isinstance(i, Integral) for i in indices))
-                mask_ind = tuple(i for i in x_ind if all_ints or not isinstance(indices[i], Integral))
+                mask_ind = tuple(
+                    i for i in x_ind if all_ints or not isinstance(indices[i], Integral)
+                )
                 _, (x, delayed_mask) = da.core.unify_chunks(x, x_ind, delayed_mask, mask_ind)
 
             indices_args = []
