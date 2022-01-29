@@ -117,9 +117,11 @@ class Matrix(BaseType):
         rows,
         columns,
         values,
-        *,
+        /,
         nrows=None,
         ncols=None,
+        *,
+        trust_shape=False,
         dup_op=None,
         dtype=None,
         chunks="auto",
@@ -131,14 +133,16 @@ class Matrix(BaseType):
             and type(columns) is da.Array
             and type(values) is da.Array
         ):
-            implied_nrows = 1 + da.max(rows).compute()
-            implied_ncols = 1 + da.max(columns).compute()
-            if nrows is not None and implied_nrows > nrows:
-                raise Exception()
-            if ncols is not None and implied_ncols > ncols:
-                raise Exception()
-            nrows = implied_nrows if nrows is None else nrows
-            ncols = implied_ncols if ncols is None else ncols
+            if not trust_shape or nrows is None or ncols is None:
+                # this branch is an expensive operation:
+                implied_nrows = 1 + da.max(rows).compute()
+                implied_ncols = 1 + da.max(columns).compute()
+                if nrows is not None and implied_nrows > nrows:
+                    raise Exception()
+                if ncols is not None and implied_ncols > ncols:
+                    raise Exception()
+                nrows = implied_nrows if nrows is None else nrows
+                ncols = implied_ncols if ncols is None else ncols
 
             idtype = gb.Matrix.new(rows.dtype).dtype
             np_idtype_ = np_dtype(idtype)
@@ -370,12 +374,15 @@ class Matrix(BaseType):
         vals = da.map_blocks(_get_vals, x, dtype=meta_v.dtype, meta=meta_v)
         return rows, cols, vals
 
-    def rechunk(self, chunks="auto"):
+    def rechunk(self, inplace=False, chunks="auto"):
         chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
         rcd = self.to_values()
-        new = Matrix.from_values(*rcd, chunks=chunks)
-        self._delayed = new._delayed
-        
+        new = Matrix.from_values(*rcd, *self.shape, trust_shape=True, chunks=chunks)
+        if inplace:
+            self._delayed = new._delayed
+        else:
+            return new
+
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(
             other, (Matrix, TransposedMatrix), within="isequal", argname="other"
@@ -678,8 +685,8 @@ def _flatten(x, axis=None, keepdims=None):
 
 
 class MatrixTupleExtractor:
-    def __init__(self, output_range, grblas_inner_matrix, row_offset, col_offset, nval_start, nval_stop, gb_dtype=None):
-        self.rows, self.cols, self.vals = grblas_inner_matrix.value.to_values(gb_dtype)
+    def __init__(self, output_range, inner_matrix, row_offset, col_offset, nval_start, nval_stop, gb_dtype=None):
+        self.rows, self.cols, self.vals = inner_matrix.value.to_values(gb_dtype)
         if output_range[0].start < nval_stop[0, 0] and nval_start[0, 0] < output_range[0].stop:
             start = max(output_range[0].start, nval_start[0, 0])
             stop = min(output_range[0].stop, nval_stop[0, 0])

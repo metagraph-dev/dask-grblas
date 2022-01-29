@@ -100,18 +100,24 @@ class Vector(BaseType):
         cls,
         indices,
         values,
-        *,
+        /,
         size=None,
+        *,
+        trust_size=False,
         dup_op=None,
         dtype=None,
         chunks="auto",
         name=None,
     ):
+        # TODO:
+        # dup_op support for dask_array indices/values (use reduce_assign?)
         if dup_op is None and type(indices) is da.Array and type(values) is da.Array:
-            implied_size = 1 + da.max(indices).compute()
-            if size is not None and implied_size > size:
-                raise Exception()
-            size = implied_size if size is None else size
+            if not trust_size or size is None:
+                # this branch is an expensive operation:
+                implied_size = 1 + da.max(indices).compute()
+                if size is not None and implied_size > size:
+                    raise Exception()
+                size = implied_size if size is None else size
 
             idtype = gb.Vector.new(indices.dtype).dtype
             np_idtype_ = np_dtype(idtype)
@@ -207,9 +213,45 @@ class Vector(BaseType):
     def shape(self):
         return self._meta.shape
 
-    def resize(self, size):
+    def resize(self, size, inplace=True, chunks="auto"):
         self._meta.resize(size)
-        raise NotImplementedError()
+        chunks = da.core.normalize_chunks(chunks, (size,), dtype=np.int64)
+        output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
+
+        x = self._optional_dup()
+        _meta = x._meta
+        dtype_ = np_dtype(self.dtype)
+        index_ranges = build_chunk_ranges_dask_array(x, 0, "index_ranges-")
+        x = da.core.blockwise(
+            *(_resize, "ij"),
+            *(output_ranges, "j"),
+            *(x, "i"),
+            *(index_ranges, "i"),
+            old_size=self.size,
+            new_size=size,
+            dtype=dtype_,
+            meta=np.array([[]]),
+        )
+        x = da.core.blockwise(
+            *(_identity, "j"),
+            *(x, "ij"),
+            concatenate=True,
+            dtype=dtype_,
+            meta=_meta,
+        )
+        if inplace:
+            self._delayed = x
+        else:
+            return Vector(x)
+
+    def rechunk(self, inplace=False, chunks="auto"):
+        chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
+        id = self.to_values()
+        new = Vector.from_values(*id, *self.shape, trust_size=True, chunks=chunks)
+        if inplace:
+            self._delayed = new._delayed
+        else:
+            return new
 
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
@@ -232,7 +274,7 @@ class Vector(BaseType):
 
     def __contains__(self, index):
         extractor = self[index]
-        if not extractor.resolved_indexes.is_single_element:
+        if not extractor.resolved_indices.is_single_element:
             raise TypeError(
                 f"Invalid index to Vector contains: {index!r}.  An integer is expected.  "
                 "Doing `index in my_vector` checks whether a value is present at that index."
@@ -434,6 +476,38 @@ class Vector(BaseType):
         # return n[0]
 
 
+def _resize(output_range, inner_vector, index_range, old_size, new_size):
+    if output_range[0].start < index_range[0].stop and index_range[0].start < output_range[0].stop:
+        start = max(output_range[0].start, index_range[0].start)
+        stop = min(output_range[0].stop, index_range[0].stop)
+        start = start - index_range[0].start
+        stop = stop - index_range[0].start
+        if start == 0 and stop == inner_vector.size:
+            return inner_vector
+        elif (
+            index_range[0].stop == old_size and
+            new_size > old_size and
+            stop < output_range[0].stop - index_range[0].start
+        ):
+            return InnerVector(
+                inner_vector.value[start : stop].new().resize(
+                    output_range[0].stop - index_range[0].start - start
+                )
+            )
+        else:
+            return InnerVector(inner_vector.value[start : stop].new())
+    elif (
+        index_range[0].stop == old_size and old_size <= output_range[0].start
+    ):
+        return InnerVector(
+            gb.Vector.new(
+                dtype=inner_vector.dtype, size=output_range[0].stop - output_range[0].start
+            )
+        ) 
+    else:
+        return InnerVector(gb.Vector.new(inner_vector.dtype, size=0))
+
+
 def _as_matrix(x):
     return InnerMatrix(x.value._as_matrix())
 
@@ -502,8 +576,8 @@ def _flatten(x, axis=None, keepdims=None):
 
 
 class VectorTupleExtractor:
-    def __init__(self, output_range, grblas_inner_vector, index_offset, nval_start, nval_stop, gb_dtype=None):
-        self.indices, self.values = grblas_inner_vector.value.to_values(gb_dtype)
+    def __init__(self, output_range, inner_vector, index_offset, nval_start, nval_stop, gb_dtype=None):
+        self.indices, self.values = inner_vector.value.to_values(gb_dtype)
         if output_range[0].start < nval_stop[0] and nval_start[0] < output_range[0].stop:
             start = max(output_range[0].start, nval_start[0])
             stop = min(output_range[0].stop, nval_stop[0])

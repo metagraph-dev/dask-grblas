@@ -144,8 +144,8 @@ def test_clear(v):
     assert v.size == 7
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_resize(v):
+    v_ = v.dup()
     assert v.size == 7
     assert v.nvals == 4
     v.resize(20)
@@ -154,7 +154,20 @@ def test_resize(v):
     assert compute(v[19].value) is None
     v.resize(4)
     assert v.size == 4
-    assert v.nvals == 2
+    assert v.nvals.compute() == 2
+
+    v = v_.dup()
+    v.rechunk(chunks=2, inplace=True)
+    assert v._delayed.chunks == ((2, 2, 2, 1),)
+    assert v.size == 7
+    assert v.nvals == 4
+    v.resize(20)
+    assert v.size == 20
+    assert v.nvals == 4
+    assert compute(v[19].value) is None
+    v.resize(4)
+    assert v.size == 4
+    assert v.nvals.compute() == 2
 
 
 def test_size(v):

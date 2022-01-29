@@ -959,8 +959,12 @@ def _data_x_index_meshpoint_4extract(
     *args, xt, input_mask_type, mask_type, index_is_a_number, gb_dtype, gb_meta
 ):
     """returns only that part of the data-chunk selected by the index"""
-    x = args[0][0] if type(args[0]) is list else args[0]
-    input_mask = args[1][0] if type(args[1]) is list else args[1]
+    x = args[0]
+    while type(x) is list:
+        x = x[0]
+    input_mask = args[1]
+    while type(input_mask) is list:
+        input_mask = input_mask[0]
     indices = args[2 : x.ndim + 2]
     mask = args[x.ndim + 2]
     x_offsets = args[x.ndim + 3 :]
@@ -1060,6 +1064,8 @@ def _defrag_to_index_chunk(*args, x_chunks, cat_axes, dtype=None):
             index_tuple += (idx_final,)
     # ---------------- end for loop --------------------------
     index_tuple = _squeeze(index_tuple)
+    if len(index_tuple) == 0 and type(fused_fragments) is gb.Scalar:
+        return wrap_inner(fused_fragments)
     return wrap_inner(fused_fragments[index_tuple].new())
 
 
@@ -1125,6 +1131,8 @@ class AmbiguousAssignOrExtract:
 
             if input_ndim == input_mask_ndim:
                 if x_shape != input_mask.mask.shape:
+                    if input_ndim == 1:
+                        raise ValueError("Size of `input_mask` does not match size of input")
                     raise ValueError("Shape of `input_mask` does not match shape of input")
                     
                 # align `x` and its input_mask in order to fix offsets
@@ -1340,7 +1348,7 @@ class Assigner:
         out_dim = len(out_shape)
         dtype = np_dtype(meta.dtype)
         if mask is not None:
-            if out_shape == ():
+            if len(out_shape) == 0:
                 if ndim > 1:
                     if mask.mask.ndim == 2:
                         raise TypeError("Single element assign does not accept a submask")
@@ -1351,7 +1359,7 @@ class Assigner:
                         f"assignment to a {parent_type}"
                     )
             if subassign:
-                if out_shape == ():
+                if len(out_shape) == 0:
                     if ndim == 1:
                         raise TypeError("Single element assign does not accept a submask")
                 if out_dim != mask.mask.ndim:

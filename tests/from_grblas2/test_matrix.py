@@ -243,7 +243,6 @@ def test_extract_values(A):
     assert Tvals.dtype == np.float64
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_element(A):
     assert A[3, 0].new() == 3
     assert A[1, 6].value == 4
@@ -412,7 +411,6 @@ def test_extract(A):
     assert C2.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_row(A):
     w = Vector.new(A.dtype, 3)
     result = Vector.from_values([1, 2], [5, 3], size=3)
@@ -435,7 +433,6 @@ def test_extract_row(A):
         A[6, np.array([[0, 2, 4]])]
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_column(A):
     w = Vector.new(A.dtype, 3)
     result = Vector.from_values([1, 2], [3, 1], size=3)
@@ -581,7 +578,7 @@ def test_extract_input_mask():
         [1, 2, 0, 1],
         [0, 1, 2, 3],
     )
-    A.rechunk(chunks=((1, 1), (2, 1)))
+    A.rechunk(chunks=((1, 1), (2, 1)), inplace=True)
     result = A.T[[0, 1], 0].new(input_mask=MT.S)
     expected = Vector.from_values([1], [1])
     assert result.isequal(expected)
