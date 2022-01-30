@@ -158,20 +158,59 @@ def test_clear(A):
     assert A.ncols == 7
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_resize(A):
+    A_ = A.dup()
+    _A = A.dup()
+    _A_ = A.dup()
     assert A.nrows == 7
     assert A.ncols == 7
-    assert A.nvals == 12
+    assert A.nvals.compute() == 12
     A.resize(10, 11)
     assert A.nrows == 10
     assert A.ncols == 11
-    assert A.nvals == 12
+    assert A.nvals.compute() == 12
     assert compute(A[9, 9].value) is None
     A.resize(4, 1)
     assert A.nrows == 4
     assert A.ncols == 1
-    assert A.nvals == 1
+    assert A.nvals.compute() == 1
+
+    A = A_
+    assert A.nrows == 7
+    assert A.ncols == 7
+    assert A.nvals.compute() == 12
+    A.resize(10, 11, chunks=2)
+    assert A.nrows == 10
+    assert A.ncols == 11
+    assert A.nvals.compute() == 12
+    assert A._delayed.chunks == ((2, 2, 2, 2, 2), (2, 2, 2, 2, 2, 1))
+    assert compute(A[9, 9].value) is None
+    A.resize(4, 1, chunks=((2, 2), (1,)))
+    assert A.nrows == 4
+    assert A.ncols == 1
+    assert A.nvals.compute() == 1
+    assert A._delayed.chunks == ((2, 2), (1,))
+
+    A = _A
+    assert A.nrows == 7
+    assert A.ncols == 7
+    assert A.nvals.compute() == 12
+    A.resize(6, 11, chunks=4)
+    assert A.nrows == 6
+    assert A.ncols == 11
+    assert A.nvals.compute() == 9
+    assert A._delayed.chunks == ((4, 2), (4, 4, 3))
+    assert compute(A[3, 2].value) == 3
+    assert compute(A[5, 7].value) is None
+
+    A = _A_
+    A.resize(11, 3, chunks=4)
+    assert A.nrows == 11
+    assert A.ncols == 3
+    assert A.nvals.compute() == 5
+    assert A._delayed.chunks == ((4, 4, 3), (3, ))
+    assert compute(A[3, 2].value) == 3
+    assert compute(A[7, 2].value) is None
 
 
 def test_nrows(A):
@@ -225,7 +264,6 @@ def test_build_scalar(A):
         A.ss.build_scalar([0, 5], [0, 1], None)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_values(A):
     rows, cols, vals = A.to_values(dtype=int)
     np.testing.assert_array_equal(rows, (0, 0, 1, 1, 2, 3, 3, 4, 5, 6, 6, 6))
@@ -264,7 +302,6 @@ def test_set_element(A):
     assert A[3, 0].new() == -5
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_remove_element(A):
     assert A[3, 0].value == 3
     del A[3, 0]
@@ -1459,7 +1496,6 @@ def test_reduce_scalar(A):
     assert t == 48.23
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_transpose(A):
     # C << A.T
     rows, cols, vals = A.to_values()
@@ -1503,7 +1539,6 @@ def test_simple_assignment(A):
     assert C.isequal(A)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_assign_transpose(A):
     C = Matrix.new(A.dtype, A.ncols, A.nrows)
     C << A.T
@@ -1651,7 +1686,7 @@ def test_bad_init():
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_equals(A):
-    assert (A == A).new().reduce_scalar(monoid.land).new()
+    assert (A == A).new().reduce_scalar(monoid.land)
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)

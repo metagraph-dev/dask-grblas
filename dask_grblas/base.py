@@ -241,7 +241,9 @@ class BaseType:
         elif typ is GbDelayed:
             expr._update(self)
         elif typ is TransposedMatrix:
-            raise NotImplementedError("C << A.T")
+            # "C << A.T"
+            C = expr.new()
+            self._delayed = C._delayed
         else:
             # Anything else we need to handle?
             raise TypeError()

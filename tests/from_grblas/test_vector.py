@@ -142,8 +142,8 @@ def test_set_element(v):
 
 def test_remove_element(v):
     assert v[1].value == 1
-    ### del v[1]
-    ### assert v[1].value.compute() is None
+    del v[1]
+    assert v[1].value.compute() is None
     assert v[4].value == 2
     with pytest.raises(TypeError, match="Remove Element only supports"):
         del v[1:3]

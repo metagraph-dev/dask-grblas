@@ -161,13 +161,15 @@ def test_resize(v):
     assert v._delayed.chunks == ((2, 2, 2, 1),)
     assert v.size == 7
     assert v.nvals == 4
-    v.resize(20)
+    v.resize(20, chunks=5)
     assert v.size == 20
     assert v.nvals == 4
     assert compute(v[19].value) is None
-    v.resize(4)
+    assert v._delayed.chunks == ((5, 5, 5, 5),)
+    v.resize(4, chunks=3)
     assert v.size == 4
     assert v.nvals.compute() == 2
+    assert v._delayed.chunks == ((3, 1),)
 
 
 def test_size(v):
@@ -1148,17 +1150,19 @@ def test_not_to_array(v):
         np.array(v)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_vector_index_with_scalar():
     v = Vector.from_values([0, 1, 2], [10, 20, 30])
     expected = Vector.from_values([0, 1], [20, 10])
     for dtype in ["int8", "uint8", "int16", "uint16", "int32", "uint32"]:
         s1 = Scalar.from_value(1, dtype=dtype)
-        assert v[s1] == 20
+        assert v[s1].value == 20
         s0 = Scalar.from_value(0, dtype=dtype)
         w = v[[s1, s0]].new()
         assert w.isequal(expected)
-    for dtype in ["bool", "fp32", "fp64", "fc32", "fc64"]:
+    for dtype in (
+        ["bool", "fp32", "fp64"] + 
+        ["fc32", "fc64"] if grblas.dtypes._supports_complex else []
+    ):
         s = Scalar.from_value(1, dtype=dtype)
         with pytest.raises(TypeError, match="An integer is required for indexing"):
             v[s]

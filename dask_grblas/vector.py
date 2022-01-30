@@ -214,7 +214,6 @@ class Vector(BaseType):
         return self._meta.shape
 
     def resize(self, size, inplace=True, chunks="auto"):
-        self._meta.resize(size)
         chunks = da.core.normalize_chunks(chunks, (size,), dtype=np.int64)
         output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 
@@ -240,6 +239,7 @@ class Vector(BaseType):
             meta=_meta,
         )
         if inplace:
+            self._meta.resize(size)
             self._delayed = x
         else:
             return Vector(x)
@@ -477,7 +477,10 @@ class Vector(BaseType):
 
 
 def _resize(output_range, inner_vector, index_range, old_size, new_size):
-    if output_range[0].start < index_range[0].stop and index_range[0].start < output_range[0].stop:
+    if (
+        output_range[0].start < index_range[0].stop and 
+        index_range[0].start < output_range[0].stop
+    ):
         start = max(output_range[0].start, index_range[0].start)
         stop = min(output_range[0].stop, index_range[0].stop)
         start = start - index_range[0].start
@@ -489,11 +492,9 @@ def _resize(output_range, inner_vector, index_range, old_size, new_size):
             new_size > old_size and
             stop < output_range[0].stop - index_range[0].start
         ):
-            return InnerVector(
-                inner_vector.value[start : stop].new().resize(
-                    output_range[0].stop - index_range[0].start - start
-                )
-            )
+            new_vec = inner_vector.value[start : stop].new()
+            new_vec.resize(output_range[0].stop - index_range[0].start - start)
+            return InnerVector(new_vec)
         else:
             return InnerVector(inner_vector.value[start : stop].new())
     elif (
@@ -503,7 +504,7 @@ def _resize(output_range, inner_vector, index_range, old_size, new_size):
             gb.Vector.new(
                 dtype=inner_vector.dtype, size=output_range[0].stop - output_range[0].start
             )
-        ) 
+        )
     else:
         return InnerVector(gb.Vector.new(inner_vector.dtype, size=0))
 

@@ -484,6 +484,11 @@ class IndexerResolver:
 
     @classmethod
     def normalize_index(cls, index, size):
+        if type(index) is get_return_type(gb.Scalar.new(int)):
+            # This branch needs a second look: How to work with the lazy index?
+            index = index.value.compute()
+            if not isinstance(index, Integral):
+                raise TypeError("An integer is required for indexing")
         if index >= size:
             raise IndexError(f"Index out of range: index={index}, size={size}")
         if index < 0:
@@ -786,11 +791,11 @@ def fuse_index_pair(i, j, length=None):
 
 
 def _chunk_in_slice(chunk_begin, chunk_end, slice_start, slice_stop, slice_step):
-    """returns the part of the chunk that lies within the slice,
-    also returning True if it exists, otherwise False"""
+    """Returns the part of the chunk that intersects the slice, also
+    returning True if the intersection exists, otherwise False.
+    Zero-length slices that are located within the chunk also
+    return True, otherwise False"""
 
-    if len(range(slice_start, slice_stop, slice_step)) == 0:
-        return False, None
     if slice_step > 0:
         cb = chunk_begin
         ce = chunk_end
@@ -803,6 +808,10 @@ def _chunk_in_slice(chunk_begin, chunk_end, slice_start, slice_stop, slice_step)
         if start < cb:
             rem = (cb - start) % step
             start = cb + (step - rem) if rem > 0 else cb
+        elif stop == start: # zero length slice
+            idx_within = True
+            idx = slice(start, stop, step) if slice_step > 0 else slice(-start, -stop, -step)
+            return idx_within, idx
         stop = min(ce, stop)
         idx_within = len(range(start, stop, step)) > 0
         if idx_within:
@@ -1277,6 +1286,8 @@ class AmbiguousAssignOrExtract:
         return Assigner(self.parent(*args, **kwargs), self.index, subassign=True)
 
     def update(self, obj):
+        if getattr(self.parent, "_is_transposed", False):
+            raise TypeError("'TransposedMatrix' object does not support item assignment")
         Assigner(Updater(self.parent), self.index).update(obj)
 
     def __lshift__(self, rhs):

@@ -229,15 +229,46 @@ class Matrix(BaseType):
     def shape(self):
         return (self._meta.nrows, self._meta.ncols)
 
-    def resize(self, nrows, ncols):
-        self._meta.resize(nrows, ncols)
-        raise NotImplementedError()
+    def resize(self, nrows, ncols, inplace=True, chunks="auto"):
+        chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np.int64)
+        output_row_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_row_ranges-")
+        output_col_ranges = build_ranges_dask_array_from_chunks(chunks[1], "output_col_ranges-")
+
+        x = self._optional_dup()
+        _meta = x._meta
+        dtype_ = np_dtype(self.dtype)
+        row_ranges = build_chunk_ranges_dask_array(x, 0, "row_ranges-")
+        col_ranges = build_chunk_ranges_dask_array(x, 1, "col_ranges-")
+        x = da.core.blockwise(
+            *(_resize, "ijkl"),
+            *(output_row_ranges, "k"),
+            *(output_col_ranges, "l"),
+            *(x, "ij"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            old_shape=self.shape,
+            new_shape=(nrows, ncols),
+            dtype=dtype_,
+            meta=np.array([[[[]]]]),
+        )
+        x = da.core.blockwise(
+            *(_identity, "kl"),
+            *(x, "ijkl"),
+            concatenate=True,
+            dtype=dtype_,
+            meta=_meta,
+        )
+        if inplace:
+            self._meta.resize(nrows, ncols)
+            self._delayed = x
+        else:
+            return Matrix(x)
 
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
 
-    def __delitem__(self, index):
-        raise NotImplementedError()
+    def __delitem__(self, keys):
+        del Updater(self)[keys]
 
     def __setitem__(self, index, delayed):
         Updater(self)[index] = delayed
@@ -429,7 +460,11 @@ class TransposedMatrix:
 
     def new(self, *, dtype=None, mask=None):
         gb_dtype = dtype if dtype is not None else self._matrix.dtype
-        dtype = np_dtype(gb_dtype)
+        try:
+            dtype = np.dtype(gb_dtype)
+        except TypeError:
+            dtype = np_dtype(gb_dtype)
+
         delayed = self._matrix._delayed
         if mask is None:
             mask_ind = None
@@ -457,9 +492,9 @@ class TransposedMatrix:
     def dtype(self):
         return self._meta.dtype
 
-    def to_values(self):
+    def to_values(self, dtype=None, chunks="auto"):
         # TODO: make this lazy; can we do something smart with this?
-        rows, cols, vals = self._matrix.to_values()
+        rows, cols, vals = self._matrix.to_values(dtype=dtype, chunks=chunks)
         return cols, rows, vals
 
     # Properties
@@ -485,6 +520,45 @@ class TransposedMatrix:
     __getitem__ = Matrix.__getitem__
     __array__ = Matrix.__array__
     name = Matrix.name
+
+
+def _resize(output_row_range, output_col_range, inner_matrix, row_range, col_range, old_shape, new_shape):
+    output_range = (output_row_range[0], output_col_range[0])
+    index_range = (row_range[0], col_range[0])
+    old_meta = ()
+    new_meta = ()
+    for axis in (0, 1):
+        if (
+            output_range[axis].start < index_range[axis].stop and 
+            index_range[axis].start < output_range[axis].stop
+        ):
+            start = max(output_range[axis].start, index_range[axis].start)
+            stop = min(output_range[axis].stop, index_range[axis].stop)
+            start = start - index_range[axis].start
+            stop = stop - index_range[axis].start
+            if (
+                index_range[axis].stop == old_shape[axis] and
+                new_shape[axis] > old_shape[axis] and
+                stop < output_range[axis].stop - index_range[axis].start
+            ):
+                old_meta += (slice(start, stop),)
+                new_meta += (output_range[axis].stop - index_range[axis].start - start,)
+            else:
+                old_meta += (slice(start, stop),)
+                new_meta += (stop - start,)
+        elif (
+            index_range[axis].stop == old_shape[axis] and
+            old_shape[axis] <= output_range[axis].start
+        ):
+            old_meta += (slice(0, 0),)
+            new_meta += (output_range[axis].stop - output_range[axis].start,)
+        else:
+            old_meta += (slice(0, 0),)
+            new_meta += (0,)
+    # -------------------end of for loop -----------------
+    new_mat = inner_matrix.value[old_meta].new()
+    new_mat.resize(*new_meta)
+    return InnerMatrix(new_mat)
 
 
 def _transpose(chunk, mask, mask_type, gb_dtype):
