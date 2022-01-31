@@ -239,8 +239,7 @@ class Vector(BaseType):
             meta=_meta,
         )
         if inplace:
-            self._meta.resize(size)
-            self._delayed = x
+            self.__init__(x)
         else:
             return Vector(x)
 
@@ -382,14 +381,10 @@ class Vector(BaseType):
         vector.build(indices, values, dup_op=dup_op)
         self._delayed = Vector.from_vector(vector)._delayed
 
-    def to_values(self, dtype=None, chunks='auto'):
+    def to_values(self, dtype=None, chunks="auto"):
         x = self._delayed
         nvals_array = da.core.blockwise(
-            *(_nvals, "i"),
-            *(x, "i"),
-            adjust_chunks={"i": 1},
-            dtype=np.int64,
-            meta=np.array([])
+            *(_nvals, "i"), *(x, "i"), adjust_chunks={"i": 1}, dtype=np.int64, meta=np.array([])
         ).compute()
 
         stops = np.cumsum(nvals_array)
@@ -400,7 +395,7 @@ class Vector(BaseType):
         starts = starts.reshape(nvals_array.shape)
         starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
         starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
-        
+
         stops = stops.reshape(nvals_array.shape)
         stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
         stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
@@ -421,7 +416,9 @@ class Vector(BaseType):
             dtype=dtype_,
             meta=np.array([[]]),
         )
-        x = da.reduction(x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([]))
+        x = da.reduction(
+            x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
+        )
 
         meta_i, meta_v = self._meta.to_values(dtype)
         indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta_i)
@@ -477,29 +474,24 @@ class Vector(BaseType):
 
 
 def _resize(output_range, inner_vector, index_range, old_size, new_size):
-    if (
-        output_range[0].start < index_range[0].stop and 
-        index_range[0].start < output_range[0].stop
-    ):
+    if output_range[0].start < index_range[0].stop and index_range[0].start < output_range[0].stop:
         start = max(output_range[0].start, index_range[0].start)
         stop = min(output_range[0].stop, index_range[0].stop)
         start = start - index_range[0].start
         stop = stop - index_range[0].start
-        if start == 0 and stop == inner_vector.size:
-            return inner_vector
-        elif (
-            index_range[0].stop == old_size and
-            new_size > old_size and
-            stop < output_range[0].stop - index_range[0].start
+        if (
+            index_range[0].stop == old_size
+            and new_size > old_size
+            and stop < output_range[0].stop - index_range[0].start
         ):
-            new_vec = inner_vector.value[start : stop].new()
+            new_vec = inner_vector.value[start:stop].new()
             new_vec.resize(output_range[0].stop - index_range[0].start - start)
             return InnerVector(new_vec)
+        elif start == 0 and stop == inner_vector.size:
+            return inner_vector
         else:
-            return InnerVector(inner_vector.value[start : stop].new())
-    elif (
-        index_range[0].stop == old_size and old_size <= output_range[0].start
-    ):
+            return InnerVector(inner_vector.value[start:stop].new())
+    elif index_range[0].stop == old_size and old_size <= output_range[0].start:
         return InnerVector(
             gb.Vector.new(
                 dtype=inner_vector.dtype, size=output_range[0].stop - output_range[0].start
@@ -577,7 +569,9 @@ def _flatten(x, axis=None, keepdims=None):
 
 
 class VectorTupleExtractor:
-    def __init__(self, output_range, inner_vector, index_offset, nval_start, nval_stop, gb_dtype=None):
+    def __init__(
+        self, output_range, inner_vector, index_offset, nval_start, nval_stop, gb_dtype=None
+    ):
         self.indices, self.values = inner_vector.value.to_values(gb_dtype)
         if output_range[0].start < nval_stop[0] and nval_start[0] < output_range[0].stop:
             start = max(output_range[0].start, nval_start[0])
@@ -585,8 +579,8 @@ class VectorTupleExtractor:
             self.indices += index_offset[0]
             start = start - nval_start[0]
             stop = stop - nval_start[0]
-            self.indices = self.indices[start: stop]
-            self.values = self.values[start: stop]
+            self.indices = self.indices[start:stop]
+            self.values = self.values[start:stop]
         else:
             self.indices = np.array([], dtype=self.indices.dtype)
             self.values = np.array([], dtype=self.values.dtype)

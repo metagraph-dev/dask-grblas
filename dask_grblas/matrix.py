@@ -5,7 +5,8 @@ from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 
-from .base import BaseType, InnerBaseType, _nvals
+from .base import BaseType, InnerBaseType
+from .base import _nvals as _nvals_in_chunk
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
 from .utils import (
@@ -64,13 +65,6 @@ class Matrix(BaseType):
         cols = df["c"].to_dask_array()
         vals = df["d"].to_dask_array()
         return cls.from_values(rows, cols, vals, chunks=chunks, nrows=nrows, ncols=ncols)
-        # chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np.int64)
-        # row_ranges = build_ranges_dask_array_from_chunks(chunks[0], 'chunks-' + tokenize(chunks[0]))
-        # col_ranges = build_ranges_dask_array_from_chunks(chunks[1], 'chunks-' + tokenize(chunks[1]))
-        # dtype = df['d'].dtype
-        # meta = InnerMatrix(gb.Matrix.new(dtype))
-        # delayed = da.core.blockwise(_df_to_chunk, 'ij', row_ranges, 'i', col_ranges, 'j', rcd_df=df, dtype=dtype, meta=meta)
-        # return Matrix(delayed)
 
     def to_MMfile(self, target):
         import os
@@ -340,29 +334,83 @@ class Matrix(BaseType):
         meta = self._meta.reduce_scalar(op)
         return GbDelayed(self, "reduce_scalar", op, meta=meta)
 
-    def build(self, rows, columns, values, *, dup_op=None, clear=False, nrows=None, ncols=None):
-        # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
-        # TODO: raise if output is not empty
-        # This operation could, perhaps, partition rows, columns, and values if there are chunks
-        if nrows is None:
-            nrows = self.nrows
-        if ncols is None:
-            ncols = self.ncols
-        matrix = gb.Matrix.new(self.dtype, nrows, ncols)
-        matrix.build(rows, columns, values, dup_op=dup_op)
-        m = Matrix.from_matrix(matrix)
-        self._delayed = m._delayed
-        self._meta = m._meta
+    def build(self, rows, columns, values, *, dup_op=None, clear=False, nrows=None, ncols=None, chunks=None):
+        x = self._optional_dup()
+        if clear:
+            self.clear()
 
-    def to_values(self, dtype=None, chunks='auto'):
+        if nrows is not None or ncols is not None:
+            if nrows is None:
+                nrows = self._nrows
+            if ncols is None:
+                ncols = self._ncols
+            self.resize(nrows, ncols)
+
+        if chunks is not None:
+            self.rechunk(inplace=True, chunks=chunks)
+
+        idtype = gb.Matrix.new(rows.dtype).dtype
+        np_idtype_ = np_dtype(idtype)
+        vdtype = gb.Matrix.new(values.dtype).dtype
+        np_vdtype_ = np_dtype(vdtype)
+
+        rname = "-row-ranges" + tokenize(x, x.chunks[0])
+        cname = "-col-ranges" + tokenize(x, x.chunks[1])
+        row_ranges = build_chunk_ranges_dask_array(x, 0, rname)
+        col_ranges = build_chunk_ranges_dask_array(x, 1, cname)
+        fragments = da.core.blockwise(
+            *(_pick2D, "ijk"),
+            *(rows, "k"),
+            *(columns, "k"),
+            *(values, "k"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            dtype=np_idtype_,
+            meta=np.array([]),
+        )
+        meta = InnerMatrix(gb.Matrix.new(vdtype))
+        delayed = da.core.blockwise(
+            *(_build_2D_chunk, "ij"),
+            *(x, "ij"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            *(fragments, "ijk"),
+            dup_op=dup_op,
+            gb_dtype=vdtype,
+            concatenate=False,
+            dtype=np_vdtype_,
+            meta=meta,
+            name=name_,
+        )
+        self.__init__(delayed)
+        # # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
+        # # TODO: raise if output is not empty
+        # # This operation could, perhaps, partition rows, columns, and values if there are chunks
+        # if nrows is None:
+        #     nrows = self.nrows
+        # if ncols is None:
+        #     ncols = self.ncols
+        # matrix = gb.Matrix.new(self.dtype, nrows, ncols)
+        # matrix.build(rows, columns, values, dup_op=dup_op)
+        # m = Matrix.from_matrix(matrix)
+        # self._delayed = m._delayed
+        # self._meta = m._meta
+
+    def to_values(self, dtype=None, chunks="auto"):
         x = self._delayed
+        # first find the number of values in each chunk and return
+        # them as 2D numpy array with the same shape as x.numblocks
         nvals_2D = da.core.blockwise(
-            *(_nvals, "ij"),
+            *(_nvals_in_chunk, "ij"),
             *(x, "ij"),
             adjust_chunks={"i": 1, "j": 1},
             dtype=np.int64,
-            meta=np.array([[]])
+            meta=np.array([[]]),
         ).compute()
+        
+        # use the above array to determine the output tuples' array
+        # bounds (`starts` and `stops`) for each chunk of this
+        # Matrix (self)
         nvals_1D = nvals_2D.flatten()
 
         stops = np.cumsum(nvals_1D)
@@ -370,6 +418,8 @@ class Matrix(BaseType):
         starts[0] = 0
         nnz = stops[-1]
 
+        # convert numpy 2D-arrays (`starts` and `stops`) to 2D dask Arrays
+        # of ranges
         starts = starts.reshape(nvals_2D.shape)
         starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
         starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
@@ -382,6 +432,9 @@ class Matrix(BaseType):
         output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 
         dtype_ = np_dtype(self.dtype)
+        # Compute row/col offsets as dask arrays that can align with this
+        # Matrix's (self's) chunks to convert chunk row/col indices to
+        # full dask-grblas Matrix indices. 
         row_offsets = build_chunk_offsets_dask_array(x, 0, "row_offset-")
         col_offsets = build_chunk_offsets_dask_array(x, 1, "col_offset-")
         x = da.core.blockwise(
@@ -396,8 +449,12 @@ class Matrix(BaseType):
             dtype=dtype_,
             meta=np.array([[[]]]),
         )
-        x = da.reduction(x, _identity, _flatten, axis=1, concatenate=False, dtype=dtype_, meta=np.array([[]]))
-        x = da.reduction(x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([]))
+        x = da.reduction(
+            x, _identity, _flatten, axis=1, concatenate=False, dtype=dtype_, meta=np.array([[]])
+        )
+        x = da.reduction(
+            x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
+        )
 
         meta_i, meta_j, meta_v = self._meta.to_values(dtype)
         rows = da.map_blocks(_get_rows, x, dtype=meta_i.dtype, meta=meta_i)
@@ -407,12 +464,10 @@ class Matrix(BaseType):
 
     def rechunk(self, inplace=False, chunks="auto"):
         chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
-        rcd = self.to_values()
-        new = Matrix.from_values(*rcd, *self.shape, trust_shape=True, chunks=chunks)
         if inplace:
-            self._delayed = new._delayed
+            self.resize(*self.shape, chunks=chunks)
         else:
-            return new
+            return self.resize(*self.shape, chunks=chunks, inplace=False)
 
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(
@@ -437,7 +492,7 @@ class Matrix(BaseType):
             delayed, 1, "index-ranges-" + tokenize(delayed, 1)
         )
         deleted = da.core.blockwise(
-            *(_delitem_chunk, "ij"),
+            *(_delitem_in_chunk, "ij"),
             *(delayed, "ij"),
             *(row_ranges, "i"),
             *(col_ranges, "j"),
@@ -498,8 +553,8 @@ class TransposedMatrix:
         return cols, rows, vals
 
     # Properties
-    nrows = Matrix.ncols
-    ncols = Matrix.nrows
+    nrows = Matrix.nrows
+    ncols = Matrix.ncols
     shape = Matrix.shape
     nvals = Matrix.nvals
 
@@ -522,24 +577,44 @@ class TransposedMatrix:
     name = Matrix.name
 
 
-def _resize(output_row_range, output_col_range, inner_matrix, row_range, col_range, old_shape, new_shape):
+def _resize(
+    output_row_range, output_col_range, inner_matrix, row_range, col_range, old_shape, new_shape
+):
+    """
+    Returns, in general, an extracted part of chunk `inner_matrix` that
+    lies entirely within the bounds specified by `output_row_range` and
+    `output_col_range`.
+
+    If the chunk does not lie within those bounds but lies BEYOND them
+    then then a Matrix with one or both of its dimensions equal to 0 is
+    returned depending on which dimension intersected with the given bounds.
+
+    If the chunk INTERSECTS with the bounds and is the LAST in its
+    block-row (-column) then its extract is expanded so that its last row
+    (col) aligns with the end of `output_row_range` (`output_col_range`).
+
+    If the chunk is the LAST in its block-row (-column) AND does not lie
+    within those bounds but lies BEFORE them, then then an empty Matrix
+    with one or both of its dimensions equal to the lengths of
+    `output_row_range` or `output_col_range` is returned.
+    """
     output_range = (output_row_range[0], output_col_range[0])
     index_range = (row_range[0], col_range[0])
     old_meta = ()
     new_meta = ()
     for axis in (0, 1):
         if (
-            output_range[axis].start < index_range[axis].stop and 
-            index_range[axis].start < output_range[axis].stop
+            output_range[axis].start < index_range[axis].stop
+            and index_range[axis].start < output_range[axis].stop
         ):
             start = max(output_range[axis].start, index_range[axis].start)
             stop = min(output_range[axis].stop, index_range[axis].stop)
             start = start - index_range[axis].start
             stop = stop - index_range[axis].start
             if (
-                index_range[axis].stop == old_shape[axis] and
-                new_shape[axis] > old_shape[axis] and
-                stop < output_range[axis].stop - index_range[axis].start
+                index_range[axis].stop == old_shape[axis]
+                and new_shape[axis] > old_shape[axis]
+                and stop < output_range[axis].stop - index_range[axis].start
             ):
                 old_meta += (slice(start, stop),)
                 new_meta += (output_range[axis].stop - index_range[axis].start - start,)
@@ -547,8 +622,8 @@ def _resize(output_row_range, output_col_range, inner_matrix, row_range, col_ran
                 old_meta += (slice(start, stop),)
                 new_meta += (stop - start,)
         elif (
-            index_range[axis].stop == old_shape[axis] and
-            old_shape[axis] <= output_range[axis].start
+            index_range[axis].stop == old_shape[axis]
+            and old_shape[axis] <= output_range[axis].start
         ):
             old_meta += (slice(0, 0),)
             new_meta += (output_range[axis].stop - output_range[axis].start,)
@@ -556,17 +631,25 @@ def _resize(output_row_range, output_col_range, inner_matrix, row_range, col_ran
             old_meta += (slice(0, 0),)
             new_meta += (0,)
     # -------------------end of for loop -----------------
+
     new_mat = inner_matrix.value[old_meta].new()
     new_mat.resize(*new_meta)
     return InnerMatrix(new_mat)
 
 
 def _transpose(chunk, mask, mask_type, gb_dtype):
+    """
+    Transposes the chunk
+    """
     mask = None if mask is None else mask_type(mask.value)
     return InnerMatrix(chunk.value.T.new(mask=mask, dtype=gb_dtype))
 
 
-def _delitem_chunk(inner_mat, row_range, col_range, row, col):
+def _delitem_in_chunk(inner_mat, row_range, col_range, row, col):
+    """
+    Returns the chunk with the specified element removed if it is located
+    within the chunk otherwise the chunk is returned unchanged.
+    """
     if isinstance(row, gb.Scalar):
         row = row.value
     if isinstance(col, gb.Scalar):
@@ -577,18 +660,50 @@ def _delitem_chunk(inner_mat, row_range, col_range, row, col):
     return InnerMatrix(inner_mat.value)
 
 
-def _from_values2D(fragments, row_range, col_range, gb_dtype=None):
+def _build_2D_chunk(
+        inner_matrix, out_row_range, out_col_range, fragments, dup_op=None, gb_dtype=None
+):
+    """
+    Reassembles filtered tuples (row, col, val) in the list `fragments`
+    obtained from _pick2D() for the chunk within the given row and column
+    ranges (`out_row_range` and `out_col_range`) and returns chunk
+    `inner_matrix` built using these tuples.
+    """
     rows = np.concatenate([rows for (rows, _, _) in fragments])
     cols = np.concatenate([cols for (_, cols, _) in fragments])
     vals = np.concatenate([vals for (_, _, vals) in fragments])
-    nrows = row_range[0].stop - row_range[0].start
-    ncols = col_range[0].stop - col_range[0].start
+    nrows = out_row_range[0].stop - out_row_range[0].start
+    ncols = out_col_range[0].stop - out_col_range[0].start
+    return InnerMatrix(
+        inner_matrix.value.build(
+            rows, cols, vals, nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=gb_dtype
+        )
+    )
+
+
+def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
+    """
+    Reassembles filtered tuples (row, col, val) in the list `fragments`
+    obtained from _pick2D() for the chunk within the given row and column
+    ranges (`out_row_range` and `out_col_range`) and returns a Matrix
+    chunk containing these tuples.
+    """
+    rows = np.concatenate([rows for (rows, _, _) in fragments])
+    cols = np.concatenate([cols for (_, cols, _) in fragments])
+    vals = np.concatenate([vals for (_, _, vals) in fragments])
+    nrows = out_row_range[0].stop - out_row_range[0].start
+    ncols = out_col_range[0].stop - out_col_range[0].start
     return InnerMatrix(
         gb.Matrix.from_values(rows, cols, vals, nrows=nrows, ncols=ncols, dtype=gb_dtype)
     )
 
 
 def _pick2D(rows, cols, values, row_range, col_range):
+    """
+    Filters out only those tuples (row, col, val) that lie within
+    the given row and column ranges.  Indices are also offset
+    appropriately.
+    """
     row_range, col_range = row_range[0], col_range[0]
     rows_in = (row_range.start <= rows) & (rows < row_range.stop)
     cols_in = (col_range.start <= cols) & (cols < col_range.stop)
@@ -596,19 +711,6 @@ def _pick2D(rows, cols, values, row_range, col_range):
     cols = cols[rows_in & cols_in] - col_range.start
     values = values[rows_in & cols_in]
     return (rows, cols, values)
-
-
-def _df_to_chunk(row_range, col_range, rcd_df):
-    row_range, col_range = row_range[0], col_range[0]
-    df = rcd_df[
-        (row_range.start <= rcd_df["r"])
-        & (rcd_df["r"] < row_range.stop)
-        & (col_range.start <= rcd_df["c"])
-        & (rcd_df["c"] < col_range.stop)
-    ]
-    return InnerMatrix(
-        gb.Matrix.from_values(df["r"].to_numpy(), df["c"].to_numpy(), df["d"].to_numpy())
-    )
 
 
 def _mmwrite_chunk(chunk, row_range, col_range, nrows, ncols, final_target):
@@ -759,7 +861,25 @@ def _flatten(x, axis=None, keepdims=None):
 
 
 class MatrixTupleExtractor:
-    def __init__(self, output_range, inner_matrix, row_offset, col_offset, nval_start, nval_stop, gb_dtype=None):
+    def __init__(
+        self,
+        output_range,
+        inner_matrix,
+        row_offset,
+        col_offset,
+        nval_start,
+        nval_stop,
+        gb_dtype=None,
+    ):
+        """
+        Extracts the tuples from a chunk `inner_matrix` but returns only those
+        portions of the tuple-arrays whose positions lie within the
+        intersection of ranges:
+            `output_range` and `[nval_start, nval_stop]`
+        Tuple row/col indices are offset appropriately according to the offsets:
+            `row_offset` and `col_offset`
+        of the chunk.
+        """
         self.rows, self.cols, self.vals = inner_matrix.value.to_values(gb_dtype)
         if output_range[0].start < nval_stop[0, 0] and nval_start[0, 0] < output_range[0].stop:
             start = max(output_range[0].start, nval_start[0, 0])
@@ -768,9 +888,9 @@ class MatrixTupleExtractor:
             self.cols += col_offset[0]
             start = start - nval_start[0, 0]
             stop = stop - nval_start[0, 0]
-            self.rows = self.rows[start: stop]
-            self.cols = self.cols[start: stop]
-            self.vals = self.vals[start: stop]
+            self.rows = self.rows[start : stop]
+            self.cols = self.cols[start : stop]
+            self.vals = self.vals[start : stop]
         else:
             self.rows = np.array([], dtype=self.rows.dtype)
             self.cols = np.array([], dtype=self.cols.dtype)

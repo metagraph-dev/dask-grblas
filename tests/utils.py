@@ -27,6 +27,9 @@ def compare(func, gb_args, dgb_args, gb_kwargs={}, dgb_kwargs={}, *, compute=Non
         if compute or not errors:
             raise
         dgb_result = exc
+    if type(gb_result) is gb.Matrix:
+        assert gb_result.nrows == dgb_result.nrows
+        assert gb_result.ncols == dgb_result.ncols
     if compute:
         assert type(gb_result) is np.ndarray or dgb_result._meta.nvals == 0
         try:

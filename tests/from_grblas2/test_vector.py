@@ -1160,8 +1160,7 @@ def test_vector_index_with_scalar():
         w = v[[s1, s0]].new()
         assert w.isequal(expected)
     for dtype in (
-        ["bool", "fp32", "fp64"] + 
-        ["fc32", "fc64"] if grblas.dtypes._supports_complex else []
+        ["bool", "fp32", "fp64"] + ["fc32", "fc64"] if grblas.dtypes._supports_complex else []
     ):
         s = Scalar.from_value(1, dtype=dtype)
         with pytest.raises(TypeError, match="An integer is required for indexing"):
