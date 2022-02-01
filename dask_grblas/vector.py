@@ -248,7 +248,7 @@ class Vector(BaseType):
         id = self.to_values()
         new = Vector.from_values(*id, *self.shape, trust_size=True, chunks=chunks)
         if inplace:
-            self._delayed = new._delayed
+            self.__init__(new._delayed)
         else:
             return new
 
@@ -373,13 +373,63 @@ class Vector(BaseType):
         meta = self._meta.reduce(op)
         return GbDelayed(self, "reduce", op, meta=meta)
 
-    def build(self, indices, values, *, dup_op=None, clear=False):
-        # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
-        # TODO: raise if output is not empty
-        # This operation could, perhaps, partition indices and values if there are chunks
-        vector = gb.Vector.new(self.dtype, size=self.size)
-        vector.build(indices, values, dup_op=dup_op)
-        self._delayed = Vector.from_vector(vector)._delayed
+    def build(self, indices, values, *, size=None, chunks=None, dup_op=None, clear=False):
+        if clear:
+            self.clear()
+        elif self.nvals.compute() > 0:
+            raise gb.exceptions.OutputNotEmpty
+
+        if size is None:
+            size = self._size
+        self.resize(size)
+
+        if chunks is not None:
+            self.rechunk(inplace=True, chunks=chunks)
+
+        x = self._optional_dup()
+        if type(indices) is list:
+            if np.max(indices) >= self._size:
+                raise gb.exceptions.IndexOutOfBound
+            indices = da.core.from_array(np.array(indices), name="indices-" + tokenize(indices))
+        else:
+            if da.max(indices).compute() >= self._size:
+                raise gb.exceptions.IndexOutOfBound
+        if type(values) is list:
+            values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
+
+        idtype = gb.Matrix.new(indices.dtype).dtype
+        np_idtype_ = np_dtype(idtype)
+        vdtype = gb.Matrix.new(values.dtype).dtype
+        np_vdtype_ = np_dtype(vdtype)
+
+        iname = "-index-ranges" + tokenize(x, x.chunks[0])
+        index_ranges = build_chunk_ranges_dask_array(x, 0, iname)
+        fragments = da.core.blockwise(
+            *(_pick1D, "ij"),
+            *(indices, "j"),
+            *(values, "j"),
+            *(index_ranges, "i"),
+            dtype=np_idtype_,
+            meta=np.array([[]]),
+        )
+        meta = InnerVector(gb.Vector.new(vdtype))
+        delayed = da.core.blockwise(
+            *(_build_1D_chunk, "i"),
+            *(x, "i"),
+            *(index_ranges, "i"),
+            *(fragments, "ij"),
+            dup_op=dup_op,
+            concatenate=False,
+            dtype=np_vdtype_,
+            meta=meta,
+        )
+        self.__init__(delayed)
+        # # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
+        # # TODO: raise if output is not empty
+        # # This operation could, perhaps, partition indices and values if there are chunks
+        # vector = gb.Vector.new(self.dtype, size=self.size)
+        # vector.build(indices, values, dup_op=dup_op)
+        # self.__init__(Vector.from_vector(vector)._delayed)
 
     def to_values(self, dtype=None, chunks="auto"):
         x = self._delayed
@@ -457,7 +507,7 @@ class Vector(BaseType):
             dtype=delayed.dtype,
             meta=delayed._meta,
         )
-        self._delayed = deleted
+        self.__init__(deleted)
 
     @property
     def _carg(self):
@@ -515,6 +565,20 @@ def _delitem_chunk(inner_vec, chunk_range, index):
 
 def _new_Vector(chunk_range, gb_dtype):
     return InnerVector(gb.Vector.new(gb_dtype, size=chunk_range[0].stop - chunk_range[0].start))
+
+
+def _build_1D_chunk(inner_vector, out_index_range, fragments, dup_op=None):
+    """
+    Reassembles filtered tuples (row, val) in the list `fragments`
+    obtained from _pick1D() for the chunk within the given index-
+    range (`out_index_range`) and returns chunk `inner_vector`
+    built using these tuples.
+    """
+    indices = np.concatenate([indices for (indices, _) in fragments])
+    vals = np.concatenate([vals for (_, vals) in fragments])
+    size = out_index_range[0].stop - out_index_range[0].start
+    inner_vector.value.build(indices, vals, size=size, dup_op=dup_op)
+    return InnerVector(inner_vector.value)
 
 
 def _from_values1D(fragments, index_range, gb_dtype=None):

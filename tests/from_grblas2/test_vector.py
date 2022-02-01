@@ -180,7 +180,6 @@ def test_nvals(v):
     assert v.nvals == 4
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_build(v):
     assert v.nvals == 4
     v.clear()

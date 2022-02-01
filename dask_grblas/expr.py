@@ -959,7 +959,7 @@ def _assign(
     ot,
 ):
     """
-    Does the actual GrB_assign: 
+    Performs the actual GrB_assign: 
         old_data(mask, ...)[index] << obj
     or GxB_subassign:
         old_data[index](mask, ...) << obj
@@ -1789,22 +1789,30 @@ def _reduce_axis_combine(op, x, axis=None, keepdims=None, computing_meta=None, d
     """Combine results from _reduce_axis on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
+    axis, = axis
     if type(x) is list:
-        vals = [val.value for val in x]
         if type(op) is gb.agg.Aggregator:
             if op._monoid is not None:
                 monoid = op._monoid
             elif op._semiring is not None:
                 monoid = op._semiring.monoid
+                if op in {gb.agg.hypot}:
+                    if axis == 0:
+                        new_Matrix = gb.ss.concat([[inner.value._as_matrix().T.new()] for inner in x])
+                        return wrap_inner(new_Matrix.reduce_columnwise(op).new())
+                    else:
+                        new_Matrix = gb.ss.concat([[inner.value._as_matrix() for inner in x]])
+                        return wrap_inner(new_Matrix.reduce_rowwise(op).new())
             else:
                 raise NotImplementedError()
         else:
             monoid = op
-
-        def _add_blocks(x, y):
-            return x.ewise_add(y, monoid).new()
         
-        return wrap_inner(reduce(_add_blocks, vals))
+        def _add_blocks(monoid_, x, y):
+            return x.ewise_add(y, monoid_).new()
+
+        vals = [inner.value for inner in x]
+        return wrap_inner(reduce(partial(_add_blocks, monoid), vals))
     return x
 
 

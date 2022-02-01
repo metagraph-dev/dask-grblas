@@ -253,8 +253,7 @@ class Matrix(BaseType):
             meta=_meta,
         )
         if inplace:
-            self._meta.resize(nrows, ncols)
-            self._delayed = x
+            self.__init__(x)
         else:
             return Matrix(x)
 
@@ -335,9 +334,10 @@ class Matrix(BaseType):
         return GbDelayed(self, "reduce_scalar", op, meta=meta)
 
     def build(self, rows, columns, values, *, dup_op=None, clear=False, nrows=None, ncols=None, chunks=None):
-        x = self._optional_dup()
         if clear:
             self.clear()
+        elif self.nvals.compute() > 0:
+            raise gb.exceptions.OutputNotEmpty
 
         if nrows is not None or ncols is not None:
             if nrows is None:
@@ -348,6 +348,24 @@ class Matrix(BaseType):
 
         if chunks is not None:
             self.rechunk(inplace=True, chunks=chunks)
+
+        x = self._optional_dup()
+        if type(rows) is list:
+            if np.max(rows) >= self._nrows:
+                raise gb.exceptions.IndexOutOfBound
+            rows = da.core.from_array(np.array(rows), name="rows-" + tokenize(rows))
+        else:
+            if da.max(rows).compute() >= self._nrows:
+                raise gb.exceptions.IndexOutOfBound
+        if type(columns) is list:
+            if np.max(columns) >= self._ncols:
+                raise gb.exceptions.IndexOutOfBound
+            columns = da.core.from_array(np.array(columns), name="columns-" + tokenize(columns))
+        else:
+            if da.max(columns).compute() >= self._ncols:
+                raise gb.exceptions.IndexOutOfBound
+        if type(values) is list:
+            values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
 
         idtype = gb.Matrix.new(rows.dtype).dtype
         np_idtype_ = np_dtype(idtype)
@@ -376,11 +394,9 @@ class Matrix(BaseType):
             *(col_ranges, "j"),
             *(fragments, "ijk"),
             dup_op=dup_op,
-            gb_dtype=vdtype,
             concatenate=False,
             dtype=np_vdtype_,
             meta=meta,
-            name=name_,
         )
         self.__init__(delayed)
         # # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
@@ -501,7 +517,7 @@ class Matrix(BaseType):
             dtype=delayed.dtype,
             meta=delayed._meta,
         )
-        self._delayed = deleted
+        self.__init__(deleted)
 
 
 class TransposedMatrix:
@@ -661,7 +677,7 @@ def _delitem_in_chunk(inner_mat, row_range, col_range, row, col):
 
 
 def _build_2D_chunk(
-        inner_matrix, out_row_range, out_col_range, fragments, dup_op=None, gb_dtype=None
+        inner_matrix, out_row_range, out_col_range, fragments, dup_op=None,
 ):
     """
     Reassembles filtered tuples (row, col, val) in the list `fragments`
@@ -674,11 +690,10 @@ def _build_2D_chunk(
     vals = np.concatenate([vals for (_, _, vals) in fragments])
     nrows = out_row_range[0].stop - out_row_range[0].start
     ncols = out_col_range[0].stop - out_col_range[0].start
-    return InnerMatrix(
-        inner_matrix.value.build(
-            rows, cols, vals, nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=gb_dtype
-        )
+    inner_matrix.value.build(
+        rows, cols, vals, nrows=nrows, ncols=ncols, dup_op=dup_op,
     )
+    return InnerMatrix(inner_matrix.value)
 
 
 def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):

@@ -235,7 +235,6 @@ def test_nvals(A, A_chunks):
         assert A.nvals == 12
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_build(A, A_chunks):
     A_ = A
     for chunks in A_chunks:
