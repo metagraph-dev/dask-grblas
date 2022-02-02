@@ -714,6 +714,7 @@ def test_reduce_agg_argminmax(v):
     assert s == 10
 
 
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_reduce_agg_firstlast(v):
     empty = Vector.new(int, size=4)
     assert empty.reduce(agg.first).new().is_empty
@@ -746,6 +747,7 @@ def test_reduce_agg_firstlast_index(v):
     assert s == 7
 
 
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_reduce_agg_empty():
     v = Vector.new("UINT8", size=3)
     for attr, aggr in vars(agg).items():

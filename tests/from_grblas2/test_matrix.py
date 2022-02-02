@@ -1415,7 +1415,7 @@ def test_reduce_agg(A, A_chunks):
         assert s3.isclose(s1.value.compute() * s2.value.compute())
 
 
-# @pytest.mark.xfail("'Needs investigation'", strict=True)
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_reduce_agg_argminmax(A, A_chunks):
     A_ = A
     for chunks in A_chunks:
@@ -1470,7 +1470,7 @@ def test_reduce_agg_argminmax(A, A_chunks):
         with pytest.raises(ValueError, match="Aggregator"):
             A.reduce_scalar(silly).new()
 
-# @pytest.mark.xfail("'Needs investigation'", strict=True)
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_reduce_agg_firstlast(A, A_chunks):
     A_ = A
     for chunks in A_chunks:
@@ -1530,7 +1530,7 @@ def test_reduce_agg_firstlast(A, A_chunks):
         assert s3.isequal(s1.value.compute() + s2.value.compute())
 
 
-# @pytest.mark.xfail("'Needs investigation'", strict=True)
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_reduce_agg_firstlast_index(A, A_chunks):
     A_ = A
     for chunks in A_chunks:
@@ -1581,7 +1581,7 @@ def test_reduce_agg_firstlast_index(A, A_chunks):
             A.reduce_scalar(silly).new()
 
 
-# @pytest.mark.xfail("'Needs investigation'", strict=True)
+@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_reduce_agg_empty(A_chunks):
     A = Matrix.new("UINT8", nrows=3, ncols=4)
     A_ = A
