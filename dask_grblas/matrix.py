@@ -216,6 +216,11 @@ class Matrix(BaseType):
             return Matrix(delayed, nvals=0)
 
     def __init__(self, delayed, meta=None, nvals=None):
+        # Note: `nvals` is provided here as a parameter mainly for
+        # optimization purposes.  A value for `nvals` may be given
+        # if it is already known  at the time of initialization of
+        # this Matrix,  otherwise its value should be left as None
+        # (the default)
         assert type(delayed) is da.Array
         assert delayed.ndim == 2
         self._delayed = delayed

@@ -170,6 +170,11 @@ class Vector(BaseType):
         return cls.from_delayed(delayed(vector), vector.dtype, vector.size, nvals=0, name=name)
 
     def __init__(self, delayed, meta=None, nvals=None):
+        # Note: `nvals` is provided here as a parameter mainly for
+        # optimization purposes.  A value for `nvals` may be given
+        # if it is already known  at the time of initialization of
+        # this Vector,  otherwise its value should be left as None
+        # (the default)
         assert type(delayed) is da.Array
         assert delayed.ndim == 1
         self._delayed = delayed
