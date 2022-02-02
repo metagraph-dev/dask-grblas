@@ -95,10 +95,19 @@ class BaseType:
         # Should we copy and mutate or simply create new chunks?
         delayed = self._optional_dup()
         # for a function like this, what's the difference between `map_blocks` and `elemwise`?
-        self._delayed = delayed.map_blocks(
-            _clear,
-            dtype=np_dtype(self.dtype),
-        )
+        if self.ndim == 0:
+            self._delayed = delayed.map_blocks(
+                _clear,
+                dtype=np_dtype(self.dtype),
+            )
+        else:
+            self.__init__(
+                delayed.map_blocks(
+                    _clear,
+                    dtype=np_dtype(self.dtype),
+                ),
+                nvals=0,
+            )
 
     def dup(self, dtype=None, *, mask=None, name=None):
         if mask is not None:
@@ -250,19 +259,19 @@ class BaseType:
             # Extract (w << v[index])
             # Is it safe/reasonable to simply replace `_delayed`?
             # Should we try to preserve e.g. format or partitions?
-            self._delayed = expr.new(dtype=self.dtype)._delayed
+            self.__init__(expr.new(dtype=self.dtype)._delayed)
         elif typ is type(self):
             # Simple assignment (w << v)
             if self.dtype == expr.dtype:
-                self._delayed = expr._optional_dup()
+                self.__init__(expr._optional_dup())
             else:
-                self._delayed = expr.dup(dtype=self.dtype)._delayed
+                self.__init__(expr.dup(dtype=self.dtype)._delayed)
         elif typ is GbDelayed:
             expr._update(self)
         elif typ is TransposedMatrix:
             # "C << A.T"
             C = expr.new()
-            self._delayed = C._delayed
+            self.__init__(C._delayed)
         else:
             # Anything else we need to handle?
             raise TypeError()
@@ -283,15 +292,17 @@ class BaseType:
             else:
                 delayed_mask = None
                 grblas_mask_type = None
-            self._delayed = da.core.elemwise(
-                _update_assign,
-                delayed,
-                accum,
-                delayed_mask,
-                grblas_mask_type,
-                replace,
-                expr_delayed,
-                dtype=np_dtype(self._meta.dtype),
+            self.__init__(
+                da.core.elemwise(
+                    _update_assign,
+                    delayed,
+                    accum,
+                    delayed_mask,
+                    grblas_mask_type,
+                    replace,
+                    expr_delayed,
+                    dtype=np_dtype(self._meta.dtype),
+                )
             )
         elif typ is GbDelayed:
             # v(mask=mask) << left.ewise_mult(right)
@@ -307,15 +318,17 @@ class BaseType:
             else:
                 delayed_mask = None
                 grblas_mask_type = None
-            self._delayed = da.core.elemwise(
-                _update_assign,
-                delayed,
-                accum,
-                delayed_mask,
-                grblas_mask_type,
-                replace,
-                expr._delayed,
-                dtype=np_dtype(self._meta.dtype),
+            self.__init__(
+                da.core.elemwise(
+                    _update_assign,
+                    delayed,
+                    accum,
+                    delayed_mask,
+                    grblas_mask_type,
+                    replace,
+                    expr._delayed,
+                    dtype=np_dtype(self._meta.dtype),
+                )
             )
         else:
             raise NotImplementedError(f"{typ}")

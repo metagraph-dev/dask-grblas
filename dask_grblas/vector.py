@@ -170,6 +170,8 @@ class Vector(BaseType):
         return cls.from_delayed(delayed(vector), vector.dtype, vector.size, nvals=0, name=name)
 
     def __init__(self, delayed, meta=None, nvals=None):
+        # We recommend always using __init__() to set the attribute
+        # ._delayed indirectly rather than directly.
         # Note: `nvals` is provided here as a parameter mainly for
         # optimization purposes.  A value for `nvals` may be given
         # if it is already known  at the time of initialization of
