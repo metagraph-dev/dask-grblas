@@ -121,6 +121,11 @@ class Matrix(BaseType):
         chunks="auto",
         name=None,
     ):
+        # Note: `trust_shape` is a bool parameter that, when True,
+        # can be used to avoid expensive computation of max(rows)
+        # and max(columns) which are used to verify that `nrows`
+        # and `ncols` are indeed large enough to hold all the given
+        # tuples.
         if (
             dup_op is None
             and type(rows) is da.Array

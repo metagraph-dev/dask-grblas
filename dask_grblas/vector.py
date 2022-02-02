@@ -109,6 +109,10 @@ class Vector(BaseType):
         chunks="auto",
         name=None,
     ):
+        # Note: `trust_size` is a bool parameter that, when True,
+        # can be used to avoid expensive computation of max(indices)
+        # which is used to verify that `size` is indeed large enough
+        # to hold all the given tuples.
         # TODO:
         # dup_op support for dask_array indices/values (use reduce_assign?)
         if dup_op is None and type(indices) is da.Array and type(values) is da.Array:
