@@ -77,7 +77,7 @@ class Vector(BaseType):
     ndim = 1
 
     @classmethod
-    def from_delayed(cls, vector, dtype, size, *, name=None):
+    def from_delayed(cls, vector, dtype, size, *, nvals=None, name=None):
         if not isinstance(vector, Delayed):
             raise TypeError(
                 "Value is not a dask delayed object.  "
@@ -85,7 +85,7 @@ class Vector(BaseType):
             )
         inner = delayed(InnerVector)(vector)
         value = da.from_delayed(inner, (size,), dtype=np_dtype(dtype), name=name)
-        return cls(value)
+        return cls(value, nvals=nvals)
 
     @classmethod
     def from_vector(cls, vector, *, chunks=None, name=None):
@@ -162,14 +162,14 @@ class Vector(BaseType):
             np_vdtype_ = np_dtype(vdtype)
             chunksz = build_ranges_dask_array_from_chunks(chunks[0], "ranges-" + tokenize(chunks))
             delayed_ = da.map_blocks(
-                _new_Vector, chunksz, gb_dtype=vdtype, dtype=np_vdtype_, meta=InnerVector(meta)
+                _new_Vector_chunk, chunksz, gb_dtype=vdtype, dtype=np_vdtype_, meta=InnerVector(meta)
             )
-            return Vector(delayed_)
+            return Vector(delayed_, nvals=0)
 
         vector = gb.Vector.new(dtype, size)
-        return cls.from_delayed(delayed(vector), vector.dtype, vector.size, name=name)
+        return cls.from_delayed(delayed(vector), vector.dtype, vector.size, nvals=0, name=name)
 
-    def __init__(self, delayed, meta=None):
+    def __init__(self, delayed, meta=None, nvals=None):
         assert type(delayed) is da.Array
         assert delayed.ndim == 1
         self._delayed = delayed
@@ -178,6 +178,7 @@ class Vector(BaseType):
         self._meta = meta
         self._size = meta.size
         self.dtype = meta.dtype
+        self._nvals = nvals
 
     def _as_matrix(self):
         """Cast this Vector to a Matrix (such as a column vector).
@@ -238,19 +239,30 @@ class Vector(BaseType):
             dtype=dtype_,
             meta=_meta,
         )
-        if inplace:
-            self.__init__(x)
+
+        if size >= self.size:
+            nvals = self.nvals
         else:
-            return Vector(x)
+            nvals = None
+
+        if inplace:
+            self.__init__(x, nvals=nvals)
+        else:
+            return Vector(x, nvals=nvals)
 
     def rechunk(self, inplace=False, chunks="auto"):
         chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
-        id = self.to_values()
-        new = Vector.from_values(*id, *self.shape, trust_size=True, chunks=chunks)
         if inplace:
-            self.__init__(new._delayed)
+            self.resize(*self.shape, chunks=chunks)
         else:
-            return new
+            return self.resize(*self.shape, chunks=chunks, inplace=False)
+        # chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
+        # id = self.to_values()
+        # new = Vector.from_values(*id, *self.shape, trust_size=True, chunks=chunks)
+        # if inplace:
+        #     self.__init__(new._delayed)
+        # else:
+        #     return new
 
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
@@ -514,14 +526,6 @@ class Vector(BaseType):
         pass
         # return self.gb_obj[0]
 
-    @property
-    def _nvals(self):
-        pass
-        # """Like nvals, but doesn't record calls"""
-        # n = ffi_new("GrB_Index*")
-        # check_status(lib.GrB_Vector_nvals(n, self.gb_obj[0]), self)
-        # return n[0]
-
 
 def _resize(output_range, inner_vector, index_range, old_size, new_size):
     if output_range[0].start < index_range[0].stop and index_range[0].start < output_range[0].stop:
@@ -563,7 +567,7 @@ def _delitem_chunk(inner_vec, chunk_range, index):
     return InnerVector(inner_vec.value)
 
 
-def _new_Vector(chunk_range, gb_dtype):
+def _new_Vector_chunk(chunk_range, gb_dtype):
     return InnerVector(gb.Vector.new(gb_dtype, size=chunk_range[0].stop - chunk_range[0].start))
 
 

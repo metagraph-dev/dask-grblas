@@ -30,7 +30,8 @@ class GbDelayed:
         self.args = args
         self.kwargs = kwargs
         self._meta = meta
-        # infix expression requirements:
+        # InfixExpression and Aggregator requirements:
+        self.dtype = meta.dtype
         self.output_type = meta.output_type
         self.ndim = len(meta.shape)
         if self.ndim == 1:
@@ -204,7 +205,28 @@ class GbDelayed:
         )
         return delayed
 
-    def new(self, *, dtype=None, mask=None):
+    def _aggregate(self, op, updating=None, dtype=None, mask=None, accum=None, replace=None, name=None):
+        """ Handover to the Aggregator to compute the reduction"""
+
+        if updating is None:
+            output = self.construct_output(dtype, name=name)
+            updater = output(mask=mask)
+        else:
+            output = updating
+            updater = output(mask=mask, accum=accum, replace=replace)
+
+        self.args = (self.parent,) + self.args
+        if self.parent.ndim == 1:
+            self.cfunc_name = "GrB_Vector_reduce_Aggregator"
+        elif self.parent.ndim == 2:
+            if self.method_name == "reduce_scalar":
+                self.cfunc_name = "GrB_Matrix_reduce_scalar_Aggregator"
+            else:
+                self.cfunc_name = "GrB_Matrix_reduce_Aggregator"
+        op._new(updater, self)
+        return output
+
+    def new(self, dtype=None, *, mask=None, name=None):
         if mask is not None:
             _check_mask(mask)
             meta = self._meta.new(dtype=dtype, mask=mask._meta)
@@ -214,6 +236,11 @@ class GbDelayed:
             meta = self._meta.new(dtype=dtype)
             delayed_mask = None
             grblas_mask_type = None
+
+        if self.method_name.startswith("reduce"):
+            op = self._meta.op
+            if op is not None and op.opclass == "Aggregator":
+                return self._aggregate(op, dtype=dtype, mask=mask, name=name)
 
         if self.method_name == "reduce":
             delayed = self._reduce(meta.dtype)
@@ -254,6 +281,12 @@ class GbDelayed:
         updating._meta.update(self._meta)
         assert updating._meta._is_scalar or updating._meta.nvals == 0
         meta = updating._meta
+
+        if self.method_name.startswith("reduce"):
+            op = self._meta.op
+            if op is not None and op.opclass == "Aggregator":
+                self._aggregate(op, updating, mask=mask, accum=accum, replace=replace)
+                return
 
         if self.method_name == "reduce":
             meta.clear()
@@ -348,12 +381,40 @@ class GbDelayed:
             return
         else:
             raise ValueError(self.method_name)
-        updating._delayed = delayed
+        updating.__init__(delayed)
+
+    def construct_output(self, dtype=None, *, name=None):
+        if dtype is None:
+            dtype = self.dtype
+        return get_return_type(
+            self._meta.output_type.new(dtype)
+        ).new(dtype, *self._meta.shape, name=name)
 
     @property
     def value(self):
         self._meta.value
         return self.new().value
+
+    def _new_scalar(self, dtype, *, name=None):
+        """Create a new empty Scalar.
+        """
+        from .scalar import Scalar
+
+        return Scalar.new(dtype, name=name)
+
+    def _new_vector(self, dtype, size=0, *, name=None):
+        """Create a new empty Vector.
+        """
+        from .vector import Vector
+
+        return Vector.new(dtype, size, name=name)
+
+    def _new_matrix(self, dtype, nrows=0, ncols=0, *, name=None):
+        """Create a new empty Matrix.
+        """
+        from .matrix import Matrix
+
+        return Matrix.new(dtype, nrows, ncols, name=name)
 
 
 AxisIndex = namedtuple("AxisIndex", ["size", "index"])
@@ -372,8 +433,8 @@ class IndexerResolver:
                 normalized0 = slice(None).indices(obj._nrows)
                 normalized1 = slice(None).indices(obj._ncols)
                 self.indices = [
-                    AxisIndex(obj._nrows, slice(normalized0)),
-                    AxisIndex(obj._ncols, slice(normalized1)),
+                    AxisIndex(obj._nrows, slice(*normalized0)),
+                    AxisIndex(obj._ncols, slice(*normalized1)),
                 ]
         else:
             self.indices = self.parse_indices(indices, obj.shape)
@@ -519,6 +580,8 @@ class Updater:
         else:
             self.replace = replace
         self._meta = parent._meta(mask=get_meta(mask), accum=accum, replace=replace)
+        # Aggregator specific attribute requirements:
+        self.kwargs = {'mask': mask}
 
     def __delitem__(self, keys):
         # Occurs when user calls `del C(params)[index]`
@@ -659,7 +722,7 @@ def reduce_assign(lhs, indices, rhs, dup_op="last", mask=None, accum=None, repla
             np_dtype_ = dtype
             meta = np.array([], dtype=np_dtype_)
         rhs_vec = get_return_type(lhs).new(dtype, size=indices.size, chunks=(indices.chunks[0],))
-        rhs_vec._delayed = da.map_blocks(_fill, rhs_vec._delayed, rhs, dtype=np_dtype_, meta=meta)
+        rhs_vec.__init__(da.map_blocks(_fill, rhs_vec._delayed, rhs, dtype=np_dtype_, meta=meta))
         rhs = rhs_vec
 
     # create CSC matrix C from indices:
@@ -1711,7 +1774,7 @@ class Assigner:
                 dtype=dtype,
                 meta=wrap_inner(parent._meta),
             )
-            parent._delayed = delayed
+            parent.__init__(delayed)
         else:
             raise TypeError("Assignment to Scalars is not supported.")
 
@@ -1791,28 +1854,11 @@ def _reduce_axis_combine(op, x, axis=None, keepdims=None, computing_meta=None, d
         return np.empty(0, dtype=dtype)
     axis, = axis
     if type(x) is list:
-        if type(op) is gb.agg.Aggregator:
-            if op._monoid is not None:
-                monoid = op._monoid
-            elif op._semiring is not None:
-                monoid = op._semiring.monoid
-                if op in {gb.agg.hypot}:
-                    if axis == 0:
-                        new_Matrix = gb.ss.concat([[inner.value._as_matrix().T.new()] for inner in x])
-                        return wrap_inner(new_Matrix.reduce_columnwise(op).new())
-                    else:
-                        new_Matrix = gb.ss.concat([[inner.value._as_matrix() for inner in x]])
-                        return wrap_inner(new_Matrix.reduce_rowwise(op).new())
-            else:
-                raise NotImplementedError()
-        else:
-            monoid = op
-        
         def _add_blocks(monoid_, x, y):
             return x.ewise_add(y, monoid_).new()
 
         vals = [inner.value for inner in x]
-        return wrap_inner(reduce(partial(_add_blocks, monoid), vals))
+        return wrap_inner(reduce(partial(_add_blocks, op), vals))
     return x
 
 

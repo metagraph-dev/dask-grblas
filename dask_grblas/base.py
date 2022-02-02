@@ -116,7 +116,10 @@ class BaseType:
             get_grblas_type(mask) if mask is not None else None,
             dtype=np_dtype(meta.dtype),
         )
-        return type(self)(delayed)
+        if self.ndim > 0:
+            return type(self)(delayed, nvals=self._nvals)
+        else:
+            return type(self)(delayed)
 
     def __lshift__(self, expr):
         self.update(expr)
@@ -177,6 +180,17 @@ class BaseType:
             self._delayed,
             dtype=self._delayed.dtype,
         )
+
+    def compute_and_store_nvals():
+        """
+        compute and store the number of values of this Vector/Matrix
+        
+        This could be useful to increase the performance of Aggregators
+        which inspect ._nvals to determine if a fast path can be taken
+        to compute the aggregation result.
+        """
+        self._nvals = self.nvals.compute()
+        return self._nvals
 
     @property
     def nvals(self):

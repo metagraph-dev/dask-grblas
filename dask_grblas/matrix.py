@@ -40,7 +40,7 @@ class Matrix(BaseType):
     _is_transposed = False
 
     @classmethod
-    def from_delayed(cls, matrix, dtype, nrows, ncols, *, name=None):
+    def from_delayed(cls, matrix, dtype, nrows, ncols, *, nvals=None, name=None):
         if not isinstance(matrix, Delayed):
             raise TypeError(
                 "Value is not a dask delayed object.  "
@@ -48,7 +48,7 @@ class Matrix(BaseType):
             )
         inner = delayed(InnerMatrix)(matrix)
         value = da.from_delayed(inner, (nrows, ncols), dtype=np_dtype(dtype), name=name)
-        return cls(value)
+        return cls(value, nvals=nvals)
 
     @classmethod
     def from_matrix(cls, matrix, chunks=None, *, name=None):
@@ -182,13 +182,40 @@ class Matrix(BaseType):
         return cls.from_matrix(matrix, chunks=chunks, name=name)
 
     @classmethod
-    def new(cls, dtype, nrows=0, ncols=0, *, name=None):
-        matrix = gb.Matrix.new(dtype, nrows, ncols)
-        return cls.from_delayed(
-            delayed(matrix), matrix.dtype, matrix.nrows, matrix.ncols, name=name
-        )
+    def new(cls, dtype, nrows=0, ncols=0, *, chunks="auto", name=None):
+        dtype = dtype.lower() if isinstance(dtype, str) else dtype
+        if nrows == 0 and ncols == 0:
+            matrix = gb.Matrix.new(dtype, nrows, ncols)
+            return cls.from_delayed(
+                delayed(matrix), matrix.dtype, matrix.nrows, matrix.ncols, nvals=0, name=name
+            )
+        else:
+            chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=int)
+            name_ = name
+            name = str(name) if name else ""
+            rname = name + "-row-ranges" + tokenize(cls, chunks[0])
+            cname = name + "-col-ranges" + tokenize(cls, chunks[1])
+            row_ranges = build_ranges_dask_array_from_chunks(chunks[0], rname)
+            col_ranges = build_ranges_dask_array_from_chunks(chunks[1], cname)
 
-    def __init__(self, delayed, meta=None):
+            meta = InnerMatrix(gb.Matrix.new(dtype))
+            try:
+                np_dtype_ = np_dtype(dtype)
+            except AttributeError:
+                np_dtype_ = np.dtype(dtype)
+
+            delayed = da.core.blockwise(
+                *(_new_Matrix_chunk, "ij"),
+                *(row_ranges, "i"),
+                *(col_ranges, "j"),
+                gb_dtype=meta.dtype,
+                dtype=np_dtype_,
+                meta=meta,
+                name=name_,
+            )
+            return Matrix(delayed, nvals=0)
+
+    def __init__(self, delayed, meta=None, nvals=None):
         assert type(delayed) is da.Array
         assert delayed.ndim == 2
         self._delayed = delayed
@@ -198,6 +225,7 @@ class Matrix(BaseType):
         self._nrows = meta.nrows
         self._ncols = meta.ncols
         self.dtype = meta.dtype
+        self._nvals = nvals
 
     @property
     def S(self):
@@ -252,10 +280,16 @@ class Matrix(BaseType):
             dtype=dtype_,
             meta=_meta,
         )
-        if inplace:
-            self.__init__(x)
+
+        if nrows >= self.nrows and ncols >= self.ncols:
+            nvals = self.nvals
         else:
-            return Matrix(x)
+            nvals = None
+
+        if inplace:
+            self.__init__(x, nvals=nvals)
+        else:
+            return Matrix(x, nvals=nvals)
 
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
@@ -399,23 +433,11 @@ class Matrix(BaseType):
             meta=meta,
         )
         self.__init__(delayed)
-        # # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
-        # # TODO: raise if output is not empty
-        # # This operation could, perhaps, partition rows, columns, and values if there are chunks
-        # if nrows is None:
-        #     nrows = self.nrows
-        # if ncols is None:
-        #     ncols = self.ncols
-        # matrix = gb.Matrix.new(self.dtype, nrows, ncols)
-        # matrix.build(rows, columns, values, dup_op=dup_op)
-        # m = Matrix.from_matrix(matrix)
-        # self._delayed = m._delayed
-        # self._meta = m._meta
 
     def to_values(self, dtype=None, chunks="auto"):
         x = self._delayed
         # first find the number of values in each chunk and return
-        # them as 2D numpy array with the same shape as x.numblocks
+        # them as a 2D numpy array whose shape is equal to x.numblocks
         nvals_2D = da.core.blockwise(
             *(_nvals_in_chunk, "ij"),
             *(x, "ij"),
@@ -423,7 +445,7 @@ class Matrix(BaseType):
             dtype=np.int64,
             meta=np.array([[]]),
         ).compute()
-        
+
         # use the above array to determine the output tuples' array
         # bounds (`starts` and `stops`) for each chunk of this
         # Matrix (self)
@@ -435,7 +457,8 @@ class Matrix(BaseType):
         nnz = stops[-1]
 
         # convert numpy 2D-arrays (`starts` and `stops`) to 2D dask Arrays
-        # of ranges
+        # of ranges.  Don't forget to fix their `chunks` in oder to enable
+        # them to align with x
         starts = starts.reshape(nvals_2D.shape)
         starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
         starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
@@ -528,6 +551,10 @@ class TransposedMatrix:
         assert type(matrix) is Matrix
         self._matrix = matrix
         self._meta = matrix._meta.T
+
+        # Aggregator-specific requirements:
+        self._nrows = self.nrows
+        self._ncols = self.ncols
 
     def new(self, *, dtype=None, mask=None):
         gb_dtype = dtype if dtype is not None else self._matrix.dtype
@@ -696,6 +723,15 @@ def _build_2D_chunk(
     return InnerMatrix(inner_matrix.value)
 
 
+def _new_Matrix_chunk(out_row_range, out_col_range, gb_dtype=None):
+    """
+    Return a new chunk with dimensions given by `out_row_range` and `out_col_range`
+    """
+    nrows = out_row_range[0].stop - out_row_range[0].start
+    ncols = out_col_range[0].stop - out_col_range[0].start
+    return InnerMatrix(gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols))
+
+
 def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
     """
     Reassembles filtered tuples (row, col, val) in the list `fragments`
@@ -816,43 +852,6 @@ def _concatenate_files(chunk_files, keepdims=None, axis=None):
     return np.array([temp_target, final_target, row_range, col_range])
 
 
-@da.core.concatenate_lookup.register(InnerMatrix)
-def _concat_matrix(seq, axis=0):
-    if axis not in {0, 1}:
-        raise ValueError(f"Can only concatenate for axis 0 or 1.  Got {axis}")
-    if axis == 0:
-        ncols = set(item.value.ncols for item in seq if item.value.ncols > 0)
-        if len(ncols) > 1:
-            raise Exception("Mismatching number of columns while stacking along axis 0")
-        if len(ncols) == 1:
-            (ncols,) = ncols
-            seq = [
-                InnerMatrix(
-                    gb.Matrix.new(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols)
-                )
-                if item.value.ncols == 0
-                else item
-                for item in seq
-            ]
-        value = gb.ss.concat([[item.value] for item in seq])
-    else:
-        nrows = set(item.value.nrows for item in seq if item.value.nrows > 0)
-        if len(nrows) > 1:
-            raise Exception("Mismatching number of rows while stacking along axis 1")
-        if len(nrows) == 1:
-            (nrows,) = nrows
-            seq = [
-                InnerMatrix(
-                    gb.Matrix.new(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols)
-                )
-                if item.value.nrows == 0
-                else item
-                for item in seq
-            ]
-        value = gb.ss.concat([[item.value for item in seq]])
-    return InnerMatrix(value)
-
-
 def _get_rows(tuple_extractor):
     return tuple_extractor.rows
 
@@ -910,6 +909,43 @@ class MatrixTupleExtractor:
             self.rows = np.array([], dtype=self.rows.dtype)
             self.cols = np.array([], dtype=self.cols.dtype)
             self.vals = np.array([], dtype=self.vals.dtype)
+
+
+@da.core.concatenate_lookup.register(InnerMatrix)
+def _concat_matrix(seq, axis=0):
+    if axis not in {0, 1}:
+        raise ValueError(f"Can only concatenate for axis 0 or 1.  Got {axis}")
+    if axis == 0:
+        ncols = set(item.value.ncols for item in seq if item.value.ncols > 0)
+        if len(ncols) > 1:
+            raise Exception("Mismatching number of columns while stacking along axis 0")
+        if len(ncols) == 1:
+            (ncols,) = ncols
+            seq = [
+                InnerMatrix(
+                    gb.Matrix.new(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols)
+                )
+                if item.value.ncols == 0
+                else item
+                for item in seq
+            ]
+        value = gb.ss.concat([[item.value] for item in seq])
+    else:
+        nrows = set(item.value.nrows for item in seq if item.value.nrows > 0)
+        if len(nrows) > 1:
+            raise Exception("Mismatching number of rows while stacking along axis 1")
+        if len(nrows) == 1:
+            (nrows,) = nrows
+            seq = [
+                InnerMatrix(
+                    gb.Matrix.new(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols)
+                )
+                if item.value.nrows == 0
+                else item
+                for item in seq
+            ]
+        value = gb.ss.concat([[item.value for item in seq]])
+    return InnerMatrix(value)
 
 
 gb.utils._output_types[Matrix] = gb.Matrix
