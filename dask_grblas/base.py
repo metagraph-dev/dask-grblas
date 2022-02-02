@@ -117,7 +117,12 @@ class BaseType:
             dtype=np_dtype(meta.dtype),
         )
         if self.ndim > 0:
-            return type(self)(delayed, nvals=self._nvals)
+            if mask is None or self._nvals == 0:
+                nvals = self._nvals
+            else:
+                nvals = None
+                
+            return type(self)(delayed, nvals=nvals)
         else:
             return type(self)(delayed)
 
