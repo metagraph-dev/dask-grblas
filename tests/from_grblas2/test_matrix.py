@@ -211,6 +211,15 @@ def test_resize(A, A_chunks):
         assert compute(A[7, 2].value) is None
 
 
+def test_rechunk(A, A_chunks):
+    A_ = A.dup()
+    for chunks in A_chunks + A_chunks[::-1]:
+        A_.rechunk(chunks=chunks, inplace=True)
+        assert A_.nrows == 7
+        assert A_.ncols == 7
+        assert A_.nvals.compute() == 12
+
+
 def test_nrows(A, A_chunks):
     A_ = A
     for chunks in A_chunks:
