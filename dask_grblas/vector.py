@@ -9,6 +9,7 @@ from grblas import binary, monoid, semiring
 from .base import BaseType, InnerBaseType, _nvals
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
+from ._ss.vector import ss
 from .utils import (
     np_dtype,
     get_grblas_type,
@@ -74,6 +75,7 @@ class InnerVector(InnerBaseType):
 
 
 class Vector(BaseType):
+    __slots__ = "ss",
     ndim = 1
 
     @classmethod
@@ -190,6 +192,8 @@ class Vector(BaseType):
         self._size = meta.size
         self.dtype = meta.dtype
         self._nvals = nvals
+        # Add ss extension methods
+        self.ss = ss(self)
 
     def _as_matrix(self):
         """Cast this Vector to a Matrix (such as a column vector).
@@ -260,6 +264,10 @@ class Vector(BaseType):
             self.__init__(x, nvals=nvals)
         else:
             return Vector(x, nvals=nvals)
+
+    def _diag(self, k=0, chunks="auto"):
+        return # Matrix(delayed)
+
 
     def rechunk(self, inplace=False, chunks="auto"):
         chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
@@ -538,6 +546,9 @@ class Vector(BaseType):
         # return self.gb_obj[0]
 
 
+Vector.ss = gb.utils.class_property(Vector.ss, ss)
+
+
 def _resize(output_range, inner_vector, index_range, old_size, new_size):
     if output_range[0].start < index_range[0].stop and index_range[0].start < output_range[0].stop:
         start = max(output_range[0].start, index_range[0].start)
@@ -619,21 +630,6 @@ def _get_values(tuple_extractor):
     return tuple_extractor.values
 
 
-@da.core.concatenate_lookup.register(InnerVector)
-def _concat_vector(seq, axis=0):
-    if axis != 0:
-        raise ValueError(f"Can only concatenate for axis 0.  Got {axis}")
-    # return InnerVector(gb.ss.concat([item.value for item in seq]))  # TODO: grblas >=1.3.15
-    size = sum(x.size for x in seq)
-    value = gb.Vector.new(seq[0].value.dtype, size)
-    start = end = 0
-    for x in seq:
-        end += x.size
-        value[start:end] = x.value
-        start = end
-    return InnerVector(value)
-
-
 def _identity(chunk, keepdims=None, axis=None):
     return chunk
 
@@ -669,6 +665,21 @@ class TupleExtractor:
     def __init__(self, grblas_inner_vector, index_offset, gb_dtype=None):
         self.indices, self.values = grblas_inner_vector.value.to_values(gb_dtype)
         self.indices += index_offset[0]
+
+
+@da.core.concatenate_lookup.register(InnerVector)
+def _concat_vector(seq, axis=0):
+    if axis != 0:
+        raise ValueError(f"Can only concatenate for axis 0.  Got {axis}")
+    # return InnerVector(gb.ss.concat([item.value for item in seq]))  # TODO: grblas >=1.3.15
+    size = sum(x.size for x in seq)
+    value = gb.Vector.new(seq[0].value.dtype, size)
+    start = end = 0
+    for x in seq:
+        end += x.size
+        value[start:end] = x.value
+        start = end
+    return InnerVector(value)
 
 
 gb.utils._output_types[Vector] = gb.Vector

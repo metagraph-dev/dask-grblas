@@ -4,6 +4,8 @@ import pickle
 import sys
 import weakref
 
+import dask_grblas
+from dask_grblas.ss import diag
 import grblas
 import numpy as np
 import pytest
@@ -2689,7 +2691,6 @@ def test_not_to_array(A, A_chunks):
         (-10, [], []),
     ],
 )
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_diag(A, A_chunks, params):
     A_ = A
     for chunks in A_chunks:
@@ -2697,12 +2698,12 @@ def test_diag(A, A_chunks, params):
         A.rechunk(chunks=chunks, inplace=True)
         k, indices, values = params
         expected = Vector.from_values(indices, values, dtype=A.dtype, size=max(0, A.nrows - abs(k)))
-        v = grblas.ss.diag(A, k=k)
+        v = dask_grblas.ss.diag(A, k=k)
         assert expected.isequal(v)
         v[:] = 0
         v.ss.diag(A, k=k)
         assert expected.isequal(v)
-        v = grblas.ss.diag(A.T, k=-k)
+        v = dask_grblas.ss.diag(A.T, k=-k)
         assert expected.isequal(v)
         v[:] = 0
         v.ss.diag(A.T, -k)

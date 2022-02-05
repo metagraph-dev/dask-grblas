@@ -9,14 +9,17 @@ from .base import BaseType, InnerBaseType
 from .base import _nvals as _nvals_in_chunk
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
+from ._ss.matrix import ss
 from .utils import (
     np_dtype,
+    get_return_type,
     wrap_inner,
     build_chunk_offsets_dask_array,
     build_ranges_dask_array_from_chunks,
     build_chunk_ranges_dask_array,
     wrap_dataframe,
 )
+from grblas.dtypes import lookup_dtype
 
 
 class InnerMatrix(InnerBaseType):
@@ -36,6 +39,7 @@ class InnerMatrix(InnerBaseType):
 
 
 class Matrix(BaseType):
+    __slots__ = "ss",
     ndim = 2
     _is_transposed = False
 
@@ -238,6 +242,8 @@ class Matrix(BaseType):
         self._ncols = meta.ncols
         self.dtype = meta.dtype
         self._nvals = nvals
+        # Add ss extension methods
+        self.ss = ss(self)
 
     @property
     def S(self):
@@ -302,6 +308,57 @@ class Matrix(BaseType):
             self.__init__(x, nvals=nvals)
         else:
             return Matrix(x, nvals=nvals)
+
+    def _diag(self, k=0, chunks="auto"):
+        nrows, ncols = self.nrows, self.ncols
+        # equation of diagonal: i = j - k
+        kdiag_row_start = max(0, -k)
+        kdiag_row_stop = min(nrows, ncols - k)
+        len_kdiag = kdiag_row_stop - kdiag_row_start
+
+        meta = gb.Vector.new(self.dtype)
+        if len_kdiag <= 0:
+            return get_return_type(meta).new(self.dtype)
+
+        chunks = da.core.normalize_chunks(chunks, (len_kdiag,), dtype=np.int64)
+        output_indx_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_indx_ranges-")
+
+        x = self._delayed
+        row_ranges = build_chunk_ranges_dask_array(x, 0, "row_ranges-")
+        col_ranges = build_chunk_ranges_dask_array(x, 1, "col_ranges-")
+
+        dtype_ = np_dtype(self.dtype)
+        fragments = da.core.blockwise(
+            *(_chunk_diag, "ijk"),
+            *(output_indx_ranges, "k"),
+            *(x, "ij"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            k=k,
+            kdiag_row_start=kdiag_row_start,
+            dtype=dtype_,
+            meta=np.array([[[]]]),
+        )
+        fragments = da.reduction(
+            fragments,
+            _identity,
+            _concat_diag_chunks,
+            axis=1,
+            concatenate=False,
+            dtype=dtype_,
+            meta=np.array([[]])
+        )
+        delayed = da.reduction(
+            fragments,
+            _identity,
+            _concat_diag_chunks,
+            axis=0,
+            concatenate=False,
+            dtype=dtype_,
+            meta=wrap_inner(meta)
+        )
+        nvals = 0 if self._nvals == 0 else None
+        return get_return_type(meta)(delayed, nvals=nvals)
 
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
@@ -555,6 +612,9 @@ class Matrix(BaseType):
         self.__init__(deleted)
 
 
+Matrix.ss = gb.utils.class_property(Matrix.ss, ss)
+
+
 class TransposedMatrix:
     ndim = 2
     _is_transposed = True
@@ -570,10 +630,7 @@ class TransposedMatrix:
 
     def new(self, *, dtype=None, mask=None):
         gb_dtype = dtype if dtype is not None else self._matrix.dtype
-        try:
-            dtype = np.dtype(gb_dtype)
-        except TypeError:
-            dtype = np_dtype(gb_dtype)
+        dtype = lookup_dtype(dtype)
 
         delayed = self._matrix._delayed
         if mask is None:
@@ -630,6 +687,68 @@ class TransposedMatrix:
     __getitem__ = Matrix.__getitem__
     __array__ = Matrix.__array__
     name = Matrix.name
+
+
+def _concat_diag_chunks(chunks, axis=None, keepdims=None):
+    concat = da.core.concatenate_lookup.dispatch(type(wrap_inner(gb.Vector.new(int))))
+    return concat(chunks if type(chunks) is list else [chunks])
+
+
+def _chunk_diag(
+    output_range,
+    inner_matrix,
+    row_range,
+    col_range,
+    k,
+    kdiag_row_start,
+):
+    # There's perhaps a one-line formula capturing all of the following
+    output_range = output_range[0]
+    rows = row_range[0]
+    cols = col_range[0]
+    matrix = inner_matrix.value
+    # REFERENCE POINT: global matrix row 0 col 0
+    # Find intersection of k-diagonal with chunk column bounds:
+    # use diagonal equation: i = j - k  (i: row index; j: column index)
+    j = cols.start
+    chunk_kdiag_row_start = j - k
+    j = cols.stop
+    chunk_kdiag_row_stop = j - k
+
+    # intersect chunk row range with k-diagonal within chunk column bounds 
+    if rows.start < chunk_kdiag_row_stop and chunk_kdiag_row_start < rows.stop:
+        chunk_kdiag_row_start = max(chunk_kdiag_row_start, rows.start)
+        chunk_kdiag_row_stop = min(chunk_kdiag_row_stop, rows.stop)
+
+        # CHANGE REFERENCE POINT: to global k-diagonal start
+        # NOTE: here we choose to project the k-diagonal onto axis 0 in
+        #       order to output it as a vector
+        vector_kdiag_start = chunk_kdiag_row_start - kdiag_row_start
+        vector_kdiag_stop = chunk_kdiag_row_stop - kdiag_row_start
+
+        # intersect output-range with row-range of k-diagonal within chunk 
+        if output_range.start < vector_kdiag_stop and vector_kdiag_start < output_range.stop:
+            vector_kdiag_start = max(output_range.start, vector_kdiag_start)
+            vector_kdiag_stop = min(output_range.stop, vector_kdiag_stop)
+            # CHANGE REFERENCE POINT: to global matrix row 0 col 0
+            chunk_kdiag_row_start = vector_kdiag_start + kdiag_row_start
+            chunk_kdiag_row_stop = vector_kdiag_stop + kdiag_row_start
+            # compute column-range of chunk k-diagonal
+            # use diagonal equation:  j = i + k
+            chunk_kdiag_col_start = chunk_kdiag_row_start + k
+            chunk_kdiag_col_stop = chunk_kdiag_row_stop + k
+            # CHANGE REFERENCE POINT: to chunk matrix row 0 col 0
+            chunk_kdiag_row_start -= rows.start
+            chunk_kdiag_row_stop -= rows.start
+            chunk_kdiag_col_start -= cols.start
+            chunk_kdiag_col_stop -= cols.start
+            # extract square sub-matrix containing k-diagonal
+            matrix = matrix[chunk_kdiag_row_start : chunk_kdiag_row_stop,
+                            chunk_kdiag_col_start : chunk_kdiag_col_stop]
+            # extract its diagonal
+            vector = gb.ss.diag(matrix.new(), 0)
+            return wrap_inner(vector)
+    return wrap_inner(gb.Vector.new(matrix.dtype))
 
 
 def _resize(
