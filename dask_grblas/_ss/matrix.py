@@ -1,4 +1,4 @@
-import dask_grblas as gb
+import dask_grblas as dgb
 
 
 class ss:
@@ -7,7 +7,7 @@ class ss:
     def __init__(self, parent):
         self._parent = parent
 
-    def diag(self, vector, k=0):
+    def diag(self, vector, k=0, chunks="auto", dtype=None):
         """
         GxB_Matrix_diag
 
@@ -28,5 +28,6 @@ class ss:
         Vector.ss.diag
         """
         vector = self._parent._expect_type(vector, dgb.Vector, within="ss.diag", argname="vector")
-        self._parent = vector._diag(k)
+        rv = vector._diag(k, chunks=chunks, dtype=dtype)
+        self._parent.__init__(rv._delayed, nvals=rv._nvals)
 

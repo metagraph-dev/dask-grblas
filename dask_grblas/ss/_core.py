@@ -13,7 +13,7 @@ _grblas_ss.__name__ = "grblas.ss"
 _grblas_ss = _grblas_ss()
 
 
-def diag(x, k=0, dtype=None, *, name=None):
+def diag(x, k=0, dtype=None, chunks="auto", *, name=None):
     """
     GxB_Matrix_diag, GxB_Vector_diag
 
@@ -37,24 +37,23 @@ def diag(x, k=0, dtype=None, *, name=None):
 
     """
     x = _expect_type(_grblas_ss, x, (Matrix, TransposedMatrix, Vector), within="diag", argname="x")
-    if type(k) is not Scalar:
-        k = Scalar.from_value(k, INT64, name="")
+    if type(k) is Scalar:
+        k = k.value.compute()
     if dtype is None:
         dtype = x.dtype
     typ = type(x)
     if typ is Vector:
-        size = x._size + abs(k.value)
+        size = x._size + abs(k)
         rv = Matrix.new(dtype, nrows=size, ncols=size, name=name)
-        rv.ss.diag(x, k)
+        rv.ss.diag(x, k, dtype=dtype, chunks=chunks)
     else:
-        k_value = k.value.compute()
-        if k_value < 0:
-            size = min(x._nrows + k_value, x._ncols)
+        if k < 0:
+            size = min(x._nrows + k, x._ncols)
         else:
-            size = min(x._ncols - k_value, x._nrows)
+            size = min(x._ncols - k, x._nrows)
         if size < 0:
             size = 0
         rv = Vector.new(dtype, size=size, name=name)
-        rv.ss.diag(x, k_value)
+        rv.ss.diag(x, k, dtype=dtype, chunks=chunks)
     return rv
 

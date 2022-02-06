@@ -4,6 +4,8 @@ import pickle
 import sys
 import weakref
 
+import dask_grblas
+from dask_grblas.ss import diag
 import grblas
 import numpy as np
 import pytest
@@ -29,6 +31,11 @@ def A():
         [3, 2, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4],
     ]
     return Matrix.from_values(*data)
+
+
+@pytest.fixture
+def A_chunks():
+    return [7, 4, 3]
 
 
 @pytest.fixture
@@ -1168,22 +1175,25 @@ def test_vector_index_with_scalar():
             v[s]
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_diag(v):
+def test_diag(v, A_chunks):
     indices, values = v.to_values()
     for k in range(-5, 5):
-        A = grblas.ss.diag(v, k=k)
-        size = v.size + abs(k)
-        rows = indices + max(0, -k)
-        cols = indices + max(0, k)
-        expected = Matrix.from_values(rows, cols, values, nrows=size, ncols=size, dtype=v.dtype)
-        assert expected.isequal(A)
-        w = grblas.ss.diag(A, Scalar.from_value(k))
-        assert v.isequal(w)
-        assert w.dtype == "INT64"
-        w = grblas.ss.diag(A.T, -k, dtype=float)
-        assert v.isequal(w)
-        assert w.dtype == "FP64"
+        v_ = v
+        for chunks in A_chunks:
+            v = v_.dup()
+            v.rechunk(chunks=chunks, inplace=True)
+            A = dask_grblas.ss.diag(v, k=k)
+            size = v.size + abs(k)
+            rows = indices + max(0, -k)
+            cols = indices + max(0, k)
+            expected = Matrix.from_values(rows, cols, values, nrows=size, ncols=size, dtype=v.dtype)
+            assert expected.isequal(A)
+            w = dask_grblas.ss.diag(A, Scalar.from_value(k))
+            assert v.isequal(w)
+            assert w.dtype == "INT64"
+            w = dask_grblas.ss.diag(A.T, -k, dtype=float)
+            assert v.isequal(w)
+            assert w.dtype == "FP64"
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)

@@ -7,7 +7,7 @@ class ss:
     def __init__(self, parent):
         self._parent = parent
 
-    def diag(self, matrix, k=0):
+    def diag(self, matrix, k=0, chunks="auto", dtype=None):
         """
         GxB_Vector_diag
 
@@ -35,6 +35,6 @@ class ss:
             # Transpose descriptor doesn't do anything, so use the parent
             k = -k
             matrix = matrix._matrix
-        rv = matrix._diag(k)
+        rv = matrix._diag(k, chunks=chunks, dtype=dtype)
         self._parent.__init__(rv._delayed, nvals=rv._nvals)
 

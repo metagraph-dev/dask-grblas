@@ -4,6 +4,7 @@ import grblas as gb
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
+from grblas.dtypes import lookup_dtype
 
 from .base import BaseType, InnerBaseType
 from .base import _nvals as _nvals_in_chunk
@@ -19,7 +20,6 @@ from .utils import (
     build_chunk_ranges_dask_array,
     wrap_dataframe,
 )
-from grblas.dtypes import lookup_dtype
 
 
 class InnerMatrix(InnerBaseType):
@@ -309,16 +309,17 @@ class Matrix(BaseType):
         else:
             return Matrix(x, nvals=nvals)
 
-    def _diag(self, k=0, chunks="auto"):
+    def _diag(self, k=0, dtype=None, chunks="auto"):
         nrows, ncols = self.nrows, self.ncols
         # equation of diagonal: i = j - k
         kdiag_row_start = max(0, -k)
         kdiag_row_stop = min(nrows, ncols - k)
         len_kdiag = kdiag_row_stop - kdiag_row_start
 
-        meta = gb.Vector.new(self.dtype)
+        gb_dtype = self.dtype if dtype == None else lookup_dtype(dtype)
+        meta = gb.Vector.new(gb_dtype)
         if len_kdiag <= 0:
-            return get_return_type(meta).new(self.dtype)
+            return get_return_type(meta).new(gb_dtype)
 
         chunks = da.core.normalize_chunks(chunks, (len_kdiag,), dtype=np.int64)
         output_indx_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_indx_ranges-")
@@ -327,7 +328,7 @@ class Matrix(BaseType):
         row_ranges = build_chunk_ranges_dask_array(x, 0, "row_ranges-")
         col_ranges = build_chunk_ranges_dask_array(x, 1, "col_ranges-")
 
-        dtype_ = np_dtype(self.dtype)
+        dtype_ = np_dtype(gb_dtype)
         fragments = da.core.blockwise(
             *(_chunk_diag, "ijk"),
             *(output_indx_ranges, "k"),
@@ -336,24 +337,23 @@ class Matrix(BaseType):
             *(col_ranges, "j"),
             k=k,
             kdiag_row_start=kdiag_row_start,
+            gb_dtype=gb_dtype,
             dtype=dtype_,
             meta=np.array([[[]]]),
         )
         fragments = da.reduction(
             fragments,
             _identity,
-            _concat_diag_chunks,
-            axis=1,
-            concatenate=False,
+            _identity,
+            axis=0,
             dtype=dtype_,
             meta=np.array([[]])
         )
         delayed = da.reduction(
             fragments,
             _identity,
-            _concat_diag_chunks,
+            _identity,
             axis=0,
-            concatenate=False,
             dtype=dtype_,
             meta=wrap_inner(meta)
         )
@@ -629,8 +629,8 @@ class TransposedMatrix:
         self._ncols = self.ncols
 
     def new(self, *, dtype=None, mask=None):
-        gb_dtype = dtype if dtype is not None else self._matrix.dtype
-        dtype = lookup_dtype(dtype)
+        gb_dtype = self._matrix.dtype if dtype is None else lookup_dtype(dtype)
+        dtype = np_dtype(gb_dtype)
 
         delayed = self._matrix._delayed
         if mask is None:
@@ -689,11 +689,6 @@ class TransposedMatrix:
     name = Matrix.name
 
 
-def _concat_diag_chunks(chunks, axis=None, keepdims=None):
-    concat = da.core.concatenate_lookup.dispatch(type(wrap_inner(gb.Vector.new(int))))
-    return concat(chunks if type(chunks) is list else [chunks])
-
-
 def _chunk_diag(
     output_range,
     inner_matrix,
@@ -701,8 +696,9 @@ def _chunk_diag(
     col_range,
     k,
     kdiag_row_start,
+    gb_dtype,
 ):
-    # There's perhaps a one-line formula capturing all of the following
+    # There's perhaps a one-line formula summarizing this entire function
     output_range = output_range[0]
     rows = row_range[0]
     cols = col_range[0]
@@ -746,9 +742,9 @@ def _chunk_diag(
             matrix = matrix[chunk_kdiag_row_start : chunk_kdiag_row_stop,
                             chunk_kdiag_col_start : chunk_kdiag_col_stop]
             # extract its diagonal
-            vector = gb.ss.diag(matrix.new(), 0)
+            vector = gb.ss.diag(matrix.new(), k=0, dtype=gb_dtype)
             return wrap_inner(vector)
-    return wrap_inner(gb.Vector.new(matrix.dtype))
+    return wrap_inner(gb.Vector.new(gb_dtype))
 
 
 def _resize(

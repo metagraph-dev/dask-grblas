@@ -5,6 +5,7 @@ import grblas as gb
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
+from grblas.dtypes import lookup_dtype
 
 from .base import BaseType, InnerBaseType, _nvals
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
@@ -13,6 +14,7 @@ from ._ss.vector import ss
 from .utils import (
     np_dtype,
     get_grblas_type,
+    get_return_type,
     wrap_inner,
     build_ranges_dask_array_from_chunks,
     build_chunk_ranges_dask_array,
@@ -265,8 +267,47 @@ class Vector(BaseType):
         else:
             return Vector(x, nvals=nvals)
 
-    def _diag(self, k=0, chunks="auto"):
-        return # Matrix(delayed)
+    def _diag(self, k=0, dtype=None, chunks="auto"):
+        nrows = self.size + abs(k)
+        kdiag_row_start = max(0, -k)
+        kdiag_col_start = max(0, k)
+
+        v = self._delayed
+        input_ranges = build_chunk_ranges_dask_array(v, 0, "input-ranges-")
+
+        chunks = da.core.normalize_chunks(chunks, (nrows, nrows), dtype=np.int64)
+        rname = "-row-ranges" + tokenize(self, chunks[0])
+        cname = "-col-ranges" + tokenize(self, chunks[1])
+        row_ranges = build_ranges_dask_array_from_chunks(chunks[0], rname)
+        col_ranges = build_ranges_dask_array_from_chunks(chunks[1], cname)
+
+        gb_dtype = self.dtype if dtype == None else lookup_dtype(dtype)
+        dtype = np_dtype(gb_dtype)
+        fragments = da.core.blockwise(
+            *(_chunk_diag, "ikj"),
+            *(v, "k"),
+            *(input_ranges, "k"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            k=k,
+            kdiag_col_start=kdiag_col_start,
+            kdiag_size=self.size,
+            gb_dtype=gb_dtype,
+            dtype=dtype,
+            meta=np.array([[[]]]),
+        )
+        meta = gb.Matrix.new(gb_dtype)
+        delayed = da.reduction(
+            fragments,
+            _identity,
+            _identity,
+            axis=1,
+            dtype=dtype,
+            meta=wrap_inner(meta),
+        )
+
+        nvals = 0 if self._nvals == 0 else None
+        return get_return_type(meta)(delayed, nvals)
 
 
     def rechunk(self, inplace=False, chunks="auto"):
@@ -547,6 +588,99 @@ class Vector(BaseType):
 
 
 Vector.ss = gb.utils.class_property(Vector.ss, ss)
+
+
+def _chunk_diag(
+    inner_vector,
+    input_range,
+    row_range,
+    col_range,
+    k,
+    kdiag_col_start,
+    kdiag_size,
+    gb_dtype,
+):
+    """
+    Return new matrix chunk with shape = (nrows, x)
+
+    where nrows = row_range.stop - row_range.start and
+    x = 0,
+    x = col_range.stop - col_range.start, or
+    x = input_range intersection col_range
+    depending on certain conditions.
+
+    In general, the returned matrix contains a piece of
+    the k-diagonal given by inner_vector 
+    """
+    # This function creates a new matrix chunk with dimensions determined
+    # by the input k-diagonal vector chunk.  The matrix chunk may or may
+    # not include the k-diagonal chunk
+    vector = inner_vector.value
+    vec_chunk = input_range[0]
+    rows = row_range[0]
+    cols = col_range[0]
+    nrows = rows.stop - rows.start
+    ncols = cols.stop - cols.start
+    kdiag_col_stop_ = kdiag_col_start + kdiag_size
+
+    # equation of diagonal: i = j - k
+    kdiag_row_start = kdiag_col_start - k
+    kdiag_row_stop_ = kdiag_col_stop_ - k
+
+    # CHANGE REFERENCE POINT: to global matrix row 0 col 0
+    kdiag_chunk_col_start = vec_chunk.start + kdiag_col_start 
+    kdiag_chunk_col_stop_ = vec_chunk.stop + kdiag_col_start 
+
+    # intersect matrix chunk column range with k-diagonal chunk column-range
+    if cols.start < kdiag_chunk_col_stop_ and kdiag_chunk_col_start < cols.stop:
+        kdiag_nt_col_start = max(kdiag_chunk_col_start, cols.start)
+        kdiag_nt_col_stop_ = min(kdiag_chunk_col_stop_, cols.stop)
+
+        # equation of diagonal: i = j - k
+        kdiag_nt_row_start = kdiag_nt_col_start - k
+        kdiag_nt_row_stop_ = kdiag_nt_col_stop_ - k
+
+        # is intersection head or tail chunk of vector
+        vec_nt_is_head = kdiag_nt_col_start == kdiag_col_start
+        vec_nt_is_tail = kdiag_nt_col_stop_ == kdiag_col_stop_
+
+        start = kdiag_nt_col_start
+        stop_ = kdiag_nt_col_stop_
+        if vec_nt_is_head and cols.start < kdiag_col_start:
+            start = cols.start
+        if vec_nt_is_tail and cols.stop > kdiag_col_stop_:
+            stop_ = cols.stop
+        ncols = stop_ - start
+        matrix = gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols)
+        if rows.stop <= kdiag_nt_row_start or kdiag_nt_row_stop_ <= rows.start:
+            return wrap_inner(matrix)
+
+        # extract intersecting vector and convert to diagonal matrix: 
+        # CHANGE REFERENCE POINT: to vector chunk index 0
+        vec_nt_start = kdiag_nt_col_start - kdiag_col_start - vec_chunk.start
+        vec_nt_stop_ = kdiag_nt_col_stop_ - kdiag_col_start - vec_chunk.start
+        vector_nt = vector[vec_nt_start : vec_nt_stop_].new()
+        diag_matrix = gb.ss.diag(vector_nt, k=0, dtype=gb_dtype)
+
+        # insert diag_matrix into matrix chunk:
+        # destination row index range
+        i0 = kdiag_nt_row_start - rows.start
+        i1 = kdiag_nt_row_stop_ - rows.start
+        # destination column index range
+        j0 = kdiag_nt_col_start - start
+        j1 = kdiag_nt_col_stop_ - start
+        matrix[i0 : i1, j0 : j1] << diag_matrix
+        return wrap_inner(matrix)
+
+    width = 0
+    if vec_chunk.start == 0:
+        if cols.stop <= kdiag_col_start:
+            width = ncols
+    if vec_chunk.stop == kdiag_size:
+        if cols.start >= kdiag_col_stop_:
+            width = ncols
+    matrix = gb.Matrix.new(gb_dtype, nrows=nrows, ncols=width)
+    return wrap_inner(matrix)
 
 
 def _resize(output_range, inner_vector, index_range, old_size, new_size):
