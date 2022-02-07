@@ -698,6 +698,12 @@ def _chunk_diag(
     kdiag_row_start,
     gb_dtype,
 ):
+    """
+    Return a new vector chunk with size determined by various conditions.
+
+    The returned vector is either of zero-length or it is a piece of the
+    k-diagonal in inner_matrix
+    """
     # There's perhaps a one-line formula summarizing this entire function
     output_range = output_range[0]
     rows = row_range[0]

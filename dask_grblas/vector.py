@@ -604,12 +604,9 @@ def _chunk_diag(
     Return new matrix chunk with shape = (nrows, x)
 
     where nrows = row_range.stop - row_range.start and
-    x = 0,
-    x = col_range.stop - col_range.start, or
-    x = input_range intersection col_range
-    depending on certain conditions.
+    x is determined by various conditions.
 
-    In general, the returned matrix contains a piece of
+    The returned matrix is either empty or contains a piece of
     the k-diagonal given by inner_vector 
     """
     # This function creates a new matrix chunk with dimensions determined
@@ -633,27 +630,38 @@ def _chunk_diag(
 
     # intersect matrix chunk column range with k-diagonal chunk column-range
     if cols.start < kdiag_chunk_col_stop_ and kdiag_chunk_col_start < cols.stop:
-        kdiag_nt_col_start = max(kdiag_chunk_col_start, cols.start)
-        kdiag_nt_col_stop_ = min(kdiag_chunk_col_stop_, cols.stop)
+        out_col_start = max(kdiag_chunk_col_start, cols.start)
+        out_col_stop_ = min(kdiag_chunk_col_stop_, cols.stop)
 
+        # where does the diagonal intersect these column bounds?
         # equation of diagonal: i = j - k
-        kdiag_nt_row_start = kdiag_nt_col_start - k
-        kdiag_nt_row_stop_ = kdiag_nt_col_stop_ - k
+        kdiag_nt_out_col_start = out_col_start - k
+        kdiag_nt_out_col_stop_ = out_col_stop_ - k
 
         # is intersection head or tail chunk of vector
-        vec_nt_is_head = kdiag_nt_col_start == kdiag_col_start
-        vec_nt_is_tail = kdiag_nt_col_stop_ == kdiag_col_stop_
+        vec_nt_is_head = out_col_start == kdiag_col_start
+        vec_nt_is_tail = out_col_stop_ == kdiag_col_stop_
 
-        start = kdiag_nt_col_start
-        stop_ = kdiag_nt_col_stop_
-        if vec_nt_is_head and cols.start < kdiag_col_start:
-            start = cols.start
-        if vec_nt_is_tail and cols.stop > kdiag_col_stop_:
-            stop_ = cols.stop
-        ncols = stop_ - start
+        if vec_nt_is_head:
+            # expand to the left
+            out_col_start = min(cols.start, out_col_start)
+        if vec_nt_is_tail:
+            # expand to the right
+            out_col_stop_ = max(cols.stop, out_col_stop_)
+
+        ncols = out_col_stop_ - out_col_start
         matrix = gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols)
-        if rows.stop <= kdiag_nt_row_start or kdiag_nt_row_stop_ <= rows.start:
+
+        # return empty matrix if k-diagonal does not touch it
+        if rows.stop <= kdiag_nt_out_col_start or kdiag_nt_out_col_stop_ <= rows.start:
             return wrap_inner(matrix)
+
+        # find indices of entry and exit points of k-diagonal
+        kdiag_nt_row_start = max(kdiag_nt_out_col_start, rows.start)
+        kdiag_nt_row_stop_ = min(kdiag_nt_out_col_stop_, rows.stop)
+        # equation of diagonal: j = i + k
+        kdiag_nt_col_start = kdiag_nt_row_start + k
+        kdiag_nt_col_stop_ = kdiag_nt_row_stop_ + k
 
         # extract intersecting vector and convert to diagonal matrix: 
         # CHANGE REFERENCE POINT: to vector chunk index 0
@@ -667,8 +675,8 @@ def _chunk_diag(
         i0 = kdiag_nt_row_start - rows.start
         i1 = kdiag_nt_row_stop_ - rows.start
         # destination column index range
-        j0 = kdiag_nt_col_start - start
-        j1 = kdiag_nt_col_stop_ - start
+        j0 = kdiag_nt_col_start - out_col_start
+        j1 = kdiag_nt_col_stop_ - out_col_start
         matrix[i0 : i1, j0 : j1] << diag_matrix
         return wrap_inner(matrix)
 

@@ -5,7 +5,6 @@ import sys
 import weakref
 
 import dask_grblas
-from dask_grblas.ss import diag
 import grblas
 import numpy as np
 import pytest
@@ -2693,21 +2692,22 @@ def test_not_to_array(A, A_chunks):
 )
 def test_diag(A, A_chunks, params):
     A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        k, indices, values = params
-        expected = Vector.from_values(indices, values, dtype=A.dtype, size=max(0, A.nrows - abs(k)))
-        v = dask_grblas.ss.diag(A, k=k)
-        assert expected.isequal(v)
-        v[:] = 0
-        v.ss.diag(A, k=k)
-        assert expected.isequal(v)
-        v = dask_grblas.ss.diag(A.T, k=-k)
-        assert expected.isequal(v)
-        v[:] = 0
-        v.ss.diag(A.T, -k)
-        assert expected.isequal(v)
+    for out_chunks in A_chunks:
+        for in_chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=in_chunks, inplace=True)
+            k, indices, values = params
+            expected = Vector.from_values(indices, values, dtype=A.dtype, size=max(0, A.nrows - abs(k)))
+            v = dask_grblas.ss.diag(A, k=k, chunks=out_chunks)
+            assert expected.isequal(v)
+            v[:] = 0
+            v.ss.diag(A, k=k)
+            assert expected.isequal(v)
+            v = dask_grblas.ss.diag(A.T, k=-k, chunks=out_chunks)
+            assert expected.isequal(v)
+            v[:] = 0
+            v.ss.diag(A.T, -k, chunks=out_chunks)
+            assert expected.isequal(v)
 
 
 def test_normalize_chunks():

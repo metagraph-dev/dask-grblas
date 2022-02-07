@@ -1,7 +1,7 @@
 import grblas.mask
 from grblas import replace  # noqa
 
-from . import _version, mask, scalar, utils, vector
+from . import _version, mask, scalar, utils, vector, ss
 from .construction import column_stack, concat_vectors, row_stack  # noqa
 from .matrix import Matrix
 from .scalar import Scalar

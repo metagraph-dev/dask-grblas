@@ -5,7 +5,6 @@ import sys
 import weakref
 
 import dask_grblas
-from dask_grblas.ss import diag
 import grblas
 import numpy as np
 import pytest
@@ -1179,21 +1178,22 @@ def test_diag(v, A_chunks):
     indices, values = v.to_values()
     for k in range(-5, 5):
         v_ = v
-        for chunks in A_chunks:
-            v = v_.dup()
-            v.rechunk(chunks=chunks, inplace=True)
-            A = dask_grblas.ss.diag(v, k=k)
-            size = v.size + abs(k)
-            rows = indices + max(0, -k)
-            cols = indices + max(0, k)
-            expected = Matrix.from_values(rows, cols, values, nrows=size, ncols=size, dtype=v.dtype)
-            assert expected.isequal(A)
-            w = dask_grblas.ss.diag(A, Scalar.from_value(k))
-            assert v.isequal(w)
-            assert w.dtype == "INT64"
-            w = dask_grblas.ss.diag(A.T, -k, dtype=float)
-            assert v.isequal(w)
-            assert w.dtype == "FP64"
+        for in_chunks in A_chunks:
+            for out_chunks in A_chunks:
+                v = v_.dup()
+                v.rechunk(chunks=in_chunks, inplace=True)
+                A = dask_grblas.ss.diag(v, k=k, chunks=out_chunks)
+                size = v.size + abs(k)
+                rows = indices + max(0, -k)
+                cols = indices + max(0, k)
+                expected = Matrix.from_values(rows, cols, values, nrows=size, ncols=size, dtype=v.dtype)
+                assert expected.isequal(A)
+                w = dask_grblas.ss.diag(A, Scalar.from_value(k), chunks=in_chunks)
+                assert v.isequal(w)
+                assert w.dtype == "INT64"
+                w = dask_grblas.ss.diag(A.T, -k, dtype=float, chunks=in_chunks)
+                assert v.isequal(w)
+                assert w.dtype == "FP64"
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
