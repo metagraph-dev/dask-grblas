@@ -3,6 +3,7 @@ import numpy as np
 import grblas as gb
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
+from dask.highlevelgraph import HighLevelGraph
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 
@@ -310,6 +311,64 @@ class Matrix(BaseType):
             return Matrix(x, nvals=nvals)
 
     def _diag(self, k=0, dtype=None, chunks="auto"):
+        kdiag_row_start = max(0, -k)
+        kdiag_col_start = max(0, k)
+        kdiag_row_stop = min(self.nrows, self.ncols - k)
+        len_kdiag = kdiag_row_stop - kdiag_row_start
+
+        gb_dtype = self.dtype if dtype == None else lookup_dtype(dtype)
+        meta = wrap_inner(gb.Vector.new(gb_dtype))
+        if len_kdiag <= 0:
+            return get_return_type(meta).new(gb_dtype)
+
+        A = self._delayed
+        name = "diag-" + tokenize(A)
+
+        row_stops_ = np.cumsum(A.chunks[0])
+        row_starts = np.roll(row_stops_, 1)
+        row_starts[0] = 0
+
+        col_stops_ = np.cumsum(A.chunks[1])
+        col_starts = np.roll(col_stops_, 1)
+        col_starts[0] = 0
+
+        row_blockid = np.arange(A.numblocks[0])
+        col_blockid = np.arange(A.numblocks[1])
+
+        # follow k-diagonal through chunks while constructing dask graph:
+        # equation of diagonal: i = j - k
+        dsk = dict()
+        i = 0
+        out_chunks = ()
+        while kdiag_row_start < A.shape[0] and kdiag_col_start < A.shape[1]:
+            # locate intersecting chunk:
+            row_filter = (row_starts <= kdiag_row_start) & (kdiag_row_start < row_stops_)
+            col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < row_stops_)
+            I, = row_blockid[row_filter]
+            J, = col_blockid[col_filter]
+            # localize block info:
+            nrows, ncols = A.chunks[0][I], A.chunks[1][J]
+            kdiag_row_start -= row_starts[I]
+            kdiag_col_start -= col_starts[J]
+            k = -kdiag_row_start if kdiag_row_start > 0 else kdiag_col_start
+            kdiag_row_end = min(nrows, ncols - k)
+            kdiag_len = kdiag_row_end - kdiag_row_start
+            # increment dask graph:
+            dsk[(name, i)] = (_chunk_diag_v2, (A.name,) + (I, J), k)
+            out_chunks += (kdiag_len,)
+            # prepare for next iteration:
+            kdiag_row_start = kdiag_row_end + row_starts[I]
+            kdiag_col_start = min(ncols, nrows + k) + col_starts[J]
+            i += 1
+
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[A])
+        out = da.core.Array(graph, name, (out_chunks,), meta=meta)
+
+        nvals = 0 if self._nvals == 0 else None
+        out = get_return_type(meta.value)(out, nvals=nvals)
+        return out.rechunk(chunks=chunks)
+
+    def _diag_old(self, k=0, dtype=None, chunks="auto"):
         nrows, ncols = self.nrows, self.ncols
         # equation of diagonal: i = j - k
         kdiag_row_start = max(0, -k)
@@ -687,6 +746,10 @@ class TransposedMatrix:
     __getitem__ = Matrix.__getitem__
     __array__ = Matrix.__array__
     name = Matrix.name
+
+
+def _chunk_diag_v2(inner_matrix, k):
+    return wrap_inner(gb.ss.diag(inner_matrix.value, k))
 
 
 def _chunk_diag(
