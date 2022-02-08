@@ -343,7 +343,7 @@ class Matrix(BaseType):
         while kdiag_row_start < A.shape[0] and kdiag_col_start < A.shape[1]:
             # locate intersecting chunk:
             row_filter = (row_starts <= kdiag_row_start) & (kdiag_row_start < row_stops_)
-            col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < row_stops_)
+            col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < col_stops_)
             I, = row_blockid[row_filter]
             J, = col_blockid[col_filter]
             # localize block info:
