@@ -335,17 +335,22 @@ class Matrix(BaseType):
         row_blockid = np.arange(A.numblocks[0])
         col_blockid = np.arange(A.numblocks[1])
 
+        # locate first chunk containing diaagonal:
+        row_filter = (row_starts <= kdiag_row_start) & (
+            kdiag_row_start < row_stops_
+        )
+        col_filter = (col_starts <= kdiag_col_start) & (
+            kdiag_col_start < col_stops_
+        )
+        (I,) = row_blockid[row_filter]
+        (J,) = col_blockid[col_filter]
+
         # follow k-diagonal through chunks while constructing dask graph:
         # equation of diagonal: i = j - k
         dsk = dict()
         i = 0
         out_chunks = ()
         while kdiag_row_start < A.shape[0] and kdiag_col_start < A.shape[1]:
-            # locate intersecting chunk:
-            row_filter = (row_starts <= kdiag_row_start) & (kdiag_row_start < row_stops_)
-            col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < col_stops_)
-            I, = row_blockid[row_filter]
-            J, = col_blockid[col_filter]
             # localize block info:
             nrows, ncols = A.chunks[0][I], A.chunks[1][J]
             kdiag_row_start -= row_starts[I]
@@ -354,12 +359,14 @@ class Matrix(BaseType):
             kdiag_row_end = min(nrows, ncols - k)
             kdiag_len = kdiag_row_end - kdiag_row_start
             # increment dask graph:
-            dsk[(name, i)] = (_chunk_diag_v2, (A.name,) + (I, J), k)
+            dsk[(name, i)] = (_chunk_diag_v2, (A.name, I, J), k)
             out_chunks += (kdiag_len,)
             # prepare for next iteration:
+            i += 1
             kdiag_row_start = kdiag_row_end + row_starts[I]
             kdiag_col_start = min(ncols, nrows + k) + col_starts[J]
-            i += 1
+            I = I + 1 if kdiag_row_start == row_stops_[I] else I
+            J = J + 1 if kdiag_col_start == col_stops_[J] else J
 
         graph = HighLevelGraph.from_collections(name, dsk, dependencies=[A])
         out = da.core.Array(graph, name, (out_chunks,), meta=meta)
