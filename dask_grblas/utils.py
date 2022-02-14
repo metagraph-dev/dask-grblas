@@ -8,6 +8,14 @@ from dask.delayed import delayed
 from .io import MMFile
 
 
+def package_args(*args):
+    return args
+
+
+def package_kwargs(**kwargs):
+    return kwargs
+
+
 def np_dtype(dtype):
     return np.dtype(dtype.numba_type.name)
 

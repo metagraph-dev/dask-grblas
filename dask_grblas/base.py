@@ -1,8 +1,10 @@
 from numbers import Number
+from functools import partial
 import dask.array as da
 import grblas as gb
 import numpy as np
 from grblas.operator import UNKNOWN_OPCLASS, find_opclass, get_typed_op
+from grblas.dtypes import lookup_dtype
 
 from . import replace as replace_singleton
 from .mask import Mask
@@ -210,6 +212,9 @@ class BaseType:
     def nvals(self):
         from .scalar import PythonScalar
 
+        if type(self._delayed) is DOnion:
+            return PythonScalar(self._delayed.nvals)
+
         delayed = da.core.elemwise(
             _nvals,
             self._delayed,
@@ -347,6 +352,72 @@ class BaseType:
 
     def visualize(self, *args, **kwargs):
         return self._delayed.visualize(*args, **kwargs)
+
+
+class DOnion:
+    """
+    Dask (or Delayed) Onion (DOnion): 
+    
+    Encapsulates a dask array whose inner value is also a dask array.
+    Intended to be used in cases where the size of the inner dask
+    array (the seed) depends on the inner value of another dask array
+    (the shroud)
+    """
+    @classmethod
+    def grow(cls, shroud, seed_func, seed_meta, packed_args, packed_kwargs, *args, **kwargs):
+        """
+        Develop a DOnion from dask array `shroud`
+        
+        Shroud a dask array (the seed) returned by `seed_func` using another dask array (the
+        shroud)
+        :shroud: dask array whose inner value determines the (size of) seed dask array
+        :seed_func: the function that takes as input the inner value of `shroud` and returns
+            another dask array (the seed)
+        :seed_meta: empty instance of the inner value type of the seed
+        :packed_args: tuple of arguments to `seed_func`
+        :packed_kwargs: dict of keyword arguments to `seed_func`
+        :args: other dask arrays that together with `shroud` determine the (size of) `seed`
+        :kwargs: other named dask arrays that together with `shroud` determine the (size of) `seed`
+        """
+        seed_func = partial(seed_func, *packed_args, **packed_kwargs)
+        dtype = np_dtype(lookup_dtype(shroud.dtype))
+        _meta = np.array([], dtype=dtype)
+        kernel = shroud.map_blocks(seed_func, *args, **kwargs, dtype=dtype, meta=_meta)
+        return DOnion(kernel, meta=seed_meta)
+
+    def __init__(self, kernel, meta=None):
+        self.kernel = kernel
+        self.dtype = kernel.dtype
+        self._meta = meta
+
+    def __eq__(self, other):
+        return self.compute() == other
+
+    def compute(self, *args, **kwargs):
+        value = self.kernel.compute(*args, **kwargs)
+        while hasattr(value, 'compute'):
+            value = value.compute(*args, **kwargs)
+        return value
+
+    def persist(self, *args, **kwargs):
+        return self.kernel.compute(*args, **kwargs).persist(*args, **kwargs)
+
+    def inject(self, func, *args, **kwargs):
+        dtype = np_dtype(lookup_dtype(self.dtype))
+        meta = self._meta
+        return self.kernel.map_blocks(func, *args, **kwargs, dtype=dtype, meta=meta)
+
+    def __getattr__(self, item):
+        func = lambda x: getattr(x, item)
+        return DOnion(self.inject(func))
+
+    def getattr(self, name, packed_args, packed_kwargs, *args, **kwargs):
+        func = partial(Donion.apply, name, *packed_args, **packed_kwargs)
+        return DOnion(self.inject(func, *args, **kwargs))
+
+    @classmethod
+    def apply(cls, name, *args, **kwargs):
+        return getattr(x, name)(*args, **kwargs)
 
 
 # Dask task functions

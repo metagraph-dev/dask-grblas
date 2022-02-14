@@ -3,7 +3,7 @@ import grblas as gb
 import numpy as np
 from dask.delayed import Delayed, delayed
 
-from .base import BaseType, InnerBaseType
+from .base import BaseType, InnerBaseType, DOnion
 from .expr import AmbiguousAssignOrExtract, GbDelayed
 from .utils import get_meta, np_dtype
 
@@ -67,9 +67,10 @@ class Scalar(BaseType):
         return new(cls, dtype, name=name)
 
     def __init__(self, delayed, meta=None):
-        assert type(delayed) is da.Array, type(delayed)
-        assert delayed.ndim == 0
+        assert type(delayed) in {da.Array, DOnion}, type(delayed)
         self._delayed = delayed
+        if type(delayed) is da.Array:
+            assert delayed.ndim == 0
         if meta is None:
             meta = gb.Scalar.new(delayed.dtype)
         self._meta = meta
@@ -228,6 +229,8 @@ class PythonScalar:
 
     def compute(self, *args, **kwargs):
         innerval = self._delayed.compute(*args, **kwargs)
+        if type(self._delayed) is DOnion:
+            return innerval
         return innerval.value.value
 
 

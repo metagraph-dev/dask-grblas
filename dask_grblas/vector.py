@@ -1,4 +1,5 @@
 from numbers import Number
+from functools import partial
 import dask.array as da
 import numpy as np
 import grblas as gb
@@ -7,11 +8,13 @@ from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 
-from .base import BaseType, InnerBaseType, _nvals
+from .base import BaseType, InnerBaseType, _nvals, DOnion
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
 from .utils import (
+    package_args,
+    package_kwargs,
     np_dtype,
     get_grblas_type,
     get_return_type,
@@ -20,6 +23,7 @@ from .utils import (
     build_chunk_ranges_dask_array,
     build_chunk_offsets_dask_array,
 )
+from grblas.exceptions import IndexOutOfBound
 
 
 class InnerVector(InnerBaseType):
@@ -107,31 +111,32 @@ class Vector(BaseType):
         /,
         size=None,
         *,
-        trust_size=False,
         dup_op=None,
         dtype=None,
         chunks="auto",
         name=None,
     ):
-        # Note: `trust_size` is a bool parameter that, when True,
-        # can be used to avoid expensive computation of max(indices)
-        # which is used to verify that `size` is indeed large enough
-        # to hold all the given tuples.
-        # TODO:
-        # dup_op support for dask_array indices/values (use reduce_assign?)
-        if dup_op is None and type(indices) is da.Array and type(values) is da.Array:
-            if not trust_size or size is None:
-                # this branch is an expensive operation:
-                implied_size = 1 + da.max(indices).compute()
-                if size is not None and implied_size > size:
-                    raise Exception()
-                size = implied_size if size is None else size
+        if type(indices) is da.Array and type(values) is da.Array:
+            np_idtype_ = np_dtype(lookup_dtype(indices.dtype))
+            if size is not None:
+                chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
+            else:
+                size = da.max(indices) + 1
+                # Here `size` is a dask 0d-array whose computed value is
+                # used to determine the size of the Vector to be returned.
+                # But since we do not want to compute anything just now,
+                # we instead create a "DOnion" (dask onion) object
+                meta = gb.Vector.new(values.dtype)
+                packed_args = package_args(indices, values)
+                packed_kwargs = package_kwargs(
+                    dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
+                )
+                donion = DOnion.grow(size, Vector.from_values, meta, packed_args, packed_kwargs)
+                return Vector(donion, meta=meta)
 
-            idtype = gb.Vector.new(indices.dtype).dtype
-            np_idtype_ = np_dtype(idtype)
             vdtype = gb.Vector.new(values.dtype).dtype
             np_vdtype_ = np_dtype(vdtype)
-            chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
+
             name_ = name
             name = str(name) if name else ""
             name = name + "-index-ranges" + tokenize(cls, chunks[0])
@@ -141,6 +146,7 @@ class Vector(BaseType):
                 *(indices, "j"),
                 *(values, "j"),
                 *(index_ranges, "i"),
+                size=size,
                 dtype=np_vdtype_,
                 meta=np.array([]),
             )
@@ -150,6 +156,7 @@ class Vector(BaseType):
                 *(fragments, "ij"),
                 *(index_ranges, "i"),
                 concatenate=False,
+                dup_op=dup_op,
                 gb_dtype=dtype,
                 dtype=np_vdtype_,
                 meta=meta,
@@ -185,11 +192,15 @@ class Vector(BaseType):
         # if it is already known  at the time of initialization of
         # this Vector,  otherwise its value should be left as None
         # (the default)
-        assert type(delayed) is da.Array
-        assert delayed.ndim == 1
+        assert type(delayed) in {da.Array, DOnion}
         self._delayed = delayed
-        if meta is None:
-            meta = gb.Vector.new(delayed.dtype, delayed.shape[0])
+        if type(delayed) is da.Array:
+            assert delayed.ndim == 1
+            if meta is None:
+                meta = gb.Vector.new(delayed.dtype, delayed.shape[0])
+        else:
+            if meta is None:
+                meta = gb.Vector.new(delayed.dtype)
         self._meta = meta
         self._size = meta.size
         self.dtype = meta.dtype
@@ -225,6 +236,8 @@ class Vector(BaseType):
 
     @property
     def size(self):
+        if type(self._delayed) is DOnion:
+            return self._delayed.size
         return self._meta.size
 
     @property
@@ -461,11 +474,11 @@ class Vector(BaseType):
         x = self._optional_dup()
         if type(indices) is list:
             if np.max(indices) >= self._size:
-                raise gb.exceptions.IndexOutOfBound
+                raise IndexOutOfBound
             indices = da.core.from_array(np.array(indices), name="indices-" + tokenize(indices))
         else:
             if da.max(indices).compute() >= self._size:
-                raise gb.exceptions.IndexOutOfBound
+                raise IndexOutOfBound
         if type(values) is list:
             values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
 
@@ -503,11 +516,15 @@ class Vector(BaseType):
         # vector.build(indices, values, dup_op=dup_op)
         # self.__init__(Vector.from_vector(vector)._delayed)
 
-    def to_values(self, dtype=None, chunks="auto"):
+    def to_values(self, dtype=None, chunks="auto", status=None):
         x = self._delayed
         nvals_array = da.core.blockwise(
             *(_nvals, "i"), *(x, "i"), adjust_chunks={"i": 1}, dtype=np.int64, meta=np.array([])
-        ).compute()
+        )
+        packed_args = package_args()
+        packed_kwargs = package_kwargs(dtype=dtype, chunks=chunks, status="")
+        
+        return DOnion.grow(nvals_array, self.to_values, packed_args, packed_kwargs)
 
         stops = np.cumsum(nvals_array)
         starts = np.roll(stops, 1)
@@ -609,9 +626,6 @@ def _chunk_diag(
     The returned matrix is either empty or contains a piece of
     the k-diagonal given by inner_vector 
     """
-    # This function creates a new matrix chunk with dimensions determined
-    # by the input k-diagonal vector chunk.  The matrix chunk may or may
-    # not include the k-diagonal chunk
     vector = inner_vector.value
     vec_chunk = input_range[0]
     rows = row_range[0]
@@ -749,14 +763,21 @@ def _build_1D_chunk(inner_vector, out_index_range, fragments, dup_op=None):
     return InnerVector(inner_vector.value)
 
 
-def _from_values1D(fragments, index_range, gb_dtype=None):
+def _from_values1D(fragments, index_range, dup_op=None, gb_dtype=None):
     inds = np.concatenate([inds for (inds, _) in fragments])
     vals = np.concatenate([vals for (_, vals) in fragments])
     size = index_range[0].stop - index_range[0].start
-    return InnerVector(gb.Vector.from_values(inds, vals, size=size, dtype=gb_dtype))
+    return InnerVector(gb.Vector.from_values(inds, vals, size=size, dup_op=dup_op, dtype=gb_dtype))
 
 
-def _pick1D(indices, values, index_range):
+def _pick1D(indices, values, index_range, size):
+    # validate indices
+    indices = np.where(indices < 0, indices + size, indices)
+    bad_indices = (indices < 0) | (size <= indices)
+    if np.any(bad_indices):
+        raise IndexOutOfBound
+
+    # filter into chunk:
     index_range = index_range[0]
     indices_in = (index_range.start <= indices) & (indices < index_range.stop)
     indices = indices[indices_in] - index_range.start
