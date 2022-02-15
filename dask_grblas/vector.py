@@ -24,6 +24,7 @@ from .utils import (
     build_chunk_offsets_dask_array,
 )
 from grblas.exceptions import IndexOutOfBound
+from plotly.validators.streamtube import starts
 
 
 class InnerVector(InnerBaseType):
@@ -116,25 +117,55 @@ class Vector(BaseType):
         chunks="auto",
         name=None,
     ):
+        if hasattr(values, 'dtype'):
+            dtype = lookup_dtype(values.dtype if dtype is None else dtype)
+        meta = gb.Vector.new(dtype)
+        meta_dtype = np_dtype(meta.dtype)
+        packed_kwargs = package_kwargs(
+            size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
+        )
+        if type(indices) is DOnion and type(values) is DOnion:
+            packed_args = package_args()
+            return DOnion.extract_shared(
+                (indices, values), Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
+            )
+        if type(indices) is DOnion:
+            packed_args = package_args(values)
+            return DOnion.extract_shared(
+                (indices,), Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
+            )
+        if type(values) is DOnion:
+            packed_args = package_args(indices)
+            return DOnion.extract_shared(
+                (values,), Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
+            )
         if type(indices) is da.Array and type(values) is da.Array:
             np_idtype_ = np_dtype(lookup_dtype(indices.dtype))
             if size is not None:
                 chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
             else:
+                if indices.size == 0:
+                    raise ValueError("No indices provided. Unable to infer size.")
                 size = da.max(indices) + 1
                 # Here `size` is a dask 0d-array whose computed value is
                 # used to determine the size of the Vector to be returned.
                 # But since we do not want to compute anything just now,
                 # we instead create a "DOnion" (dask onion) object
-                meta = gb.Vector.new(values.dtype)
                 packed_args = package_args(indices, values)
                 packed_kwargs = package_kwargs(
                     dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
                 )
-                donion = DOnion.grow(size, Vector.from_values, meta, packed_args, packed_kwargs)
+                donion = DOnion.sprout(size, Vector.from_values, meta, packed_args, packed_kwargs)
                 return Vector(donion, meta=meta)
 
-            vdtype = gb.Vector.new(values.dtype).dtype
+            if indices.size > 0:
+                if indices.dtype.kind not in np.typecodes["AllInteger"]:
+                    raise ValueError(f"indices must be integers, not {indices.dtype}")
+
+                if indices.size != values.size:
+                    raise ValueError("`indices` and `values` lengths must match")
+
+            vdtype = dtype
             np_vdtype_ = np_dtype(vdtype)
 
             name_ = name
@@ -516,52 +547,67 @@ class Vector(BaseType):
         # vector.build(indices, values, dup_op=dup_op)
         # self.__init__(Vector.from_vector(vector)._delayed)
 
-    def to_values(self, dtype=None, chunks="auto", status=None):
+    def to_values(self, dtype=None, chunks="auto"):
         x = self._delayed
         nvals_array = da.core.blockwise(
             *(_nvals, "i"), *(x, "i"), adjust_chunks={"i": 1}, dtype=np.int64, meta=np.array([])
         )
-        packed_args = package_args()
-        packed_kwargs = package_kwargs(dtype=dtype, chunks=chunks, status="")
-        
-        return DOnion.grow(nvals_array, self.to_values, packed_args, packed_kwargs)
 
-        stops = np.cumsum(nvals_array)
-        starts = np.roll(stops, 1)
+        stops = da.cumsum(nvals_array)
+        starts = da.roll(stops, 1)
+        starts = starts.copy() if starts.size == 1 else starts  # bug!!
         starts[0] = 0
         nnz = stops[-1]
 
-        starts = starts.reshape(nvals_array.shape)
-        starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
-        starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+        def _to_values(x, starts, stops, dtype, chunks, nnz):
+            # starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
+            starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
 
-        stops = stops.reshape(nvals_array.shape)
-        stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
-        stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
+            # stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
+            stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
 
-        chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
-        output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
+            chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
+            output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 
-        dtype_ = np_dtype(self.dtype)
-        index_offsets = build_chunk_offsets_dask_array(x, 0, "index_offset-")
-        x = da.core.blockwise(
-            *(VectorTupleExtractor, "ij"),
-            *(output_ranges, "j"),
-            *(x, "i"),
-            *(index_offsets, "i"),
-            *(starts, "i"),
-            *(stops, "i"),
-            gb_dtype=dtype,
-            dtype=dtype_,
-            meta=np.array([[]]),
-        )
-        x = da.reduction(
-            x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
-        )
+            gb_dtype = lookup_dtype(dtype)
+            dtype_ = np_dtype(gb_dtype)
+            index_offsets = build_chunk_offsets_dask_array(x, 0, "index_offset-")
+            x = da.core.blockwise(
+                *(VectorTupleExtractor, "ij"),
+                *(output_ranges, "j"),
+                *(x, "i"),
+                *(index_offsets, "i"),
+                *(starts, "i"),
+                *(stops, "i"),
+                gb_dtype=gb_dtype,
+                dtype=dtype_,
+                meta=np.array([[]]),
+            )
+            return da.reduction(
+                x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
+            )
+
+        def apply(func, dtype, meta, x):
+            return da.map_blocks(func, x, dtype=dtype, meta=meta)
+
+        dtype = self.dtype if dtype is None else dtype
+        packed_args = package_args(x, starts, stops, dtype, chunks)
+        packed_kwargs = package_kwargs()
+        meta = np.array([])
+        iv_donion = DOnion.sprout(nnz, _to_values, meta, packed_args, packed_kwargs)
 
         meta_i, meta_v = self._meta.to_values(dtype)
-        indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta_i)
-        values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta_v)
+
+        dtype_i = np_dtype(lookup_dtype(meta_i.dtype))
+        packed_args = package_args(_get_indices, dtype_i, meta_i)
+        packed_kwargs = package_kwargs()
+        indices = iv_donion.extract(apply, packed_args, packed_kwargs, dtype_i, meta_i)
+
+        dtype_v = np_dtype(lookup_dtype(meta_v.dtype))
+        packed_args = package_args(_get_values, dtype_v, meta_v)
+        packed_kwargs = package_kwargs()
+        values = iv_donion.extract(apply, packed_args, packed_kwargs, dtype_v, meta_v)
+
         return indices, values
 
         # delayed = self._delayed
@@ -767,6 +813,8 @@ def _from_values1D(fragments, index_range, dup_op=None, gb_dtype=None):
     inds = np.concatenate([inds for (inds, _) in fragments])
     vals = np.concatenate([vals for (_, vals) in fragments])
     size = index_range[0].stop - index_range[0].start
+    if inds.size == 0:
+        return InnerVector(gb.Vector.new(gb_dtype, size=size))
     return InnerVector(gb.Vector.from_values(inds, vals, size=size, dup_op=dup_op, dtype=gb_dtype))
 
 

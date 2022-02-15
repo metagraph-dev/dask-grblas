@@ -8,7 +8,9 @@ from grblas.dtypes import lookup_dtype
 
 from . import replace as replace_singleton
 from .mask import Mask
-from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
+from .utils import (
+    package_args, package_kwargs, get_grblas_type, get_meta, np_dtype, wrap_inner
+)
 
 _expect_type = gb.base._expect_type
 
@@ -364,7 +366,7 @@ class DOnion:
     (the shroud)
     """
     @classmethod
-    def grow(cls, shroud, seed_func, seed_meta, packed_args, packed_kwargs, *args, **kwargs):
+    def sprout(cls, shroud, seed_func, seed_meta, packed_args, packed_kwargs, *args, **kwargs):
         """
         Develop a DOnion from dask array `shroud`
         
@@ -402,18 +404,33 @@ class DOnion:
     def persist(self, *args, **kwargs):
         return self.kernel.compute(*args, **kwargs).persist(*args, **kwargs)
 
-    def inject(self, func, *args, **kwargs):
-        dtype = np_dtype(lookup_dtype(self.dtype))
-        meta = self._meta
-        return self.kernel.map_blocks(func, *args, **kwargs, dtype=dtype, meta=meta)
+    def extract(self, func, packed_args, packed_kwargs, dtype, meta, *args, **kwargs):
+        func = partial(func, *packed_args, **packed_kwargs)
+        kernel = self.kernel.map_blocks(func, *args, **kwargs, dtype=dtype, meta=meta)
+        return DOnion(kernel, meta=meta)
+
+    @classmethod
+    def extract_shared(
+        cls, donions, func, packed_args, packed_kwargs, dtype, meta, *args, **kwargs
+    ):
+        donions = tuple(donion.kernel for donion in donions)
+        func = partial(func, *packed_args, **packed_kwargs)
+        kernel = da.map_blocks(func, *donions, *args, **kwargs, dtype=dtype, meta=meta)
+        return DOnion(kernel, meta=meta)
 
     def __getattr__(self, item):
         func = lambda x: getattr(x, item)
-        return DOnion(self.inject(func))
+        # TODO: lookup dtype and meta of attribute!!!
+        dtype = np_dtype(lookup_dtype(self.dtype))
+        meta = self._meta
+        return self.extract(func, package_args(), package_kwargs(), dtype, meta)
 
     def getattr(self, name, packed_args, packed_kwargs, *args, **kwargs):
         func = partial(Donion.apply, name, *packed_args, **packed_kwargs)
-        return DOnion(self.inject(func, *args, **kwargs))
+        # TODO: lookup dtype and meta of attribute!!!
+        dtype = np_dtype(lookup_dtype(self.dtype))
+        meta = self._meta
+        return self.extract(func, package_args(), package_kwargs(), dtype, meta, *args, **kwargs)
 
     @classmethod
     def apply(cls, name, *args, **kwargs):
