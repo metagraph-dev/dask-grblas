@@ -195,7 +195,7 @@ class BaseType:
             dtype=self._delayed.dtype,
         )
 
-    def compute_and_store_nvals():
+    def compute_and_store_nvals(self):
         """
         compute and store the number of values of this Vector/Matrix
 

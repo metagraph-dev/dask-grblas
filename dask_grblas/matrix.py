@@ -15,6 +15,7 @@ from ._ss.matrix import ss
 from .utils import (
     np_dtype,
     get_return_type,
+    get_grblas_type,
     wrap_inner,
     build_chunk_offsets_dask_array,
     build_ranges_dask_array_from_chunks,
@@ -214,7 +215,7 @@ class Matrix(BaseType):
             except AttributeError:
                 np_dtype_ = np.dtype(dtype)
 
-            delayed = da.core.blockwise(
+            _delayed = da.core.blockwise(
                 *(_new_Matrix_chunk, "ij"),
                 *(row_ranges, "i"),
                 *(col_ranges, "j"),
@@ -223,7 +224,7 @@ class Matrix(BaseType):
                 meta=meta,
                 name=name_,
             )
-            return Matrix(delayed, nvals=0)
+            return Matrix(_delayed, nvals=0)
 
     def __init__(self, delayed, meta=None, nvals=None):
         # We recommend always using __init__() to set the attribute
@@ -316,7 +317,7 @@ class Matrix(BaseType):
         kdiag_row_stop = min(self.nrows, self.ncols - k)
         len_kdiag = kdiag_row_stop - kdiag_row_start
 
-        gb_dtype = self.dtype if dtype == None else lookup_dtype(dtype)
+        gb_dtype = self.dtype if dtype is None else lookup_dtype(dtype)
         meta = wrap_inner(gb.Vector.new(gb_dtype))
         if len_kdiag <= 0:
             return get_return_type(meta).new(gb_dtype)
@@ -338,8 +339,8 @@ class Matrix(BaseType):
         # locate first chunk containing diaagonal:
         row_filter = (row_starts <= kdiag_row_start) & (kdiag_row_start < row_stops_)
         col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < col_stops_)
-        (I,) = row_blockid[row_filter]
-        (J,) = col_blockid[col_filter]
+        (R,) = row_blockid[row_filter]
+        (C,) = col_blockid[col_filter]
 
         # follow k-diagonal through chunks while constructing dask graph:
         # equation of diagonal: i = j - k
@@ -348,21 +349,21 @@ class Matrix(BaseType):
         out_chunks = ()
         while kdiag_row_start < A.shape[0] and kdiag_col_start < A.shape[1]:
             # localize block info:
-            nrows, ncols = A.chunks[0][I], A.chunks[1][J]
-            kdiag_row_start -= row_starts[I]
-            kdiag_col_start -= col_starts[J]
+            nrows, ncols = A.chunks[0][R], A.chunks[1][C]
+            kdiag_row_start -= row_starts[R]
+            kdiag_col_start -= col_starts[C]
             k = -kdiag_row_start if kdiag_row_start > 0 else kdiag_col_start
             kdiag_row_end = min(nrows, ncols - k)
             kdiag_len = kdiag_row_end - kdiag_row_start
             # increment dask graph:
-            dsk[(name, i)] = (_chunk_diag_v2, (A.name, I, J), k)
+            dsk[(name, i)] = (_chunk_diag_v2, (A.name, R, C), k)
             out_chunks += (kdiag_len,)
             # prepare for next iteration:
             i += 1
-            kdiag_row_start = kdiag_row_end + row_starts[I]
-            kdiag_col_start = min(ncols, nrows + k) + col_starts[J]
-            I = I + 1 if kdiag_row_start == row_stops_[I] else I
-            J = J + 1 if kdiag_col_start == col_stops_[J] else J
+            kdiag_row_start = kdiag_row_end + row_starts[R]
+            kdiag_col_start = min(ncols, nrows + k) + col_starts[C]
+            R = R + 1 if kdiag_row_start == row_stops_[R] else R
+            C = C + 1 if kdiag_col_start == col_stops_[C] else C
 
         graph = HighLevelGraph.from_collections(name, dsk, dependencies=[A])
         out = da.core.Array(graph, name, (out_chunks,), meta=meta)
@@ -378,7 +379,7 @@ class Matrix(BaseType):
         kdiag_row_stop = min(nrows, ncols - k)
         len_kdiag = kdiag_row_stop - kdiag_row_start
 
-        gb_dtype = self.dtype if dtype == None else lookup_dtype(dtype)
+        gb_dtype = self.dtype if dtype is None else lookup_dtype(dtype)
         meta = gb.Vector.new(gb_dtype)
         if len_kdiag <= 0:
             return get_return_type(meta).new(gb_dtype)
