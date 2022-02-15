@@ -30,4 +30,3 @@ class ss:
         vector = self._parent._expect_type(vector, dgb.Vector, within="ss.diag", argname="vector")
         rv = vector._diag(k, chunks=chunks, dtype=dtype)
         self._parent.__init__(rv._delayed, nvals=rv._nvals)
-

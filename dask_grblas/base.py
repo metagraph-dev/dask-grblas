@@ -8,9 +8,7 @@ from grblas.dtypes import lookup_dtype
 
 from . import replace as replace_singleton
 from .mask import Mask
-from .utils import (
-    package_args, package_kwargs, get_grblas_type, get_meta, np_dtype, wrap_inner
-)
+from .utils import package_args, package_kwargs, get_grblas_type, get_meta, np_dtype, wrap_inner
 
 _expect_type = gb.base._expect_type
 
@@ -134,7 +132,7 @@ class BaseType:
                 nvals = self._nvals
             else:
                 nvals = None
-                
+
             return type(self)(delayed, nvals=nvals)
         else:
             return type(self)(delayed)
@@ -202,7 +200,7 @@ class BaseType:
     def compute_and_store_nvals():
         """
         compute and store the number of values of this Vector/Matrix
-        
+
         This could be useful to increase the performance of Aggregators
         which inspect ._nvals to determine if a fast path can be taken
         to compute the aggregation result.
@@ -358,18 +356,19 @@ class BaseType:
 
 class DOnion:
     """
-    Dask (or Delayed) Onion (DOnion): 
-    
+    Dask (or Delayed) Onion (DOnion):
+
     Encapsulates a dask array whose inner value is also a dask array.
     Intended to be used in cases where the size of the inner dask
     array (the seed) depends on the inner value of another dask array
     (the shroud)
     """
+
     @classmethod
     def sprout(cls, shroud, seed_func, seed_meta, packed_args, packed_kwargs, *args, **kwargs):
         """
         Develop a DOnion from dask array `shroud`
-        
+
         Shroud a dask array (the seed) returned by `seed_func` using another dask array (the
         shroud)
         :shroud: dask array whose inner value determines the (size of) seed dask array
@@ -397,7 +396,7 @@ class DOnion:
 
     def compute(self, *args, **kwargs):
         value = self.kernel.compute(*args, **kwargs)
-        while hasattr(value, 'compute'):
+        while hasattr(value, "compute"):
             value = value.compute(*args, **kwargs)
         return value
 

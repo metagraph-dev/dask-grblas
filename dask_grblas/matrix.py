@@ -40,7 +40,7 @@ class InnerMatrix(InnerBaseType):
 
 
 class Matrix(BaseType):
-    __slots__ = "ss",
+    __slots__ = ("ss",)
     ndim = 2
     _is_transposed = False
 
@@ -336,12 +336,8 @@ class Matrix(BaseType):
         col_blockid = np.arange(A.numblocks[1])
 
         # locate first chunk containing diaagonal:
-        row_filter = (row_starts <= kdiag_row_start) & (
-            kdiag_row_start < row_stops_
-        )
-        col_filter = (col_starts <= kdiag_col_start) & (
-            kdiag_col_start < col_stops_
-        )
+        row_filter = (row_starts <= kdiag_row_start) & (kdiag_row_start < row_stops_)
+        col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < col_stops_)
         (I,) = row_blockid[row_filter]
         (J,) = col_blockid[col_filter]
 
@@ -408,20 +404,10 @@ class Matrix(BaseType):
             meta=np.array([[[]]]),
         )
         fragments = da.reduction(
-            fragments,
-            _identity,
-            _identity,
-            axis=0,
-            dtype=dtype_,
-            meta=np.array([[]])
+            fragments, _identity, _identity, axis=0, dtype=dtype_, meta=np.array([[]])
         )
         delayed = da.reduction(
-            fragments,
-            _identity,
-            _identity,
-            axis=0,
-            dtype=dtype_,
-            meta=wrap_inner(meta)
+            fragments, _identity, _identity, axis=0, dtype=dtype_, meta=wrap_inner(meta)
         )
         nvals = 0 if self._nvals == 0 else None
         return get_return_type(meta)(delayed, nvals=nvals)
@@ -502,7 +488,18 @@ class Matrix(BaseType):
         meta = self._meta.reduce_scalar(op)
         return GbDelayed(self, "reduce_scalar", op, meta=meta)
 
-    def build(self, rows, columns, values, *, dup_op=None, clear=False, nrows=None, ncols=None, chunks=None):
+    def build(
+        self,
+        rows,
+        columns,
+        values,
+        *,
+        dup_op=None,
+        clear=False,
+        nrows=None,
+        ncols=None,
+        chunks=None,
+    ):
         if clear:
             self.clear()
         elif self.nvals.compute() > 0:
@@ -608,7 +605,7 @@ class Matrix(BaseType):
         dtype_ = np_dtype(self.dtype)
         # Compute row/col offsets as dask arrays that can align with this
         # Matrix's (self's) chunks to convert chunk row/col indices to
-        # full dask-grblas Matrix indices. 
+        # full dask-grblas Matrix indices.
         row_offsets = build_chunk_offsets_dask_array(x, 0, "row_offset-")
         col_offsets = build_chunk_offsets_dask_array(x, 1, "col_offset-")
         x = da.core.blockwise(
@@ -787,7 +784,7 @@ def _chunk_diag(
     j = cols.stop
     chunk_kdiag_row_stop = j - k
 
-    # intersect chunk row range with k-diagonal within chunk column bounds 
+    # intersect chunk row range with k-diagonal within chunk column bounds
     if rows.start < chunk_kdiag_row_stop and chunk_kdiag_row_start < rows.stop:
         chunk_kdiag_row_start = max(chunk_kdiag_row_start, rows.start)
         chunk_kdiag_row_stop = min(chunk_kdiag_row_stop, rows.stop)
@@ -798,7 +795,7 @@ def _chunk_diag(
         vector_kdiag_start = chunk_kdiag_row_start - kdiag_row_start
         vector_kdiag_stop = chunk_kdiag_row_stop - kdiag_row_start
 
-        # intersect output-range with row-range of k-diagonal within chunk 
+        # intersect output-range with row-range of k-diagonal within chunk
         if output_range.start < vector_kdiag_stop and vector_kdiag_start < output_range.stop:
             vector_kdiag_start = max(output_range.start, vector_kdiag_start)
             vector_kdiag_stop = min(output_range.stop, vector_kdiag_stop)
@@ -815,8 +812,10 @@ def _chunk_diag(
             chunk_kdiag_col_start -= cols.start
             chunk_kdiag_col_stop -= cols.start
             # extract square sub-matrix containing k-diagonal
-            matrix = matrix[chunk_kdiag_row_start : chunk_kdiag_row_stop,
-                            chunk_kdiag_col_start : chunk_kdiag_col_stop]
+            matrix = matrix[
+                chunk_kdiag_row_start:chunk_kdiag_row_stop,
+                chunk_kdiag_col_start:chunk_kdiag_col_stop,
+            ]
             # extract its diagonal
             vector = gb.ss.diag(matrix.new(), k=0, dtype=gb_dtype)
             return wrap_inner(vector)
@@ -907,7 +906,11 @@ def _delitem_in_chunk(inner_mat, row_range, col_range, row, col):
 
 
 def _build_2D_chunk(
-        inner_matrix, out_row_range, out_col_range, fragments, dup_op=None,
+    inner_matrix,
+    out_row_range,
+    out_col_range,
+    fragments,
+    dup_op=None,
 ):
     """
     Reassembles filtered tuples (row, col, val) in the list `fragments`
@@ -921,7 +924,12 @@ def _build_2D_chunk(
     nrows = out_row_range[0].stop - out_row_range[0].start
     ncols = out_col_range[0].stop - out_col_range[0].start
     inner_matrix.value.build(
-        rows, cols, vals, nrows=nrows, ncols=ncols, dup_op=dup_op,
+        rows,
+        cols,
+        vals,
+        nrows=nrows,
+        ncols=ncols,
+        dup_op=dup_op,
     )
     return InnerMatrix(inner_matrix.value)
 
@@ -1105,9 +1113,9 @@ class MatrixTupleExtractor:
             self.cols += col_offset[0]
             start = start - nval_start[0, 0]
             stop = stop - nval_start[0, 0]
-            self.rows = self.rows[start : stop]
-            self.cols = self.cols[start : stop]
-            self.vals = self.vals[start : stop]
+            self.rows = self.rows[start:stop]
+            self.cols = self.cols[start:stop]
+            self.vals = self.vals[start:stop]
         else:
             self.rows = np.array([], dtype=self.rows.dtype)
             self.cols = np.array([], dtype=self.cols.dtype)

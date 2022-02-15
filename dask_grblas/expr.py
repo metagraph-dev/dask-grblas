@@ -205,8 +205,10 @@ class GbDelayed:
         )
         return delayed
 
-    def _aggregate(self, op, updating=None, dtype=None, mask=None, accum=None, replace=None, name=None):
-        """ Handover to the Aggregator to compute the reduction"""
+    def _aggregate(
+        self, op, updating=None, dtype=None, mask=None, accum=None, replace=None, name=None
+    ):
+        """Handover to the Aggregator to compute the reduction"""
 
         if updating is None:
             output = self.construct_output(dtype, name=name)
@@ -386,9 +388,9 @@ class GbDelayed:
     def construct_output(self, dtype=None, *, name=None):
         if dtype is None:
             dtype = self.dtype
-        return get_return_type(
-            self._meta.output_type.new(dtype)
-        ).new(dtype, *self._meta.shape, name=name)
+        return get_return_type(self._meta.output_type.new(dtype)).new(
+            dtype, *self._meta.shape, name=name
+        )
 
     @property
     def value(self):
@@ -396,22 +398,19 @@ class GbDelayed:
         return self.new().value
 
     def _new_scalar(self, dtype, *, name=None):
-        """Create a new empty Scalar.
-        """
+        """Create a new empty Scalar."""
         from .scalar import Scalar
 
         return Scalar.new(dtype, name=name)
 
     def _new_vector(self, dtype, size=0, *, name=None):
-        """Create a new empty Vector.
-        """
+        """Create a new empty Vector."""
         from .vector import Vector
 
         return Vector.new(dtype, size, name=name)
 
     def _new_matrix(self, dtype, nrows=0, ncols=0, *, name=None):
-        """Create a new empty Matrix.
-        """
+        """Create a new empty Matrix."""
         from .matrix import Matrix
 
         return Matrix.new(dtype, nrows, ncols, name=name)
@@ -581,7 +580,7 @@ class Updater:
             self.replace = replace
         self._meta = parent._meta(mask=get_meta(mask), accum=accum, replace=replace)
         # Aggregator specific attribute requirements:
-        self.kwargs = {'mask': mask}
+        self.kwargs = {"mask": mask}
 
     def __delitem__(self, keys):
         # Occurs when user calls `del C(params)[index]`
@@ -904,7 +903,7 @@ def _data_x_index_meshpoint_4assign(*args, x_ndim, subassign, obj_offset_axes, o
         obj  = args[2 * x_ndim + 1]
     being assigned are also contained in the returned Fragmenter object.
     """
-    x_ranges = args[0 : x_ndim]
+    x_ranges = args[0:x_ndim]
     indices = args[x_ndim : 2 * x_ndim]
 
     mask = args[2 * x_ndim]
@@ -1022,7 +1021,7 @@ def _assign(
     ot,
 ):
     """
-    Performs the actual GrB_assign: 
+    Performs the actual GrB_assign:
         old_data(mask, ...)[index] << obj
     or GxB_subassign:
         old_data[index](mask, ...) << obj
@@ -1104,7 +1103,11 @@ def _upcast(grblas_object, ndim, axis_is_missing):
 
 
 def _data_x_index_meshpoint_4extract(
-    *args, xt, input_mask_type, mask_type, gb_dtype,
+    *args,
+    xt,
+    input_mask_type,
+    mask_type,
+    gb_dtype,
 ):
     """
     Returns only that part of the source inner Vector/Matrix data-chunk x = args[0]
@@ -1852,8 +1855,9 @@ def _reduce_axis_combine(op, x, axis=None, keepdims=None, computing_meta=None, d
     """Combine results from _reduce_axis on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
-    axis, = axis
+    (axis,) = axis
     if type(x) is list:
+
         def _add_blocks(monoid_, x, y):
             return x.ewise_add(y, monoid_).new()
 
