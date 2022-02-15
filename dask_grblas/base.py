@@ -130,7 +130,7 @@ class BaseType:
                 nvals = self._nvals
             else:
                 nvals = None
-                
+
             return type(self)(delayed, nvals=nvals)
         else:
             return type(self)(delayed)
@@ -198,7 +198,7 @@ class BaseType:
     def compute_and_store_nvals():
         """
         compute and store the number of values of this Vector/Matrix
-        
+
         This could be useful to increase the performance of Aggregators
         which inspect ._nvals to determine if a fast path can be taken
         to compute the aggregation result.

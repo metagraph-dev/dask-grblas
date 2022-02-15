@@ -56,4 +56,3 @@ def diag(x, k=0, dtype=None, chunks="auto", *, name=None):
         rv = Vector.new(dtype, size=size, name=name)
         rv.ss.diag(x, k, dtype=dtype, chunks=chunks)
     return rv
-

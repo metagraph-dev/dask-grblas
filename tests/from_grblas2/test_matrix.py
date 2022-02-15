@@ -831,7 +831,7 @@ def test_subassign_row_col(A_chunks):
         A.rechunk(chunks=chunks, inplace=True)
         m = Vector.from_values([1], [True])
         v = Vector.from_values([0, 1], [10, 20])
-    
+
         A[[0, 1], 0](m.S) << v
         result1 = Matrix.from_values(
             [0, 0, 0, 1, 1, 1, 2, 2, 2],
@@ -839,7 +839,7 @@ def test_subassign_row_col(A_chunks):
             [0, 1, 2, 20, 4, 5, 6, 7, 8],
         )
         assert A.isequal(result1)
-    
+
         A[1, [1, 2]](m.V, accum=binary.plus).update(v)
         result2 = Matrix.from_values(
             [0, 0, 0, 1, 1, 1, 2, 2, 2],
@@ -847,7 +847,7 @@ def test_subassign_row_col(A_chunks):
             [0, 1, 2, 20, 4, 25, 6, 7, 8],
         )
         assert A.isequal(result2)
-    
+
         A[[0, 1], 0](m.S, binary.plus, replace=True) << v
         result3 = Matrix.from_values(
             [0, 0, 1, 1, 1, 2, 2, 2],
@@ -855,10 +855,10 @@ def test_subassign_row_col(A_chunks):
             [1, 2, 40, 4, 25, 6, 7, 8],
         )
         assert A.isequal(result3)
-    
+
         with pytest.raises(DimensionMismatch):
             A(m.S)[[0, 1], 0] << v
-    
+
         A[[0, 1], 0](m.S) << 99
         result4 = Matrix.from_values(
             [0, 0, 1, 1, 1, 2, 2, 2],
@@ -866,7 +866,7 @@ def test_subassign_row_col(A_chunks):
             [1, 2, 99, 4, 25, 6, 7, 8],
         )
         assert A.isequal(result4)
-    
+
         A[[1, 2], 0](m.S, binary.plus, replace=True) << 100
         result5 = Matrix.from_values(
             [0, 0, 1, 1, 2, 2, 2],
@@ -874,7 +874,7 @@ def test_subassign_row_col(A_chunks):
             [1, 2, 4, 25, 106, 7, 8],
         )
         assert A.isequal(result5)
-    
+
         A[2, [0, 1]](m.S) << -1
         result6 = Matrix.from_values(
             [0, 0, 1, 1, 2, 2, 2],
@@ -1479,6 +1479,7 @@ def test_reduce_agg_argminmax(A, A_chunks):
 
         with pytest.raises(ValueError, match="Aggregator"):
             A.reduce_scalar(silly).new()
+
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_reduce_agg_firstlast(A, A_chunks):
@@ -2697,7 +2698,9 @@ def test_diag(A, A_chunks, params):
             A = A_.dup()
             A.rechunk(chunks=in_chunks, inplace=True)
             k, indices, values = params
-            expected = Vector.from_values(indices, values, dtype=A.dtype, size=max(0, A.nrows - abs(k)))
+            expected = Vector.from_values(
+                indices, values, dtype=A.dtype, size=max(0, A.nrows - abs(k))
+            )
             v = dask_grblas.ss.diag(A, k=k, chunks=out_chunks)
             assert expected.isequal(v)
             v[:] = 0

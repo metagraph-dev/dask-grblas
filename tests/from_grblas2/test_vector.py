@@ -1186,7 +1186,9 @@ def test_diag(v, A_chunks):
                 size = v.size + abs(k)
                 rows = indices + max(0, -k)
                 cols = indices + max(0, k)
-                expected = Matrix.from_values(rows, cols, values, nrows=size, ncols=size, dtype=v.dtype)
+                expected = Matrix.from_values(
+                    rows, cols, values, nrows=size, ncols=size, dtype=v.dtype
+                )
                 assert expected.isequal(A)
                 w = dask_grblas.ss.diag(A, Scalar.from_value(k), chunks=in_chunks)
                 assert v.isequal(w)
