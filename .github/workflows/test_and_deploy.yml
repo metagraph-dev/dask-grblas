@@ -46,7 +46,7 @@ jobs:
           python-version: 3.9
       - name: Update env
         run: |
-          conda install -q -c conda-forge 'graphblas>=6.1' grblas dask pytest 'black=21.11b1' flake8 coverage coveralls
+          conda install -q -c conda-forge 'graphblas>=6.1' grblas dask pytest 'black=21.11b1' flake8 coverage coveralls scipy
           pip install -e .
       - name: Lint with Black
         run: |
