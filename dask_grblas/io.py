@@ -1,9 +1,8 @@
 import os
 
 from math import floor, sqrt
-from numpy import asarray, real, imag, conj, zeros, ndarray, concatenate, ones, can_cast, empty
+from numpy import asarray, conj, zeros, concatenate, ones, empty
 from scipy.io import mmio  # noqa
-from scipy.sparse import coo_matrix, isspmatrix
 
 
 def symm_I_J(pos, n):
@@ -110,6 +109,8 @@ def mmread(source, *, dup_op=None, name=None, row_begin=0, row_end=None, col_beg
     For more information on the Matrix Market format, see:
     https://math.nist.gov/MatrixMarket/formats.html
     """
+    from . import Matrix
+
     try:
         from scipy.sparse import coo_matrix  # noqa
     except ImportError:  # pragma: no cover
@@ -220,10 +221,6 @@ class MMFile(mmio.MMFile):
                 row_end=row_end,
                 col_begin=col_begin,
                 col_end=col_end,
-                line_start=line_start,
-                line_stop=line_stop,
-                read_begin=read_begin,
-                read_end=read_end,
             )
 
         finally:
@@ -338,17 +335,17 @@ class MMFile(mmio.MMFile):
                 # line.startswith('%')
                 if not line or line[0] in ["%", 37] or not line.strip():
                     continue
-                l = line.split()
-                i, j = map(int, l[:2])
+                word = line.split()
+                i, j = map(int, word[:2])
                 i, j = i - 1, j - 1
                 if is_integer:
-                    aij = int(l[2])
+                    aij = int(word[2])
                 elif is_unsigned_integer:
-                    aij = int(l[2])
+                    aij = int(word[2])
                 elif is_complex:
-                    aij = complex(*map(float, l[2:]))
+                    aij = complex(*map(float, word[2:]))
                 else:
-                    aij = float(l[2])
+                    aij = float(word[2])
                 row_is_hit = row_begin <= i and i < row_end
                 col_is_hit = col_begin <= j and j < col_end
                 if row_is_hit and col_is_hit:
@@ -374,7 +371,7 @@ class MMFile(mmio.MMFile):
                 # empty matrix
                 return coo_matrix((chunk_rows, chunk_cols), dtype=dtype)
 
-            I = zeros(0, dtype="intc")
+            I1 = zeros(0, dtype="intc")
             I2 = zeros(0, dtype="intc")
             J = zeros(0, dtype="intc")
             J2 = zeros(0, dtype="intc")
@@ -402,8 +399,8 @@ class MMFile(mmio.MMFile):
 
                 if entry_number + 1 > entries:
                     raise ValueError("'entries' in header is smaller than " "number of entries")
-                l = line.split()
-                i, j = map(int, l[:2])
+                word = line.split()
+                i, j = map(int, word[:2])
 
                 row_is_hit = row_begin < i and i <= row_end
                 col_is_hit = col_begin < j and j <= col_end
@@ -420,49 +417,49 @@ class MMFile(mmio.MMFile):
                         J2[-1] = j
                         if not is_pattern:
                             if is_integer:
-                                V2[-1] = int(l[2])
+                                V2[-1] = int(word[2])
                             elif is_unsigned_integer:
-                                V2[-1] = int(l[2])
+                                V2[-1] = int(word[2])
                             elif is_complex:
-                                V2[-1] = complex(*map(float, l[2:]))
+                                V2[-1] = complex(*map(float, word[2:]))
                             else:
-                                V2[-1] = float(l[2])
+                                V2[-1] = float(word[2])
                     continue
 
-                I.resize(entry_number + 1)
+                I1.resize(entry_number + 1)
                 J.resize(entry_number + 1)
                 V.resize(entry_number + 1)
 
-                I[entry_number] = i
+                I1[entry_number] = i
                 J[entry_number] = j
                 if not is_pattern:
                     if is_integer:
-                        V[entry_number] = int(l[2])
+                        V[entry_number] = int(word[2])
                     elif is_unsigned_integer:
-                        V[entry_number] = int(l[2])
+                        V[entry_number] = int(word[2])
                     elif is_complex:
-                        V[entry_number] = complex(*map(float, l[2:]))
+                        V[entry_number] = complex(*map(float, word[2:]))
                     else:
-                        V[entry_number] = float(l[2])
+                        V[entry_number] = float(word[2])
                 entry_number += 1
 
-            I -= 1  # adjust indices (base 1 -> base 0)
+            I1 -= 1  # adjust indices (base 1 -> base 0)
             J -= 1
 
             if has_symmetry:
-                mask = I != J  # off diagonal mask
-                od_I = I[mask]
+                mask = I1 != J  # off diagonal mask
+                od_I = I1[mask]
                 od_J = J[mask]
                 od_V = V[mask]
 
                 row_is_hit = (row_begin <= od_J) & (od_J < row_end)
                 col_is_hit = (col_begin <= od_I) & (od_I < col_end)
                 in_chunk = row_is_hit & col_is_hit
-                od_I = I[in_chunk]
+                od_I = I1[in_chunk]
                 od_J = J[in_chunk]
                 od_V = V[in_chunk]
 
-                I = concatenate((I, od_J, J2))
+                I1 = concatenate((I1, od_J, J2))
                 J = concatenate((J, od_I, I2))
 
                 if is_skew:
@@ -474,10 +471,10 @@ class MMFile(mmio.MMFile):
 
                 V = concatenate((V, od_V, V2))
 
-                I -= row_begin
+                I1 -= row_begin
                 J -= col_begin
 
-            a = coo_matrix((V, (I, J)), shape=(chunk_rows, chunk_cols), dtype=dtype)
+            a = coo_matrix((V, (I1, J)), shape=(chunk_rows, chunk_cols), dtype=dtype)
         else:
             raise NotImplementedError(format)
 
@@ -488,16 +485,13 @@ class MMFile(mmio.MMFile):
     def _parse_body_part(
         self, stream, line_start=None, line_stop=None, read_begin=None, read_end=None
     ):
-        rows, cols, entries, format, field, symm = (
+        rows, entries, format, field, symm = (
             self.rows,
-            self.cols,
             self.entries,
             self.format,
             self.field,
             self.symmetry,
         )
-
-        dtype = self.DTYPES_BY_FIELD.get(field, None)
 
         has_symmetry = self.has_symmetry
         is_integer = field == self.FIELD_INTEGER
@@ -507,7 +501,7 @@ class MMFile(mmio.MMFile):
         is_herm = symm == self.SYMMETRY_HERMITIAN
         is_pattern = field == self.FIELD_PATTERN
 
-        I = empty(0, dtype="intc")
+        I1 = empty(0, dtype="intc")
         J = empty(0, dtype="intc")
         if is_pattern:
             V = empty(0, dtype="int8")
@@ -590,7 +584,7 @@ class MMFile(mmio.MMFile):
                             if i < rows - 1:
                                 i += 1
 
-            I = asarray(I_, dtype=I.dtype)
+            I1 = asarray(I_, dtype=I1.dtype)
             J = asarray(J_, dtype=J.dtype)
             V = asarray(V_, dtype=V.dtype)
 
@@ -607,7 +601,7 @@ class MMFile(mmio.MMFile):
 
             if entries == 0:
                 # empty matrix
-                return I, J, V
+                return I1, J, V
 
             current_pos = stream.tell()
             stream.seek(0, os.SEEK_END)
@@ -619,7 +613,7 @@ class MMFile(mmio.MMFile):
                 read_end = stream.tell()
                 if current_pos >= read_end:
                     # empty matrix
-                    return I, J, V
+                    return I1, J, V
 
             stream.seek(read_begin, os.SEEK_SET)
             home(stream)
@@ -637,41 +631,41 @@ class MMFile(mmio.MMFile):
                     continue
 
                 # print(f'CONT: {read_begin=}; {read_end=}; {stream.tell()=}')
-                l = line.split()
+                word = line.split()
 
-                i, j = map(int, l[:2])
+                i, j = map(int, word[:2])
                 I_ += [i]
                 J_ += [j]
 
                 if not is_pattern:
                     if is_integer:
-                        V_ += [int(l[2])]
+                        V_ += [int(word[2])]
                     elif is_unsigned_integer:
-                        V_ += [int(l[2])]
+                        V_ += [int(word[2])]
                     elif is_complex:
-                        V_ += [complex(*map(float, l[2:]))]
+                        V_ += [complex(*map(float, word[2:]))]
                     else:
-                        V_ += [float(l[2])]
+                        V_ += [float(word[2])]
                 else:
                     V_ += [1]
 
-            I = asarray(I_, dtype=I.dtype)
+            I1 = asarray(I_, dtype=I1.dtype)
             J = asarray(J_, dtype=J.dtype)
             V = asarray(V_, dtype=V.dtype)
-            if I.size == 0:
-                # print(f'STOP: {read_begin=}; {read_end=}; {I=}; {J=}; {V=}')
-                return I, J, V
+            if I1.size == 0:
+                # print(f'STOP: {read_begin=}; {read_end=}; {I1=}; {J=}; {V=}')
+                return I1, J, V
 
-            I -= 1  # adjust indices (base 1 -> base 0)
+            I1 -= 1  # adjust indices (base 1 -> base 0)
             J -= 1
 
             if has_symmetry:
-                mask = I != J  # off diagonal mask
-                od_I = I[mask]
+                mask = I1 != J  # off diagonal mask
+                od_I = I1[mask]
                 od_J = J[mask]
                 od_V = V[mask]
 
-                I = concatenate((I, od_J))
+                I1 = concatenate((I1, od_J))
                 J = concatenate((J, od_I))
 
                 if is_skew:
@@ -684,7 +678,7 @@ class MMFile(mmio.MMFile):
         else:
             raise NotImplementedError(format)
 
-        # print(f'STOP: {read_begin=}; {read_end=}; {I=}; {J=}; {V=}')
-        return I, J, V
+        # print(f'STOP: {read_begin=}; {read_end=}; {I1=}; {J=}; {V=}')
+        return I1, J, V
 
     #  ------------------------------------------------------------------------

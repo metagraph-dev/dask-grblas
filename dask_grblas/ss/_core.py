@@ -1,5 +1,4 @@
 from grblas.base import _expect_type
-from grblas.dtypes import INT64
 from ..matrix import Matrix, TransposedMatrix
 from ..scalar import Scalar
 from ..vector import Vector

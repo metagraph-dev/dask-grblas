@@ -16,7 +16,6 @@ from .utils import (
     package_args,
     package_kwargs,
     np_dtype,
-    get_grblas_type,
     get_return_type,
     wrap_inner,
     build_ranges_dask_array_from_chunks,
@@ -315,7 +314,6 @@ class Vector(BaseType):
 
     def _diag(self, k=0, dtype=None, chunks="auto"):
         nrows = self.size + abs(k)
-        kdiag_row_start = max(0, -k)
         kdiag_col_start = max(0, k)
 
         v = self._delayed
@@ -327,7 +325,7 @@ class Vector(BaseType):
         row_ranges = build_ranges_dask_array_from_chunks(chunks[0], rname)
         col_ranges = build_ranges_dask_array_from_chunks(chunks[1], cname)
 
-        gb_dtype = self.dtype if dtype == None else lookup_dtype(dtype)
+        gb_dtype = self.dtype if dtype is None else lookup_dtype(dtype)
         dtype = np_dtype(gb_dtype)
         fragments = da.core.blockwise(
             *(_chunk_diag, "ikj"),
@@ -616,7 +614,9 @@ class Vector(BaseType):
         # meta_i, meta_v = self._meta.to_values(dtype)
         # meta = np.array([])
         # offsets = build_chunk_offsets_dask_array(delayed, 0, "index_offset-")
-        # x = da.map_blocks(TupleExtractor, delayed, offsets, gb_dtype=dtype, dtype=dtype_, meta=meta)
+        # x = da.map_blocks(
+        #    TupleExtractor, delayed, offsets, gb_dtype=dtype, dtype=dtype_, meta=meta
+        # )
         # indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
         # values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta)
         # return indices, values
@@ -680,10 +680,6 @@ def _chunk_diag(
     nrows = rows.stop - rows.start
     ncols = cols.stop - cols.start
     kdiag_col_stop_ = kdiag_col_start + kdiag_size
-
-    # equation of diagonal: i = j - k
-    kdiag_row_start = kdiag_col_start - k
-    kdiag_row_stop_ = kdiag_col_stop_ - k
 
     # CHANGE REFERENCE POINT: to global matrix row 0 col 0
     kdiag_chunk_col_start = vec_chunk.start + kdiag_col_start

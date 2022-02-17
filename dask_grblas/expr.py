@@ -849,7 +849,10 @@ def fuse_index_pair(i, j, length=None):
         return a0 + j * e0
     if type(i) is slice and type(j) in {list, np.ndarray}:
         a0, _, e0 = i.indices(length)
-        f = lambda x: a0 + x * e0
+
+        def f(x):
+            return a0 + x * e0
+
         return [f(x) for x in j] if type(j) is list else list(f(j))
     elif type(i) is slice and type(j) is slice:
         return fuse_slice_pair(i, j, length=length)
@@ -1406,7 +1409,6 @@ class AmbiguousAssignOrExtract:
                 delayed_input_mask,
                 input_mask_axes if input_mask is not None else None,
             ]
-            index_is_a_number = [isinstance(i, Integral) for i in indices]
 
             # this blockwise is essentially a cartesian product of data chunks and index chunks
             # both index and data chunks are fragmented in the process
@@ -1552,11 +1554,12 @@ class Assigner:
                         )
                     elif mask.mask.ndim == 1:
                         raise TypeError(
-                            f"Unable to use Vector mask on Matrix assignment to a Matrix"
+                            "Unable to use Vector mask on Matrix assignment to a Matrix"
                         )
                     else:
                         raise TypeError(
-                            f"Indices for subassign imply Vector submask, but got Matrix mask instead"
+                            "Indices for subassign imply Vector submask, but got Matrix mask "
+                            "instead"
                         )
                 if out_shape != mask.mask.shape:
                     raise DimensionMismatch()
