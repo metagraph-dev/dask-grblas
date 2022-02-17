@@ -1,5 +1,3 @@
-from numbers import Number
-from functools import partial
 import dask.array as da
 import numpy as np
 import grblas as gb
@@ -23,7 +21,6 @@ from .utils import (
     build_chunk_offsets_dask_array,
 )
 from grblas.exceptions import IndexOutOfBound
-from plotly.validators.streamtube import starts
 
 
 class InnerVector(InnerBaseType):

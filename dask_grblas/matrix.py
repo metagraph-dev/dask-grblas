@@ -339,13 +339,8 @@ class Matrix(BaseType):
         # locate first chunk containing diaagonal:
         row_filter = (row_starts <= kdiag_row_start) & (kdiag_row_start < row_stops_)
         col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < col_stops_)
-<<<<<<< HEAD
-        (I,) = row_blockid[row_filter]
-        (J,) = col_blockid[col_filter]
-=======
         (R,) = row_blockid[row_filter]
         (C,) = col_blockid[col_filter]
->>>>>>> refs/heads/da_index
 
         # follow k-diagonal through chunks while constructing dask graph:
         # equation of diagonal: i = j - k
@@ -1010,7 +1005,8 @@ def _identity(chunk, keepdims=None, axis=None):
 def _concatenate_files(chunk_files, keepdims=None, axis=None):
     import os
     import shutil
-    from scipy.io.mmio import MMFile, mminfo
+    from .io import MMFile
+    from scipy.io import mminfo
 
     chunk_files = chunk_files if type(chunk_files) is list else [chunk_files]
     first_chunk_file, _, row_range_first, col_range_first = chunk_files[0]

@@ -418,22 +418,22 @@ class DOnion:
         return DOnion(kernel, meta=meta)
 
     def __getattr__(self, item):
-        func = lambda x: getattr(x, item)
+        func = partial(getattr, name=item)
         # TODO: lookup dtype and meta of attribute!!!
         dtype = np_dtype(lookup_dtype(self.dtype))
         meta = self._meta
         return self.extract(func, package_args(), package_kwargs(), dtype, meta)
 
     def getattr(self, name, packed_args, packed_kwargs, *args, **kwargs):
-        func = partial(Donion.apply, name, *packed_args, **packed_kwargs)
+        func = partial(DOnion.extractattr, name, packed_args, packed_kwargs)
         # TODO: lookup dtype and meta of attribute!!!
         dtype = np_dtype(lookup_dtype(self.dtype))
         meta = self._meta
         return self.extract(func, package_args(), package_kwargs(), dtype, meta, *args, **kwargs)
 
     @classmethod
-    def apply(cls, name, *args, **kwargs):
-        return getattr(x, name)(*args, **kwargs)
+    def extractattr(cls, name, packed_args, packed_kwargs, x):
+        return getattr(x, name)(*packed_args, **packed_kwargs)
 
 
 # Dask task functions
