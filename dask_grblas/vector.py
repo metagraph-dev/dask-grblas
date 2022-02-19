@@ -6,7 +6,7 @@ from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 
-from .base import BaseType, InnerBaseType, _nvals, DOnion, flexible_partial, is_DOnion
+from .base import BaseType, InnerBaseType, _nvals, DOnion, is_DOnion
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
