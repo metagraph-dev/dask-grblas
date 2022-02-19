@@ -119,14 +119,14 @@ class Vector(BaseType):
         meta_dtype = np_dtype(meta.dtype)
 
         # check for any DOnions:
+        packed_args = pack_args(indices, values)
+        packed_kwargs = pack_kwargs(
+            size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
+        )
         donions = [True for arg in packed_args if is_DOnion(arg)]
         donions += [True for (k, v) in packed_kwargs.items() if is_DOnion(v)]
         if np.any(donions):
-            # dive into DOnion(s)
-            packed_args = pack_args(indices, values)
-            packed_kwargs = pack_kwargs(
-                size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
-            )
+            # dive into DOnion(s):
             return DOnion.joint_access(
                 Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
             )

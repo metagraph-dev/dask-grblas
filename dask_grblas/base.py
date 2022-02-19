@@ -414,14 +414,12 @@ class DOnion:
         return DOnion(kernel, meta=meta)
 
     @classmethod
-    def joint_access(
-        cls, func, packed_args, packed_kwargs, dtype, meta
-    ):
+    def joint_access(cls, func, packed_args, packed_kwargs, dtype, meta):
         """
         Pass inner values of any DOnions in `packed_args` and/or `packed_kwargs` into `func`.
-        
+
         :func: Callable that can accept the contents of `packed_args` and/or `packed_kwargs`
-            as parameters 
+            as parameters
         :packed_args: a list of positional arguments to `func`
         :packed_kwargs: a dict of named arguments to `func`
         """

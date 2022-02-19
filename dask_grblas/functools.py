@@ -9,8 +9,10 @@ from scipy.sparse import csr_matrix
 class skip:
     def __repr__(self):
         return "skip"
+
     __str__ = __repr__
     __reduce__ = __repr__  # This makes it pickle well!
+
 
 skip = skip()
 
@@ -20,11 +22,11 @@ def normalize_occupancies(specs):
     Convert any valid `specs` into the form: [True, False, True, ...]
     """
     error_msg = (
-        '`specs` should be array-like with structure matching any of the following forms:\n'
-        '[False, True, False, False, True, ...]\n'
-        '[1, 4, ...]\n'
-        '(skip, b, skip, skip, d, ...)\n'
-        '((1, b), (4, d), ...)'
+        "`specs` should be array-like with structure matching any of the following forms:\n"
+        "[False, True, False, False, True, ...]\n"
+        "[1, 4, ...]\n"
+        "(skip, b, skip, skip, d, ...)\n"
+        "((1, b), (4, d), ...)"
     )
     if isinstance(specs, Iterable):
         try:
@@ -66,7 +68,7 @@ def normalize_occupancies(specs):
 
 
 ################################################################################
-### flexible_partial() argument application
+### flexible_partial() argument application  # noqa
 ################################################################################
 
 # Purely functional, no descriptor behaviour
@@ -157,8 +159,10 @@ class flexible_partial:
 
     def __call__(self, /, *args, **kwargs):
         if len(args) < len(self.vacancies):
-            raise ValueError(f"Expected at least {len(self.vacancies)} positional arguments. "
-                             f"Got {len(args)}.")
+            raise ValueError(
+                f"Expected at least {len(self.vacancies)} positional arguments. "
+                f"Got {len(args)}."
+            )
 
         new_arg = iter(args)
         self_args = list(self.args)
@@ -183,8 +187,11 @@ class flexible_partial:
         return f"{qualname}({', '.join(args)})"
 
     def __reduce__(self):
-        return type(self), (self.base_func,), (self.base_func, self.args, self.vacancies,
-               self.kwargs or None, self.__dict__ or None)
+        return (
+            type(self),
+            (self.base_func,),
+            (self.base_func, self.args, self.vacancies, self.kwargs or None, self.__dict__ or None),
+        )
 
     def __setstate__(self, state):
         if not isinstance(state, tuple):
@@ -192,16 +199,20 @@ class flexible_partial:
         if len(state) != 5:
             raise TypeError(f"expected 5 items in state, got {len(state)}")
         func, args, vacs, kwds, namespace = state
-        if (not callable(func) or not isinstance(args, tuple) or not isinstance(vacs, tuple) or
-           (kwds is not None and not isinstance(kwds, dict)) or
-           (namespace is not None and not isinstance(namespace, dict))):
+        if (
+            not callable(func)
+            or not isinstance(args, tuple)
+            or not isinstance(vacs, tuple)
+            or (kwds is not None and not isinstance(kwds, dict))
+            or (namespace is not None and not isinstance(namespace, dict))
+        ):
             raise TypeError("invalid flexible_partial state")
 
-        args = tuple(args) # just in case it's a subclass
+        args = tuple(args)  # just in case it's a subclass
         vacs = tuple(vacs)
         if kwds is None:
             kwds = {}
-        elif type(kwds) is not dict: # XXX does it need to be *exactly* dict?
+        elif type(kwds) is not dict:  # XXX does it need to be *exactly* dict?
             kwds = dict(kwds)
         if namespace is None:
             namespace = {}
