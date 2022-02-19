@@ -1,3 +1,5 @@
+import inspect
+from itertools import count
 import numpy as np
 import pandas as pd
 import dask.array as da
@@ -7,11 +9,11 @@ from dask.delayed import delayed
 from .io import MMFile
 
 
-def package_args(*args):
+def pack_args(*args):
     return args
 
 
-def package_kwargs(**kwargs):
+def pack_kwargs(**kwargs):
     return kwargs
 
 

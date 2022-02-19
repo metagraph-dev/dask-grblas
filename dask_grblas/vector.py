@@ -6,13 +6,13 @@ from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 
-from .base import BaseType, InnerBaseType, _nvals, DOnion
+from .base import BaseType, InnerBaseType, _nvals, DOnion, flexible_partial, is_DOnion
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
 from .utils import (
-    package_args,
-    package_kwargs,
+    pack_args,
+    pack_kwargs,
     np_dtype,
     get_return_type,
     wrap_inner,
@@ -117,24 +117,21 @@ class Vector(BaseType):
             dtype = lookup_dtype(values.dtype if dtype is None else dtype)
         meta = gb.Vector.new(dtype)
         meta_dtype = np_dtype(meta.dtype)
-        packed_kwargs = package_kwargs(
-            size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
-        )
-        if type(indices) is DOnion and type(values) is DOnion:
-            packed_args = package_args()
-            return DOnion.extract_shared(
-                (indices, values), Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
+
+        # check for any DOnions:
+        donions = [True for arg in packed_args if is_DOnion(arg)]
+        donions += [True for (k, v) in packed_kwargs.items() if is_DOnion(v)]
+        if np.any(donions):
+            # dive into DOnion(s)
+            packed_args = pack_args(indices, values)
+            packed_kwargs = pack_kwargs(
+                size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
             )
-        if type(indices) is DOnion:
-            packed_args = package_args(values)
-            return DOnion.extract_shared(
-                (indices,), Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
+            return DOnion.joint_access(
+                Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
             )
-        if type(values) is DOnion:
-            packed_args = package_args(indices)
-            return DOnion.extract_shared(
-                (values,), Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
-            )
+
+        # no DOnions
         if type(indices) is da.Array and type(values) is da.Array:
             np_idtype_ = np_dtype(lookup_dtype(indices.dtype))
             if size is not None:
@@ -147,8 +144,8 @@ class Vector(BaseType):
                 # used to determine the size of the Vector to be returned.
                 # But since we do not want to compute anything just now,
                 # we instead create a "DOnion" (dask onion) object
-                packed_args = package_args(indices, values)
-                packed_kwargs = package_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+                packed_args = pack_args(indices, values)
+                packed_kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
                 donion = DOnion.sprout(size, Vector.from_values, meta, packed_args, packed_kwargs)
                 return Vector(donion, meta=meta)
 
@@ -587,21 +584,21 @@ class Vector(BaseType):
             return da.map_blocks(func, x, dtype=dtype, meta=meta)
 
         dtype = self.dtype if dtype is None else dtype
-        packed_args = package_args(x, starts, stops, dtype, chunks)
-        packed_kwargs = package_kwargs()
+        packed_args = pack_args(x, starts, stops, dtype, chunks)
+        packed_kwargs = pack_kwargs()
         meta = np.array([])
         iv_donion = DOnion.sprout(nnz, _to_values, meta, packed_args, packed_kwargs)
 
         meta_i, meta_v = self._meta.to_values(dtype)
 
         dtype_i = np_dtype(lookup_dtype(meta_i.dtype))
-        packed_args = package_args(_get_indices, dtype_i, meta_i)
-        packed_kwargs = package_kwargs()
+        packed_args = pack_args(_get_indices, dtype_i, meta_i)
+        packed_kwargs = pack_kwargs()
         indices = iv_donion.extract(apply, packed_args, packed_kwargs, dtype_i, meta_i)
 
         dtype_v = np_dtype(lookup_dtype(meta_v.dtype))
-        packed_args = package_args(_get_values, dtype_v, meta_v)
-        packed_kwargs = package_kwargs()
+        packed_args = pack_args(_get_values, dtype_v, meta_v)
+        packed_kwargs = pack_kwargs()
         values = iv_donion.extract(apply, packed_args, packed_kwargs, dtype_v, meta_v)
 
         return indices, values
