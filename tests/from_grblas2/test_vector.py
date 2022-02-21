@@ -180,13 +180,23 @@ def test_from_values_dask():
 def test_from_values_DOnion(v):
     indices = da.from_array(np.array([0, 1, 3]))
     values = da.from_array(np.array([True, False, True]))
+    # The following creates a Vector `u` with `type(u._delayed) == DOnion`
+    # because keyword argument `size` has not been specified:
     u = Vector.from_values(indices, values)
+    assert u.size == 4
+    assert u.nvals == 3
+    assert u.dtype == bool
+    # The output of `.to_values()` is always a tuple of DOnions
     indices, values = u.to_values()
+    # The following creates a Vector `v` with `type(v._delayed) == DOnion`
+    # because arguments `indices` and  `values` are DOnions:
     v = Vector.from_values(indices, values)
     assert v.size == 4
     assert v.nvals == 3
     assert v.dtype == bool
     values = da.from_array(np.array([12.3, 12.4, 12.5]))
+    # The following creates a Vector `u2` with `type(u2._delayed) == DOnion`
+    # because argument `indices` is a DOnion:
     u2 = Vector.from_values(indices, values, size=17)
     assert u2.size == 17
     assert u2.nvals == 3

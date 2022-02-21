@@ -116,20 +116,15 @@ class Vector(BaseType):
         if hasattr(values, "dtype"):
             dtype = lookup_dtype(values.dtype if dtype is None else dtype)
         meta = gb.Vector.new(dtype)
-        meta_dtype = np_dtype(meta.dtype)
 
         # check for any DOnions:
-        packed_args = pack_args(indices, values)
-        packed_kwargs = pack_kwargs(
-            size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
-        )
-        donions = [True for arg in packed_args if is_DOnion(arg)]
-        donions += [True for (k, v) in packed_kwargs.items() if is_DOnion(v)]
+        pkd_args = pack_args(indices, values)
+        pkd_kwargs = pack_kwargs(size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+        donions = [True for arg in pkd_args if is_DOnion(arg)]
+        donions += [True for (k, v) in pkd_kwargs.items() if is_DOnion(v)]
         if np.any(donions):
             # dive into DOnion(s):
-            return DOnion.joint_access(
-                Vector.from_values, packed_args, packed_kwargs, meta_dtype, meta
-            )
+            return DOnion.multiple_access(meta, Vector.from_values, *pkd_args, **pkd_kwargs)
 
         # no DOnions
         if type(indices) is da.Array and type(values) is da.Array:
@@ -139,18 +134,20 @@ class Vector(BaseType):
             else:
                 if indices.size == 0:
                     raise ValueError("No indices provided. Unable to infer size.")
-                size = da.max(indices) + 1
+                # Note: uint + int = float which numpy cannot cast to uint.  So we
+                # ensure the same dtype for each summand here:
+                size = da.max(indices) + np.asarray(1, dtype=indices.dtype)
                 # Here `size` is a dask 0d-array whose computed value is
                 # used to determine the size of the Vector to be returned.
                 # But since we do not want to compute anything just now,
                 # we instead create a "DOnion" (dask onion) object
-                packed_args = pack_args(indices, values)
-                packed_kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
-                donion = DOnion.sprout(size, Vector.from_values, meta, packed_args, packed_kwargs)
+                args = pack_args(indices, values)
+                kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+                donion = DOnion.sprout(size, meta, Vector.from_values, *args, **kwargs)
                 return Vector(donion, meta=meta)
 
             if indices.size > 0:
-                if indices.dtype.kind not in np.typecodes["AllInteger"]:
+                if indices.dtype.kind not in "ui":
                     raise ValueError(f"indices must be integers, not {indices.dtype}")
 
                 if indices.size != values.size:
@@ -541,11 +538,23 @@ class Vector(BaseType):
         # self.__init__(Vector.from_vector(vector)._delayed)
 
     def to_values(self, dtype=None, chunks="auto"):
+        dtype = lookup_dtype(self.dtype if dtype is None else dtype)
+        meta_i, meta_v = self._meta.to_values(dtype)
+
         x = self._delayed
+        if type(x) is DOnion:
+            meta = np.array([])
+            result = x.getattr(meta, "to_values", dtype=dtype)
+            indices = result.getattr(meta_i, "__getitem__", 0)
+            values = result.getattr(meta_v, "__getitem__", 1)
+            return indices, values
+
+        # get dask array of nvals for each chunk:
         nvals_array = da.core.blockwise(
             *(_nvals, "i"), *(x, "i"), adjust_chunks={"i": 1}, dtype=np.int64, meta=np.array([])
         )
 
+        # accumulate dask array to get index-ranges of the output (indices, values)
         stops = da.cumsum(nvals_array)
         starts = da.roll(stops, 1)
         starts = starts.copy() if starts.size == 1 else starts  # bug!!
@@ -553,10 +562,7 @@ class Vector(BaseType):
         nnz = stops[-1]
 
         def _to_values(x, starts, stops, dtype, chunks, nnz):
-            # starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
             starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
-
-            # stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
             stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
 
             chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
@@ -580,40 +586,20 @@ class Vector(BaseType):
                 x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
             )
 
-        def apply(func, dtype, meta, x):
-            return da.map_blocks(func, x, dtype=dtype, meta=meta)
-
-        dtype = self.dtype if dtype is None else dtype
-        packed_args = pack_args(x, starts, stops, dtype, chunks)
-        packed_kwargs = pack_kwargs()
+        # since the size of the output (indices, values) depends on nnz, a delayed quantity,
+        # we need to return (indices, values) as DOnions (twice-delayed dask-array)
         meta = np.array([])
-        iv_donion = DOnion.sprout(nnz, _to_values, meta, packed_args, packed_kwargs)
-
-        meta_i, meta_v = self._meta.to_values(dtype)
+        iv_donion = DOnion.sprout(nnz, meta, _to_values, x, starts, stops, dtype, chunks)
 
         dtype_i = np_dtype(lookup_dtype(meta_i.dtype))
-        packed_args = pack_args(_get_indices, dtype_i, meta_i)
-        packed_kwargs = pack_kwargs()
-        indices = iv_donion.extract(apply, packed_args, packed_kwargs, dtype_i, meta_i)
-
+        indices = iv_donion.deep_extract(
+            meta_i, da.map_blocks, _get_indices, dtype=dtype_i, meta=meta_i
+        )
         dtype_v = np_dtype(lookup_dtype(meta_v.dtype))
-        packed_args = pack_args(_get_values, dtype_v, meta_v)
-        packed_kwargs = pack_kwargs()
-        values = iv_donion.extract(apply, packed_args, packed_kwargs, dtype_v, meta_v)
-
+        values = iv_donion.deep_extract(
+            meta_v, da.map_blocks, _get_values, dtype=dtype_v, meta=meta_v
+        )
         return indices, values
-
-        # delayed = self._delayed
-        # dtype_ = np_dtype(self.dtype)
-        # meta_i, meta_v = self._meta.to_values(dtype)
-        # meta = np.array([])
-        # offsets = build_chunk_offsets_dask_array(delayed, 0, "index_offset-")
-        # x = da.map_blocks(
-        #    TupleExtractor, delayed, offsets, gb_dtype=dtype, dtype=dtype_, meta=meta
-        # )
-        # indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
-        # values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta)
-        # return indices, values
 
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(other, Vector, within="isequal", argname="other")

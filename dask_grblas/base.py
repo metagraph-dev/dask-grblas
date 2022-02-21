@@ -4,12 +4,11 @@ import dask.array as da
 import grblas as gb
 import numpy as np
 from grblas.operator import UNKNOWN_OPCLASS, find_opclass, get_typed_op
-from grblas.dtypes import lookup_dtype
 
 from . import replace as replace_singleton
 from .mask import Mask
-from .functools import flexible_partial
-from .utils import pack_args, pack_kwargs, get_grblas_type, get_meta, np_dtype, wrap_inner
+from .functools import flexible_partial, skip
+from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
 
 _expect_type = gb.base._expect_type
 
@@ -359,6 +358,9 @@ class BaseType:
         return self._delayed.visualize(*args, **kwargs)
 
 
+_const0_DOnion = {"dtype": np.int32, "meta": np.array(0, dtype=np.int32)}
+
+
 class DOnion:
     """
     Dask (or Delayed) Onion (DOnion):
@@ -370,30 +372,26 @@ class DOnion:
     """
 
     @classmethod
-    def sprout(cls, shroud, seed_func, seed_meta, packed_args, packed_kwargs, *args, **kwargs):
+    def sprout(cls, shroud, seed_meta, seed_func, *args, **kwargs):
         """
-        Develop a DOnion from dask array `shroud`
+        Develop a DOnion from dask array `shroud` and function `seed_func`
 
-        Shroud a dask array (the seed) returned by `seed_func` using another dask array (the
-        shroud)
+        Return shroud.map_blocks(seed_func) as a DOnion.
+
         :shroud: dask array whose inner value determines the (size of) seed dask array
+        :seed_meta: empty instance of the inner value type of the seed
         :seed_func: the function that takes as input the inner value of `shroud` and returns
             another dask array (the seed)
-        :seed_meta: empty instance of the inner value type of the seed
-        :packed_args: tuple of arguments to `seed_func`
-        :packed_kwargs: dict of keyword arguments to `seed_func`
-        :args: other dask arrays that together with `shroud` determine the (size of) `seed`
-        :kwargs: other named dask arrays that together with `shroud` determine the (size of) `seed`
+        :args: tuple of arguments to `seed_func`
+        :kwargs: dict of keyword arguments to `seed_func`
         """
-        seed_func = partial(seed_func, *packed_args, **packed_kwargs)
-        dtype = np_dtype(lookup_dtype(shroud.dtype))
-        _meta = np.array([], dtype=dtype)
-        kernel = shroud.map_blocks(seed_func, *args, **kwargs, dtype=dtype, meta=_meta)
+        seed_func = partial(seed_func, *args, **kwargs)
+        kernel = shroud.map_blocks(seed_func, **_const0_DOnion)
         return DOnion(kernel, meta=seed_meta)
 
     def __init__(self, kernel, meta=None):
         self.kernel = kernel
-        self.dtype = kernel.dtype
+        self.dtype = meta.dtype
         self._meta = meta
 
     def __eq__(self, other):
@@ -408,48 +406,46 @@ class DOnion:
     def persist(self, *args, **kwargs):
         return self.kernel.compute(*args, **kwargs).persist(*args, **kwargs)
 
-    def extract(self, func, packed_args, packed_kwargs, dtype, meta, *args, **kwargs):
-        func = partial(func, *packed_args, **packed_kwargs)
-        kernel = self.kernel.map_blocks(func, *args, **kwargs, dtype=dtype, meta=meta)
-        return DOnion(kernel, meta=meta)
-
     @classmethod
-    def joint_access(cls, func, packed_args, packed_kwargs, dtype, meta):
+    def multiple_access(cls, out_meta, func, *args, **kwargs):
         """
-        Pass inner values of any DOnions in `packed_args` and/or `packed_kwargs` into `func`.
+        Pass inner values of any DOnions in `args` and/or `kwargs` into `func`.
 
-        :func: Callable that can accept the contents of `packed_args` and/or `packed_kwargs`
+        :func: Callable that can accept the contents of `args` and/or `kwargs`
             as parameters
-        :packed_args: a list of positional arguments to `func`
-        :packed_kwargs: a dict of named arguments to `func`
+        :args: a list of positional arguments to `func`
+        :kwargs: a dict of named arguments to `func`
         """
-        where_non_DOnion = [False if is_DOnion(arg) else True for arg in packed_args]
-        non_Donions = [arg for arg in packed_args if not is_DOnion(arg)]
-        non_DOnion_kwargs = {k: v for (k, v) in packed_kwargs.items() if not is_DOnion(v)}
-        func = flexible_partial(func, where_non_DOnion, *non_Donions, **non_DOnion_kwargs)
+        # First, pass non-DOnion args and kwargs to func:
+        skip_Donions = [arg if not is_DOnion(arg) else skip for arg in args]
+        non_DOnion_kwargs = {k: v for (k, v) in kwargs.items() if not is_DOnion(v)}
+        func = flexible_partial(func, *skip_Donions, **non_DOnion_kwargs)
 
-        donion_args = tuple(arg.kernel for arg in packed_args if is_DOnion(arg))
-        donion_kwargs = {k: v.kernel for (k, v) in packed_kwargs.items() if is_DOnion(v)}
-        kernel = da.map_blocks(func, *donion_args, **donion_kwargs, dtype=dtype, meta=meta)
-        return DOnion(kernel, meta=meta)
+        # Next, pass func and DOnion args and kwargs to map_blocks:
+        donion_args = tuple(arg.kernel for arg in args if is_DOnion(arg))
+        donion_kwargs = {k: v.kernel for (k, v) in kwargs.items() if is_DOnion(v)}
+        kernel = da.map_blocks(func, *donion_args, **donion_kwargs, **_const0_DOnion)
+        return DOnion(kernel, meta=out_meta)
+
+    def deep_extract(self, out_meta, func, *args, **kwargs):
+        func = partial(func, *args, **kwargs)
+        kernel = self.kernel.map_blocks(func, **_const0_DOnion)
+        return DOnion(kernel, meta=out_meta)
 
     def __getattr__(self, item):
-        func = partial(getattr, name=item)
-        # TODO: lookup dtype and meta of attribute!!!
-        dtype = np_dtype(lookup_dtype(self.dtype))
-        meta = self._meta
-        return self.extract(func, pack_args(), pack_kwargs(), dtype, meta)
+        # TODO: how to compute meta of attribute?!!!
+        meta = np.array(0)
+        _getattr = flexible_partial(getattr, (skip, item))
+        return self.deep_extract(meta, _getattr)
 
-    def getattr(self, name, packed_args, packed_kwargs, *args, **kwargs):
-        func = partial(DOnion.extractattr, name, packed_args, packed_kwargs)
-        # TODO: lookup dtype and meta of attribute!!!
-        dtype = np_dtype(lookup_dtype(self.dtype))
-        meta = self._meta
-        return self.extract(func, pack_args(), pack_kwargs(), dtype, meta, *args, **kwargs)
+    def getattr(self, meta, name, *args, **kwargs):
+        where_args = (False,) + (True,) * (1 + len(args))
+        _getattr = flexible_partial(DOnion._getattr, where_args, name, *args, **kwargs)
+        return self.deep_extract(meta, _getattr)
 
     @classmethod
-    def extractattr(cls, name, packed_args, packed_kwargs, x):
-        return getattr(x, name)(*packed_args, **packed_kwargs)
+    def _getattr(cls, x, name, *args, **kwargs):
+        return getattr(x, name)(*args, **kwargs)
 
 
 is_DOnion = partial(is_type, DOnion)
