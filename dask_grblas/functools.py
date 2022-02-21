@@ -35,9 +35,21 @@ class flexible_partial:
             func_is_partial = False
 
         if func_is_partial:
-            new_arg = iter(args)
-            args = tuple(next(new_arg) if arg is skip else arg for arg in func.args)
-            args += tuple(new_arg)
+            old_arg, new_arg = iter(func.args), iter(args)
+            exhausted = False
+            args = ()
+            for arg in func.args:
+                if arg is skip:
+                    try:
+                        args += (next(new_arg),)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                else:
+                    args += arg
+                next(old_arg)
+
+            args += tuple(old_arg if exhausted else new_arg)
             keywords = {**func.keywords, **keywords}
             func = func_
 

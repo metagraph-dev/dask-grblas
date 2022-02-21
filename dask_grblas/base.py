@@ -391,8 +391,11 @@ class DOnion:
 
     def __init__(self, kernel, meta=None):
         self.kernel = kernel
-        self.dtype = meta.dtype
         self._meta = meta
+        try:
+            self.dtype = meta.dtype
+        except AttributeError:
+            self.dtype = type(meta)
 
     def __eq__(self, other):
         return self.compute() == other
@@ -428,19 +431,18 @@ class DOnion:
         return DOnion(kernel, meta=out_meta)
 
     def deep_extract(self, out_meta, func, *args, **kwargs):
-        func = partial(func, *args, **kwargs)
+        func = flexible_partial(func, *args, **kwargs)
         kernel = self.kernel.map_blocks(func, **_const0_DOnion)
         return DOnion(kernel, meta=out_meta)
 
     def __getattr__(self, item):
         # TODO: how to compute meta of attribute?!!!
-        meta = np.array(0)
-        _getattr = flexible_partial(getattr, (skip, item))
+        meta = getattr(self._meta, item)
+        _getattr = flexible_partial(getattr, skip, item)
         return self.deep_extract(meta, _getattr)
 
     def getattr(self, meta, name, *args, **kwargs):
-        where_args = (False,) + (True,) * (1 + len(args))
-        _getattr = flexible_partial(DOnion._getattr, where_args, name, *args, **kwargs)
+        _getattr = flexible_partial(DOnion._getattr, skip, name, *args, **kwargs)
         return self.deep_extract(meta, _getattr)
 
     @classmethod
