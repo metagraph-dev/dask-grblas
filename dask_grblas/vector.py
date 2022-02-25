@@ -1,10 +1,13 @@
 import dask.array as da
 import numpy as np
 import grblas as gb
+
+from numbers import Integral
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
+from grblas.exceptions import IndexOutOfBound
 
 from .base import BaseType, InnerBaseType, _nvals, DOnion, is_DOnion
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
@@ -20,7 +23,6 @@ from .utils import (
     build_chunk_ranges_dask_array,
     build_chunk_offsets_dask_array,
 )
-from grblas.exceptions import IndexOutOfBound
 
 
 class InnerVector(InnerBaseType):
@@ -115,7 +117,8 @@ class Vector(BaseType):
     ):
         if hasattr(values, "dtype"):
             dtype = lookup_dtype(values.dtype if dtype is None else dtype)
-        meta = gb.Vector.new(dtype)
+
+        meta = gb.Vector.new(dtype) if size is None else gb.Vector.new(dtype, size=size)
 
         # check for any DOnions:
         pkd_args = pack_args(indices, values)
@@ -124,7 +127,8 @@ class Vector(BaseType):
         donions += [True for (k, v) in pkd_kwargs.items() if is_DOnion(v)]
         if np.any(donions):
             # dive into DOnion(s):
-            return DOnion.multiple_access(meta, Vector.from_values, *pkd_args, **pkd_kwargs)
+            out_donion = DOnion.multiple_access(meta, Vector.from_values, *pkd_args, **pkd_kwargs)
+            return Vector(out_donion, meta=meta)
 
         # no DOnions
         if type(indices) is da.Array and type(values) is da.Array:
@@ -134,22 +138,25 @@ class Vector(BaseType):
             else:
                 if indices.size == 0:
                     raise ValueError("No indices provided. Unable to infer size.")
+
+                if indices.dtype.kind not in "ui":
+                    raise ValueError(f"indices must be integers, not {indices.dtype}")
+
                 # Note: uint + int = float which numpy cannot cast to uint.  So we
                 # ensure the same dtype for each summand here:
                 size = da.max(indices) + np.asarray(1, dtype=indices.dtype)
                 # Here `size` is a dask 0d-array whose computed value is
                 # used to determine the size of the Vector to be returned.
                 # But since we do not want to compute anything just now,
-                # we instead create a "DOnion" (dask onion) object
+                # we instead create a "DOnion" (dask onion) object.  This
+                # effectively means that we will use the inner value of
+                # `size` to create the new Vector:
                 args = pack_args(indices, values)
                 kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
                 donion = DOnion.sprout(size, meta, Vector.from_values, *args, **kwargs)
                 return Vector(donion, meta=meta)
 
             if indices.size > 0:
-                if indices.dtype.kind not in "ui":
-                    raise ValueError(f"indices must be integers, not {indices.dtype}")
-
                 if indices.size != values.size:
                     raise ValueError("`indices` and `values` lengths must match")
 
@@ -169,7 +176,7 @@ class Vector(BaseType):
                 dtype=np_vdtype_,
                 meta=np.array([]),
             )
-            meta = InnerVector(gb.Vector.new(vdtype))
+            meta = InnerVector(gb.Vector.new(vdtype, size=size))
             delayed = da.core.blockwise(
                 *(_from_values1D, "i"),
                 *(fragments, "ij"),
@@ -359,6 +366,17 @@ class Vector(BaseType):
         #     return new
 
     def __getitem__(self, index):
+        if type(self._delayed) is DOnion:
+            from .scalar import Scalar, PythonScalar
+
+            if isinstance(index, (Integral, Scalar, PythonScalar)):
+                meta = gb.Scalar.new(self._meta.dtype)
+            else:
+                meta = gb.Vector.new(self._meta.dtype)
+            return self._delayed.getattr(meta, "__getitem__", index)
+        if type(index) is DOnion:
+            meta = self._meta
+            return DOnion.multiple_access(meta, self.__getitem__, index)
         return AmbiguousAssignOrExtract(self, index)
 
     def __delitem__(self, keys):
@@ -544,7 +562,7 @@ class Vector(BaseType):
         x = self._delayed
         if type(x) is DOnion:
             meta = np.array([])
-            result = x.getattr(meta, "to_values", dtype=dtype)
+            result = x.getattr(meta, "to_values", dtype=dtype, chunks=chunks)
             indices = result.getattr(meta_i, "__getitem__", 0)
             values = result.getattr(meta_v, "__getitem__", 1)
             return indices, values
@@ -555,15 +573,19 @@ class Vector(BaseType):
         )
 
         # accumulate dask array to get index-ranges of the output (indices, values)
-        stops = da.cumsum(nvals_array)
-        starts = da.roll(stops, 1)
+        stops_ = da.cumsum(nvals_array)  # BEWARE: this function rechunks!
+        starts = da.roll(stops_, 1)
         starts = starts.copy() if starts.size == 1 else starts  # bug!!
         starts[0] = 0
-        nnz = stops[-1]
+        nnz = stops_[-1]
+        starts = starts.rechunk(1)
+        stops_ = stops_.rechunk(1)
 
-        def _to_values(x, starts, stops, dtype, chunks, nnz):
+        def _to_values(x, starts, stops_, dtype, chunks, nnz):
+            # the following changes the `.chunks` attribute of `starts` and `stops_` so that
+            # `blockwise()` can align them with `x`
             starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
-            stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
+            stops_ = da.core.Array(stops_.dask, stops_.name, x.chunks, stops_.dtype, meta=x._meta)
 
             chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
             output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
@@ -577,7 +599,7 @@ class Vector(BaseType):
                 *(x, "i"),
                 *(index_offsets, "i"),
                 *(starts, "i"),
-                *(stops, "i"),
+                *(stops_, "i"),
                 gb_dtype=gb_dtype,
                 dtype=dtype_,
                 meta=np.array([[]]),
@@ -587,9 +609,9 @@ class Vector(BaseType):
             )
 
         # since the size of the output (indices, values) depends on nnz, a delayed quantity,
-        # we need to return (indices, values) as DOnions (twice-delayed dask-array)
+        # we need to return (indices, values) as DOnions (twice-delayed dask-arrays)
         meta = np.array([])
-        iv_donion = DOnion.sprout(nnz, meta, _to_values, x, starts, stops, dtype, chunks)
+        iv_donion = DOnion.sprout(nnz, meta, _to_values, x, starts, stops_, dtype, chunks)
 
         dtype_i = np_dtype(lookup_dtype(meta_i.dtype))
         indices = iv_donion.deep_extract(
@@ -796,7 +818,7 @@ def _from_values1D(fragments, index_range, dup_op=None, gb_dtype=None):
 
 
 def _pick1D(indices, values, index_range, size):
-    # validate indices
+    # validate indices:
     indices = np.where(indices < 0, indices + size, indices)
     bad_indices = (indices < 0) | (size <= indices)
     if np.any(bad_indices):

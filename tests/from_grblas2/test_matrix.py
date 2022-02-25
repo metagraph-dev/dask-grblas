@@ -4,6 +4,7 @@ import pickle
 import sys
 import weakref
 
+import dask.array as da
 import dask_grblas
 import grblas
 import numpy as np
@@ -137,6 +138,78 @@ def test_from_values():
         ValueError, match="`rows` and `columns` and `values` lengths must match: 1, 2, 1"
     ):
         Matrix.from_values([0], [1, 2], [0])
+
+
+def test_from_values_dask():
+    rows = da.from_array(np.array([0, 1, 3]))
+    cols = da.from_array(np.array([1, 1, 2]))
+    vals = da.from_array(np.array([True, False, True]))
+    C = Matrix.from_values(rows, cols, vals)
+    assert C.nrows == 4
+    assert C.ncols == 3
+    assert C.nvals == 3
+    assert C.dtype == bool
+
+    vals = da.from_array(np.array([12.3, 12.4, 12.5]))
+    C2 = Matrix.from_values(rows, cols, vals, nrows=17, ncols=3)
+    assert C2.nrows == 17
+    assert C2.ncols == 3
+    assert C2.nvals == 3
+    assert C2.dtype == float
+
+    rows = da.from_array(np.array([0, 1, 1]))
+    cols = da.from_array(np.array([2, 1, 1]))
+    vals = da.from_array(np.array([1, 2, 3], dtype=np.int64))
+    C3 = Matrix.from_values(rows, cols, vals, nrows=10, dup_op=binary.times)
+    assert C3.nrows == 10
+    assert C3.ncols == 3
+    assert C3.nvals == 2  # duplicates were combined
+    assert C3.dtype == int
+    assert C3[1, 1].value == 6  # 2*3
+    C3monoid = Matrix.from_values(rows, cols, vals, nrows=10, dup_op=monoid.times)
+    assert C3.isequal(C3monoid)
+
+    vals = da.from_array(np.array([True, True, True]))
+    with pytest.raises(ValueError, match="Duplicate indices found"):
+        # Duplicate indices requires a dup_op
+        Matrix.from_values(rows, cols, vals).compute()
+
+    rows = da.from_array(np.array([0, 1, 3]))
+    cols = da.from_array(np.array([1, 1, 2]))
+    vals = da.from_array(np.array([12.3, 12.4, 12.5]))
+    with pytest.raises(IndexOutOfBound):
+        # Specified ncols can't hold provided indexes
+        Matrix.from_values(rows, cols, vals, nrows=17, ncols=2).compute()
+
+    empty_da = da.from_array(np.array([]))
+    with pytest.raises(ValueError, match="No row indices provided. Unable to infer nrows."):
+        Matrix.from_values(empty_da, empty_da, empty_da)
+
+    # Changed: Assume empty value is float64 (like numpy)
+    # with pytest.raises(ValueError, match="No vals provided. Unable to determine type"):
+    empty1 = Matrix.from_values(empty_da, empty_da, empty_da, nrows=3, ncols=4)
+    assert empty1.dtype == dtypes.FP64
+    assert empty1.nrows == 3
+    assert empty1.ncols == 4
+    assert empty1.nvals == 0
+
+    with pytest.raises(ValueError, match="Unable to infer"):
+        Matrix.from_values(empty_da, empty_da, empty_da, dtype=dtypes.INT64)
+
+    zero_da = da.from_array(np.array([0]))
+    with pytest.raises(ValueError, match="Unable to infer"):
+        # could also raise b/c rows and columns are different sizes
+        Matrix.from_values(zero_da, empty_da, zero_da, dtype=dtypes.INT64)
+
+    C4 = Matrix.from_values(empty_da, empty_da, empty_da, nrows=3, ncols=4, dtype=dtypes.INT64)
+    C5 = Matrix.new(dtypes.INT64, nrows=3, ncols=4)
+    assert C4.isequal(C5, check_dtype=True)
+
+    cols = da.from_array(np.array([1, 2]))
+    with pytest.raises(
+        ValueError, match="`rows` and `columns` and `values` lengths must match: 1, 2, 1"
+    ):
+        Matrix.from_values(zero_da, cols, zero_da)
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
@@ -316,9 +389,9 @@ def test_extract_values(A, A_chunks):
         assert cols.dtype == np.uint64
         assert vals.dtype == np.int64
         Trows, Tcols, Tvals = A.T.to_values(dtype=float)
-        np.testing.assert_array_equal(rows, Tcols)
-        np.testing.assert_array_equal(cols, Trows)
-        np.testing.assert_array_equal(vals, Tvals)
+        np.testing.assert_array_equal(rows.compute(), Tcols.compute())
+        np.testing.assert_array_equal(cols.compute(), Trows.compute())
+        np.testing.assert_array_equal(vals.compute(), Tvals.compute())
         assert Trows.dtype == np.uint64
         assert Tcols.dtype == np.uint64
         assert Tvals.dtype == np.float64

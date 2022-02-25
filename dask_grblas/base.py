@@ -1,4 +1,5 @@
 from numbers import Number
+from collections.abc import Iterable
 from functools import partial
 import dask.array as da
 import grblas as gb
@@ -9,6 +10,7 @@ from . import replace as replace_singleton
 from .mask import Mask
 from .functools import flexible_partial, skip
 from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
+from dask.base import is_dask_collection
 
 _expect_type = gb.base._expect_type
 
@@ -40,6 +42,15 @@ class BaseType:
 
     def isequal(self, other, *, check_dtype=False):
         from .scalar import PythonScalar
+
+        args = [self, other]
+        if np.any([type(arg._delayed) is DOnion for arg in args]):
+            args = [arg._delayed if type(arg._delayed) is DOnion else arg for arg in args]
+            meta = gb.Scalar.new(bool)
+            delayed = DOnion.multiple_access(
+                meta, self.__class__.isequal, *args, check_dtype=check_dtype
+            )
+            return PythonScalar(delayed, meta=meta)
 
         # if type(other) is not type(self):
         #     raise TypeError(f'Argument of isequal must be of type {type(self).__name__}')
@@ -349,6 +360,8 @@ class BaseType:
     def compute(self, *args, **kwargs):
         # kwargs['scheduler'] = 'synchronous'
         val = self._delayed.compute(*args, **kwargs)
+        if type(self._delayed) is DOnion:
+            return val
         return val.value
 
     def persist(self, *args, **kwargs):
@@ -358,7 +371,8 @@ class BaseType:
         return self._delayed.visualize(*args, **kwargs)
 
 
-_const0_DOnion = {"dtype": np.int32, "meta": np.array(0, dtype=np.int32)}
+const_obj = object()
+_const0_DOnion = {"dtype": np.object_, "meta": np.array(const_obj, dtype=np.object_)}
 
 
 class DOnion:
@@ -374,23 +388,49 @@ class DOnion:
     @classmethod
     def sprout(cls, shroud, seed_meta, seed_func, *args, **kwargs):
         """
-        Develop a DOnion from dask array `shroud` and function `seed_func`
+        Develop a DOnion from dask arrays listed in `shroud` and using function `seed_func`
 
-        Return shroud.map_blocks(seed_func) as a DOnion.
+        Return dask.array.map_blocks(seed_func, shroud) as a DOnion.
 
-        :shroud: dask array whose inner value determines the (size of) seed dask array
+        :shroud: a dask array; or an iterable of multiple such dask arrays; or a tuple (x, y)
+            where x and y are respectively a list of dask arrays and a dict of named dask arrays.
+            The inner values of these arrays determine the (size of) seed dask array
         :seed_meta: empty instance of the inner value type of the seed
         :seed_func: the function that takes as input the inner value of `shroud` and returns
             another dask array (the seed)
-        :args: tuple of arguments to `seed_func`
+        :args: tuple of arguments to `seed_func`.  May contain one or more `skip` sentinels
+            denoting a vacant positions to be taken up by the inner values of dask arrays in
+            shroud.
         :kwargs: dict of keyword arguments to `seed_func`
         """
-        seed_func = partial(seed_func, *args, **kwargs)
-        kernel = shroud.map_blocks(seed_func, **_const0_DOnion)
+        named_shrouds = {}
+        if is_dask_collection(shroud):
+            shroud = [shroud]
+        else:
+            if isinstance(shroud, Iterable):
+                if len(shroud) > 0:
+                    if (
+                        len(shroud) == 2
+                        and isinstance(shroud[0], Iterable)
+                        and isinstance(shroud[1], dict)
+                    ):
+                        shroud = shroud[0]
+                        named_shrouds = shroud[1]
+                else:
+                    raise ValueError("`shroud` must contain at least one dask array!")
+            else:
+                raise ValueError(
+                    "`shroud` must be a dask array; a list x of dask arrays or"
+                    "a dict y of named dask arrays; or a tuple of both: (x, y)"
+                )
+
+        seed_func = flexible_partial(seed_func, *args, **kwargs)
+        kernel = da.map_blocks(seed_func, *shroud, **named_shrouds, **_const0_DOnion)
         return DOnion(kernel, meta=seed_meta)
 
     def __init__(self, kernel, meta=None):
         self.kernel = kernel
+        # Why ._meta and .dtype? B'cos Scalar, Vector & Matrix need them
         self._meta = meta
         try:
             self.dtype = meta.dtype
@@ -398,6 +438,8 @@ class DOnion:
             self.dtype = type(meta)
 
     def __eq__(self, other):
+        if type(other) is DOnion:
+            other = other.compute()
         return self.compute() == other
 
     def compute(self, *args, **kwargs):
@@ -406,8 +448,27 @@ class DOnion:
             value = value.compute(*args, **kwargs)
         return value
 
+    def compute_once(self, *args, **kwargs):
+        value = self.kernel.compute(*args, **kwargs)
+        return value
+
     def persist(self, *args, **kwargs):
-        return self.kernel.compute(*args, **kwargs).persist(*args, **kwargs)
+        value = self.compute_once(*args, **kwargs)
+        while type(value) is DOnion or (
+            hasattr(value, "_delayed") and type(value._delayed) is DOnion
+        ):
+            if type(value) is DOnion:
+                value = value.compute_once(*args, **kwargs)
+            else:
+                value = value._delayed.compute_once(*args, **kwargs)
+
+        if hasattr(value, "persist"):
+            return value.persist(*args, **kwargs)
+        elif hasattr(value, "_persist") and hasattr(value, "_delayed"):
+            value._persist(*args, **kwargs)
+            return value._delayed
+        else:
+            raise TypeError(f'Something went wrong: {self} cannot be "persisted".')
 
     @classmethod
     def multiple_access(cls, out_meta, func, *args, **kwargs):

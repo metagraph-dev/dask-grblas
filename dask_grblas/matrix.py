@@ -1,18 +1,23 @@
 import dask.array as da
 import numpy as np
 import grblas as gb
-from dask.base import tokenize
+
+from numbers import Integral
+from dask.base import tokenize, is_dask_collection
 from dask.delayed import Delayed, delayed
 from dask.highlevelgraph import HighLevelGraph
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
+from grblas.exceptions import IndexOutOfBound
 
-from .base import BaseType, InnerBaseType
+from .base import BaseType, InnerBaseType, DOnion, is_DOnion, skip
 from .base import _nvals as _nvals_in_chunk
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
 from ._ss.matrix import ss
 from .utils import (
+    pack_args,
+    pack_kwargs,
     np_dtype,
     get_return_type,
     get_grblas_type,
@@ -121,40 +126,84 @@ class Matrix(BaseType):
         nrows=None,
         ncols=None,
         *,
-        trust_shape=False,
         dup_op=None,
         dtype=None,
         chunks="auto",
         name=None,
     ):
-        # Note: `trust_shape` is a bool parameter that, when True,
-        # can be used to avoid expensive computation of max(rows)
-        # and max(columns) which are used to verify that `nrows`
-        # and `ncols` are indeed large enough to hold all the given
-        # tuples.
-        if (
-            dup_op is None
-            and type(rows) is da.Array
-            and type(columns) is da.Array
-            and type(values) is da.Array
-        ):
-            if not trust_shape or nrows is None or ncols is None:
-                # this branch is an expensive operation:
-                implied_nrows = 1 + da.max(rows).compute()
-                implied_ncols = 1 + da.max(columns).compute()
-                if nrows is not None and implied_nrows > nrows:
-                    raise Exception()
-                if ncols is not None and implied_ncols > ncols:
-                    raise Exception()
-                nrows = implied_nrows if nrows is None else nrows
-                ncols = implied_ncols if ncols is None else ncols
+        if hasattr(values, "dtype"):
+            dtype = lookup_dtype(values.dtype if dtype is None else dtype)
 
-            idtype = gb.Matrix.new(rows.dtype).dtype
-            np_idtype_ = np_dtype(idtype)
-            vdtype = gb.Matrix.new(values.dtype).dtype
+        if nrows is None:
+            if ncols is None:
+                meta = gb.Matrix.new(dtype)
+            else:
+                meta = gb.Matrix.new(dtype, ncols=ncols)
+        else:
+            if ncols is None:
+                meta = gb.Matrix.new(dtype, nrows=nrows)
+            else:
+                meta = gb.Matrix.new(dtype, nrows=nrows, ncols=ncols)
+
+        # check for any DOnions:
+        pkd_args = pack_args(rows, columns, values)
+        pkd_kwargs = pack_kwargs(
+            nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
+        )
+        donions = [True for arg in pkd_args if is_DOnion(arg)]
+        donions += [True for (k, v) in pkd_kwargs.items() if is_DOnion(v)]
+        if np.any(donions):
+            # dive into DOnion(s):
+            out_donion = DOnion.multiple_access(meta, Matrix.from_values, *pkd_args, **pkd_kwargs)
+            return Matrix(out_donion, meta=meta)
+
+        # no DOnions
+        if type(rows) is da.Array and type(columns) is da.Array and type(values) is da.Array:
+            np_idtype_ = np_dtype(lookup_dtype(rows.dtype))
+            if nrows is not None and ncols is not None:
+                chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_idtype_)
+            else:
+                if nrows is None and rows.size == 0:
+                    raise ValueError("No row indices provided. Unable to infer nrows.")
+
+                if ncols is None and columns.size == 0:
+                    raise ValueError("No column indices provided. Unable to infer ncols.")
+
+                if not (rows.size == columns.size and columns.size == values.size):
+                    raise ValueError(
+                        "`rows` and `columns` and `values` lengths must match: "
+                        f"{rows.size}, {columns.size}, {values.size}"
+                    )
+
+                if rows.dtype.kind not in "ui":
+                    raise ValueError(f"rows must be integers, not {rows.dtype}")
+
+                if columns.dtype.kind not in "ui":
+                    raise ValueError(f"columns must be integers, not {columns.dtype}")
+
+                if nrows is None:
+                    nrows = da.max(rows) + np.asarray(1, dtype=rows.dtype)
+
+                if ncols is None:
+                    ncols = da.max(columns) + np.asarray(1, dtype=columns.dtype)
+
+                # use the inner value of `nrows` or `ncols` to create the new Matrix:
+                shape = (nrows, ncols)
+                _shape = [skip if is_dask_collection(x) else x for x in shape]
+                dasks = [x for x in shape if is_dask_collection(x)]
+                args = pack_args(rows, columns, values, *_shape)
+                kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+                donion = DOnion.sprout(dasks, meta, Matrix.from_values, *args, **kwargs)
+                return Matrix(donion, meta=meta)
+
+            if rows.size > 0 and rows.size != values.size:
+                raise ValueError("`rows` and `values` lengths must match")
+
+            if columns.size > 0 and columns.size != values.size:
+                raise ValueError("`columns` and `values` lengths must match")
+
+            vdtype = dtype
             np_vdtype_ = np_dtype(vdtype)
-
-            chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_idtype_)
 
             name_ = name
             name = str(name) if name else ""
@@ -169,16 +218,18 @@ class Matrix(BaseType):
                 *(values, "k"),
                 *(row_ranges, "i"),
                 *(col_ranges, "j"),
+                shape=(nrows, ncols),
                 dtype=np_idtype_,
                 meta=np.array([]),
             )
-            meta = InnerMatrix(gb.Matrix.new(vdtype))
+            meta = InnerMatrix(gb.Matrix.new(vdtype, nrows=nrows, ncols=ncols))
             delayed = da.core.blockwise(
                 *(_from_values2D, "ij"),
                 *(fragments, "ijk"),
                 *(row_ranges, "i"),
                 *(col_ranges, "j"),
                 concatenate=False,
+                dup_op=dup_op,
                 gb_dtype=vdtype,
                 dtype=np_vdtype_,
                 meta=meta,
@@ -234,11 +285,15 @@ class Matrix(BaseType):
         # if it is already known  at the time of initialization of
         # this Matrix,  otherwise its value should be left as None
         # (the default)
-        assert type(delayed) is da.Array
-        assert delayed.ndim == 2
+        assert type(delayed) in {da.Array, DOnion}
         self._delayed = delayed
-        if meta is None:
-            meta = gb.Matrix.new(delayed.dtype, *delayed.shape)
+        if type(delayed) is da.Array:
+            assert delayed.ndim == 2
+            if meta is None:
+                meta = gb.Matrix.new(delayed.dtype, *delayed.shape)
+        else:
+            if meta is None:
+                meta = gb.Matrix.new(delayed.dtype)
         self._meta = meta
         self._nrows = meta.nrows
         self._ncols = meta.ncols
@@ -257,18 +312,26 @@ class Matrix(BaseType):
 
     @property
     def T(self):
+        if is_DOnion(self._delayed):
+            return TransposedMatrix(self._delayed.T)
         return TransposedMatrix(self)
 
     @property
     def nrows(self):
+        if is_DOnion(self._delayed):
+            return self._delayed.nrows
         return self._meta.nrows
 
     @property
     def ncols(self):
+        if is_DOnion(self._delayed):
+            return self._delayed.ncols
         return self._meta.ncols
 
     @property
     def shape(self):
+        if is_DOnion(self._delayed):
+            return self._delayed.shape
         return (self._meta.nrows, self._meta.ncols)
 
     def resize(self, nrows, ncols, inplace=True, chunks="auto"):
@@ -414,6 +477,24 @@ class Matrix(BaseType):
         return get_return_type(meta)(delayed, nvals=nvals)
 
     def __getitem__(self, index):
+        if type(self._delayed) is DOnion:
+            from .scalar import Scalar, PythonScalar
+
+            if type(index) is tuple and len(index) == 2:
+                if isinstance(index[0], (Integral, Scalar, PythonScalar)):
+                    if isinstance(index[1], (Integral, Scalar, PythonScalar)):
+                        meta = gb.Scalar.new(self._meta.dtype)
+                    else:
+                        meta = gb.Vector.new(self._meta.dtype)
+                else:
+                    if isinstance(index[1], (Integral, Scalar, PythonScalar)):
+                        meta = gb.Vector.new(self._meta.dtype)
+                    else:
+                        meta = gb.Matrix.new(self._meta.dtype)
+            return self._delayed.getattr(meta, "__getitem__", index)
+        if type(index) is DOnion:
+            meta = self._meta
+            return DOnion.multiple_access(meta, self.__getitem__, index)
         return AmbiguousAssignOrExtract(self, index)
 
     def __delitem__(self, keys):
@@ -568,7 +649,18 @@ class Matrix(BaseType):
         self.__init__(delayed)
 
     def to_values(self, dtype=None, chunks="auto"):
+        dtype = lookup_dtype(self.dtype if dtype is None else dtype)
+        meta_i, _, meta_v = self._meta.to_values(dtype)
+
         x = self._delayed
+        if type(x) is DOnion:
+            meta = np.array([])
+            result = x.getattr(meta, "to_values", dtype=dtype, chunks=chunks)
+            rows = result.getattr(meta_i, "__getitem__", 0)
+            columns = result.getattr(meta_i, "__getitem__", 1)
+            values = result.getattr(meta_v, "__getitem__", 2)
+            return rows, columns, values
+
         # first find the number of values in each chunk and return
         # them as a 2D numpy array whose shape is equal to x.numblocks
         nvals_2D = da.core.blockwise(
@@ -577,61 +669,64 @@ class Matrix(BaseType):
             adjust_chunks={"i": 1, "j": 1},
             dtype=np.int64,
             meta=np.array([[]]),
-        ).compute()
+        )
 
         # use the above array to determine the output tuples' array
-        # bounds (`starts` and `stops`) for each chunk of this
+        # bounds (`starts` and `stops_`) for each chunk of this
         # Matrix (self)
-        nvals_1D = nvals_2D.flatten()
-
-        stops = np.cumsum(nvals_1D)
-        starts = np.roll(stops, 1)
+        stops_ = da.cumsum(nvals_2D)  # BEWARE: this function rechunks!
+        starts = da.roll(stops_, 1)
+        starts = starts.copy() if starts.size == 1 else starts  # bug!!
         starts[0] = 0
-        nnz = stops[-1]
+        nnz = stops_[-1]
+        starts = starts.reshape(nvals_2D.shape).rechunk(1)
+        stops_ = stops_.reshape(nvals_2D.shape).rechunk(1)
 
-        # convert numpy 2D-arrays (`starts` and `stops`) to 2D dask Arrays
-        # of ranges.  Don't forget to fix their `chunks` in oder to enable
-        # them to align with x
-        starts = starts.reshape(nvals_2D.shape)
-        starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
-        starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+        def _to_values(x, starts, stops_, dtype, chunks, nnz):
+            # the following changes the `.chunks` attribute of `starts` and `stops_` so that
+            # `blockwise()` can align them with `x`
+            starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+            stops_ = da.core.Array(stops_.dask, stops_.name, x.chunks, stops_.dtype, meta=x._meta)
 
-        stops = stops.reshape(nvals_2D.shape)
-        stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
-        stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
+            chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
+            output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 
-        chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
-        output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
+            gb_dtype = lookup_dtype(dtype)
+            dtype_ = np_dtype(gb_dtype)
+            # Compute row/col offsets as dask arrays that can align with this
+            # Matrix's (self's) chunks to convert chunk row/col indices to
+            # full dask-grblas Matrix indices.
+            row_offsets = build_chunk_offsets_dask_array(x, 0, "row_offset-")
+            col_offsets = build_chunk_offsets_dask_array(x, 1, "col_offset-")
+            x = da.core.blockwise(
+                *(MatrixTupleExtractor, "ijk"),
+                *(output_ranges, "k"),
+                *(x, "ij"),
+                *(row_offsets, "i"),
+                *(col_offsets, "j"),
+                *(starts, "ij"),
+                *(stops_, "ij"),
+                gb_dtype=dtype,
+                dtype=dtype_,
+                meta=np.array([[[]]]),
+            )
+            x = da.reduction(
+                x, _identity, _flatten, axis=1, concatenate=False, dtype=dtype_, meta=np.array([[]])
+            )
+            return da.reduction(
+                x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
+            )
 
-        dtype_ = np_dtype(self.dtype)
-        # Compute row/col offsets as dask arrays that can align with this
-        # Matrix's (self's) chunks to convert chunk row/col indices to
-        # full dask-grblas Matrix indices.
-        row_offsets = build_chunk_offsets_dask_array(x, 0, "row_offset-")
-        col_offsets = build_chunk_offsets_dask_array(x, 1, "col_offset-")
-        x = da.core.blockwise(
-            *(MatrixTupleExtractor, "ijk"),
-            *(output_ranges, "k"),
-            *(x, "ij"),
-            *(row_offsets, "i"),
-            *(col_offsets, "j"),
-            *(starts, "ij"),
-            *(stops, "ij"),
-            gb_dtype=dtype,
-            dtype=dtype_,
-            meta=np.array([[[]]]),
-        )
-        x = da.reduction(
-            x, _identity, _flatten, axis=1, concatenate=False, dtype=dtype_, meta=np.array([[]])
-        )
-        x = da.reduction(
-            x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
-        )
+        # since the size of the output (rows, columns, values) depends on nnz, a delayed quantity,
+        # we need to return the output as DOnions (twice-delayed dask-arrays)
+        meta = np.array([])
+        rcv_donion = DOnion.sprout(nnz, meta, _to_values, x, starts, stops_, dtype, chunks)
 
-        meta_i, meta_j, meta_v = self._meta.to_values(dtype)
-        rows = da.map_blocks(_get_rows, x, dtype=meta_i.dtype, meta=meta_i)
-        cols = da.map_blocks(_get_cols, x, dtype=meta_j.dtype, meta=meta_j)
-        vals = da.map_blocks(_get_vals, x, dtype=meta_v.dtype, meta=meta_v)
+        dtype_i = np_dtype(lookup_dtype(meta_i.dtype))
+        rows = rcv_donion.deep_extract(meta_i, da.map_blocks, _get_rows, dtype=dtype_i, meta=meta_i)
+        cols = rcv_donion.deep_extract(meta_i, da.map_blocks, _get_cols, dtype=dtype_i, meta=meta_i)
+        dtype_v = np_dtype(lookup_dtype(meta_v.dtype))
+        vals = rcv_donion.deep_extract(meta_v, da.map_blocks, _get_vals, dtype=dtype_v, meta=meta_v)
         return rows, cols, vals
 
     def rechunk(self, inplace=False, chunks="auto"):
@@ -717,6 +812,8 @@ class TransposedMatrix:
 
     @property
     def T(self):
+        if is_DOnion(self._matrix._delayed):
+            return Matrix(self._matrix._delayed.T)
         return self._matrix
 
     @property
@@ -724,15 +821,35 @@ class TransposedMatrix:
         return self._meta.dtype
 
     def to_values(self, dtype=None, chunks="auto"):
-        # TODO: make this lazy; can we do something smart with this?
+        if is_DOnion(self._matrix._delayed):
+            return self._matrix.to_values(dtype=dtype, chunks=chunks)
         rows, cols, vals = self._matrix.to_values(dtype=dtype, chunks=chunks)
         return cols, rows, vals
 
     # Properties
-    nrows = Matrix.nrows
-    ncols = Matrix.ncols
-    shape = Matrix.shape
-    nvals = Matrix.nvals
+    @property
+    def nrows(self):
+        if is_DOnion(self._matrix._delayed):
+            return self._matrix._delayed.nrows
+        return self._meta.nrows
+
+    @property
+    def ncols(self):
+        if is_DOnion(self._matrix._delayed):
+            return self._matrix._delayed.ncols
+        return self._meta.ncols
+
+    @property
+    def shape(self):
+        if is_DOnion(self._matrix._delayed):
+            return self._matrix._delayed.shape
+        return self._meta.shape
+
+    @property
+    def nvals(self):
+        if is_DOnion(self._matrix._delayed):
+            return self._matrix._delayed.nvals
+        return self._meta.shape
 
     # Delayed methods
     ewise_add = Matrix.ewise_add
@@ -944,7 +1061,7 @@ def _new_Matrix_chunk(out_row_range, out_col_range, gb_dtype=None):
     return InnerMatrix(gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols))
 
 
-def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
+def _from_values2D(fragments, out_row_range, out_col_range, dup_op=None, gb_dtype=None):
     """
     Reassembles filtered tuples (row, col, val) in the list `fragments`
     obtained from _pick2D() for the chunk within the given row and column
@@ -956,17 +1073,33 @@ def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
     vals = np.concatenate([vals for (_, _, vals) in fragments])
     nrows = out_row_range[0].stop - out_row_range[0].start
     ncols = out_col_range[0].stop - out_col_range[0].start
+    if rows.size == 0 or cols.size == 0:
+        return InnerMatrix(gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols))
     return InnerMatrix(
-        gb.Matrix.from_values(rows, cols, vals, nrows=nrows, ncols=ncols, dtype=gb_dtype)
+        gb.Matrix.from_values(
+            rows, cols, vals, nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=gb_dtype
+        )
     )
 
 
-def _pick2D(rows, cols, values, row_range, col_range):
+def _pick2D(rows, cols, values, row_range, col_range, shape):
     """
     Filters out only those tuples (row, col, val) that lie within
     the given row and column ranges.  Indices are also offset
     appropriately.
     """
+    # validate indices:
+    rows = np.where(rows < 0, rows + shape[0], rows)
+    bad_indices = (rows < 0) | (shape[0] <= rows)
+    if np.any(bad_indices):
+        raise IndexOutOfBound
+
+    cols = np.where(cols < 0, cols + shape[1], cols)
+    bad_indices = (cols < 0) | (shape[1] <= cols)
+    if np.any(bad_indices):
+        raise IndexOutOfBound
+
+    # filter into chunk:
     row_range, col_range = row_range[0], col_range[0]
     rows_in = (row_range.start <= rows) & (rows < row_range.stop)
     cols_in = (col_range.start <= cols) & (cols < col_range.stop)
