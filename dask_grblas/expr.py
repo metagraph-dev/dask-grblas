@@ -9,7 +9,7 @@ import grblas as gb
 from grblas.exceptions import DimensionMismatch
 from dask.base import tokenize
 
-from .base import BaseType, InnerBaseType, _check_mask
+from .base import BaseType, InnerBaseType, _check_mask, DOnion, is_DOnion, like_DOnion
 from .mask import Mask
 from .utils import (
     get_grblas_type,
@@ -231,6 +231,16 @@ class GbDelayed:
     def new(self, dtype=None, *, mask=None, name=None):
         if mask is not None:
             _check_mask(mask)
+
+        if is_DOnion(self.parent) or mask is not None and is_DOnion(mask.mask):
+            meta = self._meta.new(dtype=dtype)
+            ret_type = get_return_type(meta)
+            donion = DOnion.multiple_access(
+                meta, self.__class__.new, self.parent, dtype=dtype, mask=mask, name=name
+            )
+            return ret_type(donion, meta=meta)
+
+        if mask is not None:
             meta = self._meta.new(dtype=dtype, mask=mask._meta)
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
@@ -420,12 +430,12 @@ AxisIndex = namedtuple("AxisIndex", ["size", "index"])
 
 
 class IndexerResolver:
-    def __init__(self, obj, indices):
+    def __init__(self, obj, indices, check_shape=True):
         self.obj = obj
         if indices is Ellipsis:
             from .vector import Vector
 
-            if type(obj) is Vector:
+            if type(obj) in {Vector, gb.Vector}:
                 normalized = slice(None).indices(obj._size)
                 self.indices = [AxisIndex(obj._size, slice(*normalized))]
             else:
@@ -436,7 +446,7 @@ class IndexerResolver:
                     AxisIndex(obj._ncols, slice(*normalized1)),
                 ]
         else:
-            self.indices = self.parse_indices(indices, obj.shape)
+            self.indices = self.parse_indices(indices, obj.shape, check_shape)
 
     @property
     def is_single_element(self):
@@ -445,7 +455,7 @@ class IndexerResolver:
                 return False
         return True
 
-    def parse_indices(self, indices, shape):
+    def parse_indices(self, indices, shape, check_shape=True):
         """
         Returns
             [(rows, rowsize), (cols, colsize)] for Matrix
@@ -469,20 +479,22 @@ class IndexerResolver:
                 raise TypeError(
                     f"Index in position {i} cannot be a tuple; must use slice or list or int"
                 )
-            out.append(self.parse_index(idx, typ, shape[i]))
+            out.append(self.parse_index(idx, typ, shape[i], check_shape))
         return out
 
-    def parse_index(self, index, typ, size):
+    def parse_index(self, index, typ, size, check_shape=True):
         if np.issubdtype(typ, np.integer):
             if index >= size:
-                raise IndexError(f"Index out of range: index={index}, size={size}")
+                if check_shape:
+                    raise IndexError(f"Index out of range: index={index}, size={size}")
             if index < 0:
                 index += size
                 if index < 0:
-                    raise IndexError(f"Index out of range: index={index - size}, size={size}")
+                    if check_shape:
+                        raise IndexError(f"Index out of range: index={index - size}, size={size}")
             return AxisIndex(None, IndexerResolver.normalize_index(index, size))
         if typ is list:
-            index = [IndexerResolver.normalize_index(i, size) for i in index]
+            index = [IndexerResolver.normalize_index(i, size, check_shape) for i in index]
             return AxisIndex(len(index), index)
         elif typ is slice:
             normalized = index.indices(size)
@@ -530,7 +542,7 @@ class IndexerResolver:
                         f"`x(mask={index.name}) << value`."
                     )
                 raise TypeError(f"Invalid type for index: {typ}; unable to convert to list")
-            index = [IndexerResolver.normalize_index(i, size) for i in index]
+            index = [IndexerResolver.normalize_index(i, size, check_shape) for i in index]
         return AxisIndex(len(index), index)
 
     def get_index(self, dim):
@@ -548,18 +560,20 @@ class IndexerResolver:
         return
 
     @classmethod
-    def normalize_index(cls, index, size):
+    def normalize_index(cls, index, size, check_size=True):
         if type(index) is get_return_type(gb.Scalar.new(int)):
             # This branch needs a second look: How to work with the lazy index?
             index = index.value.compute()
             if not isinstance(index, Integral):
                 raise TypeError("An integer is required for indexing")
         if index >= size:
-            raise IndexError(f"Index out of range: index={index}, size={size}")
+            if check_size:
+                raise IndexError(f"Index out of range: index={index}, size={size}")
         if index < 0:
             index += size
             if index < 0:
-                raise IndexError(f"Index out of range: index={index - size}, size={size}")
+                if check_size:
+                    raise IndexError(f"Index out of range: index={index - size}, size={size}")
         return int(index)
 
 
@@ -637,12 +651,17 @@ class Updater:
 
         if self.mask is None and self.accum is None:
             return self.parent.update(delayed)
-        self.parent._meta._update(
-            get_meta(delayed),
-            mask=get_meta(self.mask),
-            accum=self.accum,
-            replace=self.replace,
-        )
+
+        if like_DOnion(self.parent) or like_DOnion(delayed):
+            self.parent._meta = delayed._meta.new()
+        else:
+            self.parent._meta._update(
+                get_meta(delayed),
+                mask=get_meta(self.mask),
+                accum=self.accum,
+                replace=self.replace,
+            )
+
         if self.parent._meta._is_scalar:
             self.parent._update(delayed, accum=self.accum)
         else:
@@ -1246,23 +1265,32 @@ def _defrag_to_index_chunk(*args, x_chunks, dtype=None):
 
 
 class AmbiguousAssignOrExtract:
-    def __init__(self, parent, index):
-        self.resolved_indices = IndexerResolver(parent, index)
+    def __init__(self, parent, index, self_donion=None, meta=None):
         self.parent = parent
         self.index = index
-        # IndexerResolver.validate_types(self.index)
-        self._meta = parent._meta[index]
-        # infix expression requirements:
-        shape = tuple(i.size for i in self.resolved_indices.indices if i.size)
-        self.ndim = len(shape)
-        self.output_type = _get_grblas_type_with_ndims(self.ndim)
-        if self.ndim == 1:
-            self._size = shape[0]
-        elif self.ndim == 2:
-            self._nrows = shape[0]
-            self._ncols = shape[1]
+        self._donion = self_donion
+        self._meta = parent._meta[index] if meta is None else meta
+        if (
+                not (hasattr(parent, '_delayed') and is_DOnion(parent._delayed))
+                and not (hasattr(parent, '_matrix') and is_DOnion(parent._matrix))
+        ):
+            self.resolved_indices = IndexerResolver(parent, index)
+            # infix expression requirements:
+            shape = tuple(i.size for i in self.resolved_indices.indices if i.size)
+            self.ndim = len(shape)
+            self.output_type = _get_grblas_type_with_ndims(self.ndim)
+            if self.ndim == 1:
+                self._size = shape[0]
+            elif self.ndim == 2:
+                self._nrows = shape[0]
+                self._ncols = shape[1]
 
     def new(self, *, dtype=None, mask=None, input_mask=None, name=None):
+        if self._donion is not None:
+            return get_return_type(self._meta.new(dtype=dtype))(
+                self._donion.new(dtype=dtype, mask=mask, input_mask=input_mask, name=name)
+            )
+
         parent = self.parent
         xt = False  # xt = parent._is_transposed
         dxn = 1  # dxn = -1 if xt else 1
@@ -1447,6 +1475,10 @@ class AmbiguousAssignOrExtract:
         return Assigner(self.parent(*args, **kwargs), self.index, subassign=True)
 
     def update(self, obj):
+        if is_DOnion(self.parent._delayed):
+            self.parent.__setitem__(self.index, obj)
+            return
+
         if getattr(self.parent, "_is_transposed", False):
             raise TypeError("'TransposedMatrix' object does not support item assignment")
         Assigner(Updater(self.parent), self.index).update(obj)
@@ -1456,6 +1488,10 @@ class AmbiguousAssignOrExtract:
 
     @property
     def value(self):
+        if self._donion is not None:
+            ret_type = get_return_type(self._meta.new())
+            return ret_type(self._donion.new()).value
+
         self._meta.value
         return self.new().value
 

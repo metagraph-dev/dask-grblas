@@ -1,5 +1,6 @@
 from numbers import Number
 from collections.abc import Iterable
+from tlz import compose
 from functools import partial
 import dask.array as da
 import grblas as gb
@@ -108,7 +109,30 @@ class BaseType:
             )
         return PythonScalar(delayed)
 
+    def _clear(self):
+        delayed = self._optional_dup()
+        # for a function like this, what's the difference between `map_blocks` and `elemwise`?
+        if self.ndim == 0:
+            return self.__class__(
+                    delayed.map_blocks(
+                    _clear,
+                    dtype=np_dtype(self.dtype),
+                )
+            )
+        else:
+            return self.__class__(
+                delayed.map_blocks(
+                    _clear,
+                    dtype=np_dtype(self.dtype),
+                ),
+                nvals=0,
+            )
+
     def clear(self):
+        if is_DOnion(self._delayed):
+            self.__init__(self._delayed.getattr(self._meta, '_clear'), meta=self._meta, nvals=0)
+            return
+
         # Should we copy and mutate or simply create new chunks?
         delayed = self._optional_dup()
         # for a function like this, what's the difference between `map_blocks` and `elemwise`?
@@ -127,6 +151,19 @@ class BaseType:
             )
 
     def dup(self, dtype=None, *, mask=None, name=None):
+        if is_DOnion(self._delayed):
+            mask_meta = mask._meta if mask else None
+            meta = self._meta.dup(dtype=dtype, mask=mask_meta, name=name)
+            donion = DOnion.multiple_access(
+                meta, self.__class__.dup, self._delayed, dtype=dtype, mask=mask, name=name
+            )
+            return self.__class__(donion, meta=meta)
+
+        if mask and is_DOnion(mask.mask):
+            meta = self._meta.dup(dtype=dtype, name=name)
+            donion = DOnion.multiple_access(meta, self.dup, dtype=dtype, mask=mask.mask, name=name)
+            return self.__class__(donion, meta=meta)
+
         if mask is not None:
             if not isinstance(mask, Mask):
                 self._meta.dup(dtype=dtype, mask=mask, name=name)  # should raise
@@ -259,7 +296,29 @@ class BaseType:
             return self.name
         return f"{split[0]}<sub>{split[1]}</sub>"
 
-    def update(self, expr):
+    def update(self, expr, in_DOnion=False):
+        typ = type(expr)
+        if (
+                is_DOnion(self._delayed)
+                or typ is GbDelayed and is_DOnion(expr.parent)
+                or typ is AmbiguousAssignOrExtract and is_DOnion(expr._donion)
+                or typ is type(self) and is_DOnion(expr._delayed)
+        ):
+            self_ = self.__class__(self._delayed, meta=self._meta)
+            self_ = self_._delayed if is_DOnion(self_._delayed) else self_
+            expr_ = expr
+            if typ is GbDelayed and is_DOnion(expr.parent):
+                expr_ = expr.parent
+            elif typ is AmbiguousAssignOrExtract and is_DOnion(expr._donion):
+                expr_ = expr._donion
+            elif typ is type(self) and is_DOnion(expr._delayed):
+                expr_ = expr._delayed
+            donion = DOnion.multiple_access(
+                self._meta, BaseType.update, self_, expr_, in_DOnion=True
+            )
+            self.__init__(donion, self._meta)
+            return
+
         if isinstance(expr, Number):
             if self.ndim == 2:
                 raise TypeError(
@@ -271,10 +330,12 @@ class BaseType:
                     "\n\n    M[:, :] = s"
                 )
             Updater(self)[...] << expr
+            if in_DOnion:
+                return self.__class__(self._delayed, meta=self._meta)
             return
+
         self._meta.update(expr._meta)
         self._meta.clear()
-        typ = type(expr)
         if typ is AmbiguousAssignOrExtract:
             # Extract (w << v[index])
             # Is it safe/reasonable to simply replace `_delayed`?
@@ -295,12 +356,46 @@ class BaseType:
         else:
             # Anything else we need to handle?
             raise TypeError()
+        if in_DOnion:
+            return self.__class__(self._delayed, meta=self._meta)
 
-    def _update(self, expr, *, mask=None, accum=None, replace=None):
+    def _update(self, expr, *, mask=None, accum=None, replace=None, in_DOnion=False):
+        typ = type(expr)
+        if (
+                is_DOnion(self._delayed)
+                or mask is not None and is_DOnion(mask.mask)
+                or typ is GbDelayed and is_DOnion(expr.parent)
+                or typ is AmbiguousAssignOrExtract and is_DOnion(expr._donion)
+                or typ is type(self) and is_DOnion(expr._delayed)
+        ):
+            self_ = self._delayed if is_DOnion(self._delayed) else self
+            mask_ = mask.mask if mask is not None and is_DOnion(mask.mask) else mask
+            expr_ = expr
+            if typ is GbDelayed and is_DOnion(expr.parent):
+                expr_ = expr.parent
+            elif typ is AmbiguousAssignOrExtract and is_DOnion(expr._donion):
+                expr_ = expr._donion
+            elif typ is type(self) and is_DOnion(expr._delayed):
+                expr_ = expr._delayed
+
+            donion = DOnion.multiple_access(
+                self._meta,
+                BaseType._update,
+                self_,
+                expr_,
+                mask=mask_,
+                accum=accum,
+                replace=replace,
+                in_DOnion=True,
+            )
+            self.__init__(donion, meta=self._meta)
+            return
+
         if mask is None and accum is None:
             self.update(expr)
+            if in_DOnion:
+                return self
             return
-        typ = type(expr)
         if typ is AmbiguousAssignOrExtract:
             # Extract (w(mask=mask, accum=accum) << v[index])
             delayed = self._optional_dup()
@@ -353,6 +448,9 @@ class BaseType:
         else:
             raise NotImplementedError(f"{typ}")
 
+        if in_DOnion:
+            return self
+
     def wait(self):
         # TODO: What should this do?
         self._meta.wait()
@@ -369,6 +467,19 @@ class BaseType:
 
     def visualize(self, *args, **kwargs):
         return self._delayed.visualize(*args, **kwargs)
+
+
+class Box:
+    """
+    An arbitrary wrapper to wrap around the inner values of
+    an Array object to prevent dask from post-processing the
+    Array at the end of compute()
+    """
+    def __init__(self, content):
+        self.content = content
+
+    def __getattr__(self, item):
+        return getattr(self.content, item)
 
 
 const_obj = object()
@@ -446,10 +557,14 @@ class DOnion:
         value = self.kernel.compute(*args, **kwargs)
         while hasattr(value, "compute"):
             value = value.compute(*args, **kwargs)
+        if type(value) is Box:
+            value = value.content
         return value
 
     def compute_once(self, *args, **kwargs):
         value = self.kernel.compute(*args, **kwargs)
+        if type(value) is Box:
+            value = value.content
         return value
 
     def persist(self, *args, **kwargs):
@@ -493,25 +608,42 @@ class DOnion:
 
     def deep_extract(self, out_meta, func, *args, **kwargs):
         func = flexible_partial(func, *args, **kwargs)
+        if not isinstance(out_meta, (gb.base.BaseType, gb.mask.Mask, gb.matrix.TransposedMatrix)):
+            func = compose(Box, func)
         kernel = self.kernel.map_blocks(func, **_const0_DOnion)
         return DOnion(kernel, meta=out_meta)
 
+    def __call__(self, *args, **kwargs):
+        meta = self._meta(*args, **kwargs)
+        return self.getattr(meta, '__call__', *args, **kwargs)
+        
     def __getattr__(self, item):
         # TODO: how to compute meta of attribute?!!!
         meta = getattr(self._meta, item)
         _getattr = flexible_partial(getattr, skip, item)
         return self.deep_extract(meta, _getattr)
 
-    def getattr(self, meta, name, *args, **kwargs):
-        _getattr = flexible_partial(DOnion._getattr, skip, name, *args, **kwargs)
+    def getattr(self, meta, attr_name, *args, **kwargs):
+        _getattr = flexible_partial(DOnion._getattr, skip, attr_name, *args, **kwargs)
         return self.deep_extract(meta, _getattr)
 
     @classmethod
-    def _getattr(cls, x, name, *args, **kwargs):
-        return getattr(x, name)(*args, **kwargs)
+    def _getattr(cls, x, attr_name, *args, **kwargs):
+        return getattr(x, attr_name)(*args, **kwargs)
 
 
 is_DOnion = partial(is_type, DOnion)
+
+
+def like_DOnion(what):
+    return (
+        is_DOnion(what)
+        or isinstance(what, BaseType) and is_DOnion(what._delayed)
+        or hasattr(what, '_matrix') and is_DOnion(what._matrix)
+        or hasattr(what, 'parent') and is_DOnion(what.parent)
+        or hasattr(what, 'mask') and is_DOnion(what.mask)
+        or hasattr(what, '_donion') and is_DOnion(what._donion)
+    )
 
 
 # Dask task functions

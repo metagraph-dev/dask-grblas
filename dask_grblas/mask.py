@@ -7,11 +7,13 @@ class Mask:
     value = False
 
     def __init__(self, mask):
-        from . import matrix, vector
+        from . import matrix, vector, base
 
         assert type(mask) in {vector.Vector, matrix.Matrix}
         self.mask = mask
         self._meta = get_grblas_type(self)(mask._meta)
+        if base.is_DOnion(mask._delayed):
+            self.mask = mask._delayed.deep_extract(self._meta, self.__class__)
 
 
 class StructuralMask(Mask):

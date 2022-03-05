@@ -230,7 +230,8 @@ class PythonScalar:
     def compute(self, *args, **kwargs):
         innerval = self._delayed.compute(*args, **kwargs)
         if type(self._delayed) is DOnion:
-            return innerval
+            return innerval.value if hasattr(innerval, 'value') else innerval
+            
         return innerval.value.value
 
 
