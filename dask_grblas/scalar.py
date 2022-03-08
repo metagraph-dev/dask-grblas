@@ -64,7 +64,7 @@ class Scalar(BaseType):
 
     @classmethod
     def new(cls, dtype, *, name=None):
-        return new(cls, dtype, name=None)
+        return new(cls, dtype, name=name)
 
     def __init__(self, delayed, meta=None):
         assert type(delayed) is da.Array, type(delayed)
@@ -180,6 +180,17 @@ class Scalar(BaseType):
 
     def clear(self):
         self._delayed = self.new(self.dtype)._delayed
+
+    def _as_vector(self):
+        """Copy this Scalar to a Vector
+        In the future, we may _cast_ instead of _copy_ when using SuiteSparse.
+        """
+        from .vector import Vector
+
+        rv = Vector.new(self.dtype, size=1)
+        if not self.is_empty:
+            rv[0] = self
+        return rv
 
     @property
     def value(self):

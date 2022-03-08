@@ -4,6 +4,7 @@ import grblas as gb
 import pytest
 from grblas import dtypes
 from pytest import raises
+import dask.array as da
 
 import dask_grblas as dgb
 
@@ -91,6 +92,42 @@ def test_new():
     compare(lambda x: x.shape, v, dv, compute=False)
     o = object()
     compare(lambda x, y: type(x).new(y), (v, o), (dv, o), errors=True)
+
+
+def test_from_values():
+    n = 100
+    I = da.arange(n, chunks=10)
+    f = lambda module, arr: module.Vector.from_values(arr, arr, name="arange")
+    compare(f, (gb, I.compute()), (dgb, I))
+
+    I = [0, 1, 3, 4, 5]
+    V = [1.0, 2.0, 3.0, -4.0, 0.0]
+    I_da = da.from_array(I, chunks=3)
+    V_da = da.from_array(V, chunks=2)
+    f = lambda module, i, v, kwargs: module.Vector.from_values(
+        i, v, name="test-from-values", **kwargs
+    )
+    compare(f, (gb, I, V, {}), (dgb, I_da, V_da, {}))
+    compare(f, (gb, I, V, {}), (dgb, I_da, V_da, {"chunks": 3}))
+
+
+def test_to_values(vs, ws):
+    (v, dvs) = vs
+    (w, dws) = ws
+
+    def f0(v):
+        return v.to_values()[0]
+
+    def f1(v):
+        return v.to_values()[1]
+
+    for dv in dvs:
+        compare(f0, v, dv)
+        compare(f1, v, dv)
+
+    for dw in dws:
+        compare(f0, w, dw)
+        compare(f1, w, dw)
 
 
 def test_dup(vs):
@@ -372,9 +409,9 @@ def test_extract(vs, ws, vms, sms):
     sm, dsms = sms
 
     for index in [
+        slice(None),
         [0, 3, 1, 4, 2, 5],
         [0, 5, 5, 1, 2, 0],
-        slice(None),
         slice(None, None, -1),
         [0] * 6,
     ]:
@@ -666,6 +703,326 @@ def test_extract(vs, ws, vms, sms):
 
 
 @pytest.mark.slow
+def test_extract_da(vs, ws, vms, sms):
+    v, dvs = vs
+    w, dws = ws
+    vm, dvms = vms
+    sm, dsms = sms
+
+    index1_da = da.from_array([0, 3, 1, 4, 2, 5], chunks=((2, 2, 2),))
+    index2_da = da.from_array([0, 5, 5, 1, 2, 0], chunks=((2, 2, 2),))
+    index3_da = da.from_array([0] * 6, chunks=((2, 2, 2),))
+
+    for index in [
+        index1_da,
+        index2_da,
+        index3_da,
+    ]:
+        ind = index.compute()
+
+        def f1(x, y, index):
+            x << y[index]
+            return x
+
+        def f2(x, y, index):
+            x() << y[index]
+            return x
+
+        def g1(m, x, y, index):
+            x(mask=m) << y[index]
+            return x
+
+        def g2(x, y, index):
+            x(accum=gb.binary.plus) << y[index]
+            return x
+
+        def g3(x, y, index):
+            x(replace=True) << y[index]
+            return x
+
+        def g4(x, y, index):
+            x(replace=False) << y[index]
+            return x
+
+        def h1(x, y, index):
+            x(accum=gb.binary.plus, replace=True) << y[index]
+            return x
+
+        def h2(x, y, index):
+            x(accum=gb.binary.plus, replace=False) << y[index]
+            return x
+
+        def h3(m, x, y, index):
+            x(mask=m, replace=True) << y[index]
+            return x
+
+        def h4(m, x, y, index):
+            x(mask=m, replace=False) << y[index]
+            return x
+
+        def h5(m, x, y, index):
+            x(mask=m, accum=gb.binary.plus) << y[index]
+            return x
+
+        def i1(m, x, y, index):
+            x(mask=m, accum=gb.binary.plus, replace=True) << y[index]
+            return x
+
+        def i2(m, x, y, index):
+            x(mask=m, accum=gb.binary.plus, replace=False) << y[index]
+            return x
+
+        for dv in dvs:
+            compare(lambda x, index: x[index].new(), (v, ind), (dv, index))
+            compare(lambda x, index: x[index].new(dtype=float), (v, ind), (dv, index))
+            for dw in dws:
+                compare(f1, (v.dup(), w, ind), (dv.dup(), dw, index))
+                compare(f1, (v.dup(dtype=float), w, ind), (dv.dup(dtype=float), dw, index))
+                compare(f2, (v.dup(), w, ind), (dv.dup(), dw, index))
+                compare(f2, (v.dup(dtype=float), w, ind), (dv.dup(dtype=float), dw, index))
+                compare(g2, (v.dup(), w, ind), (dv.dup(), dw, index))
+                compare(g2, (v.dup(dtype=float), w, ind), (dv.dup(dtype=float), dw, index))
+                compare(g3, (v.dup(), w, ind), (dv.dup(), dw, index), errors=True)
+                compare(
+                    g3, (v.dup(dtype=float), w, ind), (dv.dup(dtype=float), dw, index), errors=True
+                )
+                compare(g4, (v.dup(), w, ind), (dv.dup(), dw, index))
+                compare(g4, (v.dup(dtype=float), w, ind), (dv.dup(dtype=float), dw, index))
+                compare(h1, (v.dup(), w, ind), (dv.dup(), dw, index), errors=True)
+                compare(
+                    h1, (v.dup(dtype=float), w, ind), (dv.dup(dtype=float), dw, index), errors=True
+                )
+                compare(h2, (v.dup(), w, ind), (dv.dup(), dw, index))
+                compare(h2, (v.dup(dtype=float), w, ind), (dv.dup(dtype=float), dw, index))
+                for dvm in dvms:
+                    compare(g1, (vm.V, v.dup(), w, ind), (dvm.V, dv.dup(), dw, index))
+                    compare(
+                        g1,
+                        (vm.V, v.dup(dtype=float), w, ind),
+                        (dvm.V, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m), (vm.V, w, ind), (dvm.V, dw, index)
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, dtype=float),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                    )
+                    compare(h3, (vm.V, v.dup(), w, ind), (dvm.V, dv.dup(), dw, index))
+                    compare(
+                        h3,
+                        (vm.V, v.dup(dtype=float), w, ind),
+                        (dvm.V, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=True),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=True, dtype=float),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(h4, (vm.V, v.dup(), w, ind), (dvm.V, dv.dup(), dw, index))
+                    compare(
+                        h4,
+                        (vm.V, v.dup(dtype=float), w, ind),
+                        (dvm.V, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=False),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=False, dtype=float),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(h5, (vm.V, v.dup(), w, ind), (dvm.V, dv.dup(), dw, index))
+                    compare(
+                        h5,
+                        (vm.V, v.dup(dtype=float), w, ind),
+                        (dvm.V, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, accum=gb.binary.plus),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, accum=gb.binary.plus, dtype=float),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(i1, (vm.V, v.dup(), w, ind), (dvm.V, dv.dup(), dw, index))
+                    compare(
+                        i1,
+                        (vm.V, v.dup(dtype=float), w, ind),
+                        (dvm.V, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=True
+                        ),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=True, dtype=float
+                        ),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(i2, (vm.V, v.dup(), w, ind), (dvm.V, dv.dup(), dw, index))
+                    compare(
+                        i2,
+                        (vm.V, v.dup(dtype=float), w, ind),
+                        (dvm.V, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=False
+                        ),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=False, dtype=float
+                        ),
+                        (vm.V, w, ind),
+                        (dvm.V, dw, index),
+                        errors=True,
+                    )
+                for dsm in dsms:
+                    compare(g1, (sm.S, v.dup(), w, ind), (dsm.S, dv.dup(), dw, index))
+                    compare(
+                        g1,
+                        (sm.S, v.dup(dtype=float), w, ind),
+                        (dsm.S, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m), (sm.S, w, ind), (dsm.S, dw, index)
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, dtype=float),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                    )
+                    compare(h3, (sm.S, v.dup(), w, ind), (dsm.S, dv.dup(), dw, index))
+                    compare(
+                        h3,
+                        (sm.S, v.dup(dtype=float), w, ind),
+                        (dsm.S, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=True),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=True, dtype=float),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(h4, (sm.S, v.dup(), w, ind), (dsm.S, dv.dup(), dw, index))
+                    compare(
+                        h4,
+                        (sm.S, v.dup(dtype=float), w, ind),
+                        (dsm.S, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=False),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, replace=False, dtype=float),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(h5, (sm.S, v.dup(), w, ind), (dsm.S, dv.dup(), dw, index))
+                    compare(
+                        h5,
+                        (sm.S, v.dup(dtype=float), w, ind),
+                        (dsm.S, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, accum=gb.binary.plus),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(mask=m, accum=gb.binary.plus, dtype=float),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(i1, (sm.S, v.dup(), w, ind), (dsm.S, dv.dup(), dw, index))
+                    compare(
+                        i1,
+                        (sm.S, v.dup(dtype=float), w, ind),
+                        (dsm.S, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=True
+                        ),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=True, dtype=float
+                        ),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(i2, (sm.S, v.dup(), w, ind), (dsm.S, dv.dup(), dw, index))
+                    compare(
+                        i2,
+                        (sm.S, v.dup(dtype=float), w, ind),
+                        (dsm.S, dv.dup(dtype=float), dw, index),
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=False
+                        ),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+                    compare(
+                        lambda m, x, index: x[index].new(
+                            mask=m, accum=gb.binary.plus, replace=False, dtype=float
+                        ),
+                        (sm.S, w, ind),
+                        (dsm.S, dw, index),
+                        errors=True,
+                    )
+
+
+@pytest.mark.slow
 def test_subassign(vs, ws, vms, sms):
 
     test_replace_true = True
@@ -683,7 +1040,14 @@ def test_subassign(vs, ws, vms, sms):
             return ~mask
         return mask
 
+    index1_da = da.from_array([0, 3, 1, 4, 2, 5], chunks=((2, 2, 2),))
+    index2_da = da.from_array([0, 5, 5, 1, 2, 0], chunks=((2, 2, 2),))
+    index3_da = da.from_array([0] * 6, chunks=((2, 2, 2),))
+
     for index in [
+        index1_da,
+        index2_da,
+        index3_da,
         [0, 3, 1, 4, 2, 5],
         [0, 5, 5, 1, 2, 0],
         slice(None),
@@ -692,51 +1056,111 @@ def test_subassign(vs, ws, vms, sms):
     ]:
 
         def f2(x, y):
-            x[index]() << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind]() << y
             return x
 
         def g1(m, x, y):
-            x[index](mask=m) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](mask=m) << y
             return x
 
         def g2(x, y):
-            x[index](accum=gb.binary.plus) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](accum=gb.binary.plus) << y
             return x
 
         def g3(x, y):
-            x[index](replace=True) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](replace=True) << y
             return x
 
         def g4(x, y):
-            x[index](replace=False) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](replace=False) << y
             return x
 
         def h1(x, y):
-            x[index](accum=gb.binary.plus, replace=True) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](accum=gb.binary.plus, replace=True) << y
             return x
 
         def h2(x, y):
-            x[index](accum=gb.binary.plus, replace=False) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](accum=gb.binary.plus, replace=False) << y
             return x
 
         def h3(m, x, y):
-            x[index](mask=m, replace=test_replace_true) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](mask=m, replace=test_replace_true) << y
             return x
 
         def h4(m, x, y):
-            x[index](mask=m, replace=False) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](mask=m, replace=False) << y
             return x
 
         def h5(m, x, y):
-            x[index](mask=m, accum=gb.binary.plus) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](mask=m, accum=gb.binary.plus) << y
             return x
 
         def i1(m, x, y):
-            x[index](mask=m, accum=gb.binary.plus, replace=test_replace_true) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](mask=m, accum=gb.binary.plus, replace=test_replace_true) << y
             return x
 
         def i2(m, x, y):
-            x[index](mask=m, accum=gb.binary.plus, replace=False) << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind](mask=m, accum=gb.binary.plus, replace=False) << y
             return x
 
         for dv in dvs:
@@ -887,73 +1311,147 @@ def test_assign(vs, ws, vms, sms):
     vm, dvms = vms
     sm, dsms = sms
 
+    gb_s = gb.Scalar.from_value(9)
+    dgb_s = dgb.Scalar.from_value(9)
     scalars = (1, 1.0)
-    gws = (gw,) * len(dws) + scalars
-    dws = dws + scalars
+    gws = (gw,) * len(dws) + scalars + (gb_s,)
+    dws = dws + scalars + (dgb_s,)
 
     def inv_if(mask, is_inv=False):
         if is_inv:
             return ~mask
         return mask
 
+    index1_da = da.from_array([0, 3, 1, 4, 2, 5], chunks=((2, 2, 2),))
+    index2_da = da.from_array([0, 5, 5, 1, 2, 0], chunks=((2, 2, 2),))
+    index3_da = da.from_array([0] * 6, chunks=((2, 2, 2),))
+
     for index in [
+        index1_da,
+        index2_da,
+        index3_da,
+        [0] * 6,
+        slice(None, None, -1),
+        slice(None),
         [0, 3, 1, 4, 2, 5],
         [0, 5, 5, 1, 2, 0],
-        slice(None),
-        slice(None, None, -1),
-        [0] * 6,
     ]:
 
         def f1(x, y):
-            x[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x[ind] << y
             return x
 
         def f2(x, y):
-            x()[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x()[ind] << y
             return x
 
         def g1(m, x, y):
-            x(mask=m)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(mask=m)[ind] << y
             return x
 
         def g2(x, y):
-            x(accum=gb.binary.plus)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(accum=gb.binary.plus)[ind] << y
             return x
 
         def g3(x, y):
-            x(replace=True)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(replace=True)[ind] << y
             return x
 
         def g4(x, y):
-            x(replace=False)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(replace=False)[ind] << y
             return x
 
         def h1(x, y):
-            x(accum=gb.binary.plus, replace=True)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(accum=gb.binary.plus, replace=True)[ind] << y
             return x
 
         def h2(x, y):
-            x(accum=gb.binary.plus, replace=False)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(accum=gb.binary.plus, replace=False)[ind] << y
             return x
 
         def h3(m, x, y):
-            x(mask=m, replace=test_replace_true)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(mask=m, replace=test_replace_true)[ind] << y
             return x
 
         def h4(m, x, y):
-            x(mask=m, replace=False)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(mask=m, replace=False)[ind] << y
             return x
 
         def h5(m, x, y):
-            x(mask=m, accum=gb.binary.plus)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(mask=m, accum=gb.binary.plus)[ind] << y
             return x
 
         def i1(m, x, y):
-            x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[ind] << y
             return x
 
         def i2(m, x, y):
-            x(mask=m, accum=gb.binary.plus, replace=False)[index] << y
+            ind = (
+                index.compute()
+                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                else index
+            )
+            x(mask=m, accum=gb.binary.plus, replace=False)[ind] << y
             return x
 
         for dv in dvs:
@@ -962,6 +1460,293 @@ def test_assign(vs, ws, vms, sms):
                 compare(f1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(f2, (v.dup(), w), (dv.dup(), dw))
                 compare(f2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(g2, (v.dup(), w), (dv.dup(), dw))
+                compare(g2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(g3, (v.dup(), w), (dv.dup(), dw), errors=True)
+                compare(g3, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
+                compare(g4, (v.dup(), w), (dv.dup(), dw))
+                compare(g4, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                compare(h1, (v.dup(), w), (dv.dup(), dw), errors=True)
+                compare(h1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw), errors=True)
+                compare(h2, (v.dup(), w), (dv.dup(), dw))
+                compare(h2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
+                for is_inv in [False, True]:
+                    for dvm in dvms:
+                        compare(
+                            g1,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            g1,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h3,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h3,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(vm.V, is_inv), v.dup(), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(vm.V, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dvm.V, is_inv), dv.dup(dtype=float), dw),
+                        )
+                    for dsm in dsms:
+                        compare(
+                            g1,
+                            (inv_if(sm.S, is_inv), v.dup(), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            g1,
+                            (inv_if(sm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h3,
+                            (inv_if(sm.S, is_inv), v.dup(), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h3,
+                            (inv_if(sm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(sm.S, is_inv), v.dup(), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h4,
+                            (inv_if(sm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(sm.S, is_inv), v.dup(), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            h5,
+                            (inv_if(sm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(sm.S, is_inv), v.dup(), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i1,
+                            (inv_if(sm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(sm.S, is_inv), v.dup(), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(), dw),
+                        )
+                        compare(
+                            i2,
+                            (inv_if(sm.S, is_inv), v.dup(dtype=float), w),
+                            (inv_if(dsm.S, is_inv), dv.dup(dtype=float), dw),
+                        )
+
+
+def test_reduce_assign(vs, ws, vms, sms):
+
+    test_replace_true = True
+    v, dvs = vs
+    gw, dws = ws
+    vm, dvms = vms
+    sm, dsms = sms
+
+    gb_s = gb.Scalar.from_value(9)
+    dgb_s = dgb.Scalar.from_value(9)
+    scalars = (1, 1.0)
+    gws = (gw,) * len(dws) + scalars + (gb_s,)
+    dws = dws + scalars + (dgb_s,)
+
+    def inv_if(mask, is_inv=False):
+        if is_inv:
+            return ~mask
+        return mask
+
+    index1_da = da.from_array([0, 3, 1, 4, 2, 5], chunks=((2, 2, 2),))
+    index2_da = da.from_array([0, 5, 5, 1, 2, 0], chunks=((2, 2, 2),))
+    index3_da = da.from_array([0] * 6, chunks=((2, 2, 2),))
+
+    for index in [
+        [0, 3, 1, 4, 2, 5],
+        [0, 5, 5, 1, 2, 0],
+        [0] * 6,
+        slice(None),
+        slice(None, None, -1),
+        index1_da,
+        index2_da,
+        index3_da,
+    ]:
+
+        def f1(x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last")
+            return x
+
+        def g1(m, x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(mask=m)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op="last")
+            return x
+
+        def g2(x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(accum=gb.binary.plus)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, accum=gb.binary.plus, dup_op="last")
+            return x
+
+        def g3(x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(replace=True)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last", replace=True)
+            return x
+
+        def g4(x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(replace=False)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last", replace=False)
+            return x
+
+        def h1(x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(accum=gb.binary.plus, replace=True)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, dup_op="last", accum=gb.binary.plus, replace=True)
+            return x
+
+        def h2(x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(accum=gb.binary.plus, replace=False)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(
+                    x, ind, y, dup_op="last", accum=gb.binary.plus, replace=False
+                )
+            return x
+
+        def h3(m, x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(mask=m, replace=True)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op="last", replace=True)
+            return x
+
+        def h4(m, x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(mask=m, replace=False)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, mask=m, dup_op="last", replace=False)
+            return x
+
+        def h5(m, x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(mask=m, accum=gb.binary.plus)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(x, ind, y, mask=m, accum=gb.binary.plus, dup_op="last")
+            return x
+
+        def i1(m, x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(mask=m, accum=gb.binary.plus, replace=True)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(
+                    x, ind, y, mask=m, accum=gb.binary.plus, replace=True, dup_op="last"
+                )
+            return x
+
+        def i2(m, x, y):
+            if isinstance(x, gb.base.BaseType):
+                ind = index.compute() if type(index) is da.core.Array else index
+                x(mask=m, accum=gb.binary.plus, replace=False)[ind] << y
+            else:
+                ind = index
+                dgb.expr.reduce_assign(
+                    x, ind, y, mask=m, accum=gb.binary.plus, replace=False, dup_op="last"
+                )
+            return x
+
+        for dv in dvs:
+            for w, dw in zip(gws, dws):
+                compare(f1, (v.dup(), w), (dv.dup(), dw))
+                compare(f1, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(g2, (v.dup(), w), (dv.dup(), dw))
                 compare(g2, (v.dup(dtype=float), w), (dv.dup(dtype=float), dw))
                 compare(g3, (v.dup(), w), (dv.dup(), dw), errors=True)

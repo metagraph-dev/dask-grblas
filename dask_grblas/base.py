@@ -1,3 +1,4 @@
+from numbers import Number
 import dask.array as da
 import grblas as gb
 import numpy as np
@@ -8,6 +9,18 @@ from .mask import Mask
 from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
 
 _expect_type = gb.base._expect_type
+
+
+def _check_mask(mask, output=None):
+    if not isinstance(mask, Mask):
+        if isinstance(mask, BaseType):
+            raise TypeError("Mask must indicate values (M.V) or structure (M.S)")
+        raise TypeError(f"Invalid mask: {type(mask)}")
+    if output is not None:
+        from .vector import Vector
+
+        if type(output) is Vector and type(mask.mask) is not Vector:
+            raise TypeError(f"Mask object must be type Vector; got {type(mask.mask)}")
 
 
 class InnerBaseType:
@@ -82,10 +95,19 @@ class BaseType:
         # Should we copy and mutate or simply create new chunks?
         delayed = self._optional_dup()
         # for a function like this, what's the difference between `map_blocks` and `elemwise`?
-        self._delayed = delayed.map_blocks(
-            _clear,
-            dtype=np_dtype(self.dtype),
-        )
+        if self.ndim == 0:
+            self._delayed = delayed.map_blocks(
+                _clear,
+                dtype=np_dtype(self.dtype),
+            )
+        else:
+            self.__init__(
+                delayed.map_blocks(
+                    _clear,
+                    dtype=np_dtype(self.dtype),
+                ),
+                nvals=0,
+            )
 
     def dup(self, dtype=None, *, mask=None, name=None):
         if mask is not None:
@@ -103,7 +125,15 @@ class BaseType:
             get_grblas_type(mask) if mask is not None else None,
             dtype=np_dtype(meta.dtype),
         )
-        return type(self)(delayed)
+        if self.ndim > 0:
+            if mask is None or self._nvals == 0:
+                nvals = self._nvals
+            else:
+                nvals = None
+
+            return type(self)(delayed, nvals=nvals)
+        else:
+            return type(self)(delayed)
 
     def __lshift__(self, expr):
         self.update(expr)
@@ -134,6 +164,7 @@ class BaseType:
             raise TypeError("Got multiple values for argument 'mask'")
         if mask_arg is not None:
             mask = mask_arg
+            _check_mask(mask)
         if accum_arg is not None:
             if accum is not None:
                 raise TypeError("Got multiple values for argument 'accum'")
@@ -164,6 +195,17 @@ class BaseType:
             dtype=self._delayed.dtype,
         )
 
+    def compute_and_store_nvals(self):
+        """
+        compute and store the number of values of this Vector/Matrix
+
+        This could be useful to increase the performance of Aggregators
+        which inspect ._nvals to determine if a fast path can be taken
+        to compute the aggregation result.
+        """
+        self._nvals = self.nvals.compute()
+        return self._nvals
+
     @property
     def nvals(self):
         from .scalar import PythonScalar
@@ -189,7 +231,27 @@ class BaseType:
     def name(self, value):
         self._meta.name = value
 
+    @property
+    def _name_html(self):
+        """Treat characters after _ as subscript"""
+        split = self.name.split("_", 1)
+        if len(split) == 1:
+            return self.name
+        return f"{split[0]}<sub>{split[1]}</sub>"
+
     def update(self, expr):
+        if isinstance(expr, Number):
+            if self.ndim == 2:
+                raise TypeError(
+                    "Warning: updating a Matrix with a scalar without a mask will "
+                    "make the Matrix dense.  This may use a lot of memory and probably "
+                    "isn't what you want.  Perhaps you meant:"
+                    "\n\n    M(M.S) << s\n\n"
+                    "If you do wish to make a dense matrix, then please be explicit:"
+                    "\n\n    M[:, :] = s"
+                )
+            Updater(self)[...] << expr
+            return
         self._meta.update(expr._meta)
         self._meta.clear()
         typ = type(expr)
@@ -197,17 +259,19 @@ class BaseType:
             # Extract (w << v[index])
             # Is it safe/reasonable to simply replace `_delayed`?
             # Should we try to preserve e.g. format or partitions?
-            self._delayed = expr.new(dtype=self.dtype)._delayed
+            self.__init__(expr.new(dtype=self.dtype)._delayed)
         elif typ is type(self):
             # Simple assignment (w << v)
             if self.dtype == expr.dtype:
-                self._delayed = expr._optional_dup()
+                self.__init__(expr._optional_dup())
             else:
-                self._delayed = expr.dup(dtype=self.dtype)._delayed
+                self.__init__(expr.dup(dtype=self.dtype)._delayed)
         elif typ is GbDelayed:
             expr._update(self)
         elif typ is TransposedMatrix:
-            raise NotImplementedError("C << A.T")
+            # "C << A.T"
+            C = expr.new()
+            self.__init__(C._delayed)
         else:
             # Anything else we need to handle?
             raise TypeError()
@@ -228,15 +292,17 @@ class BaseType:
             else:
                 delayed_mask = None
                 grblas_mask_type = None
-            self._delayed = da.core.elemwise(
-                _update_assign,
-                delayed,
-                accum,
-                delayed_mask,
-                grblas_mask_type,
-                replace,
-                expr_delayed,
-                dtype=np_dtype(self._meta.dtype),
+            self.__init__(
+                da.core.elemwise(
+                    _update_assign,
+                    delayed,
+                    accum,
+                    delayed_mask,
+                    grblas_mask_type,
+                    replace,
+                    expr_delayed,
+                    dtype=np_dtype(self._meta.dtype),
+                )
             )
         elif typ is GbDelayed:
             # v(mask=mask) << left.ewise_mult(right)
@@ -252,15 +318,17 @@ class BaseType:
             else:
                 delayed_mask = None
                 grblas_mask_type = None
-            self._delayed = da.core.elemwise(
-                _update_assign,
-                delayed,
-                accum,
-                delayed_mask,
-                grblas_mask_type,
-                replace,
-                expr._delayed,
-                dtype=np_dtype(self._meta.dtype),
+            self.__init__(
+                da.core.elemwise(
+                    _update_assign,
+                    delayed,
+                    accum,
+                    delayed_mask,
+                    grblas_mask_type,
+                    replace,
+                    expr._delayed,
+                    dtype=np_dtype(self._meta.dtype),
+                )
             )
         else:
             raise NotImplementedError(f"{typ}")

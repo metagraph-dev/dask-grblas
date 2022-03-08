@@ -4,6 +4,7 @@ from grblas import binary, dtypes, monoid, semiring, unary
 from grblas.exceptions import IndexOutOfBound, OutputNotEmpty
 
 from dask_grblas import Matrix, Scalar, Vector
+import dask.array as da
 
 
 @pytest.fixture
@@ -120,8 +121,9 @@ def test_build(v):
 
 def test_extract_values(v):
     idx, vals = v.to_values()
-    assert idx.tolist() == [1, 3, 4, 6]
-    assert vals.tolist() == [1, 1, 2, 0]
+    assert idx.compute().tolist() == [1, 3, 4, 6]
+    assert vals.compute().tolist() == [1, 1, 2, 0]
+    assert idx[1].compute() == 3
 
 
 def test_extract_element(v):
@@ -140,8 +142,8 @@ def test_set_element(v):
 
 def test_remove_element(v):
     assert v[1].value == 1
-    ### del v[1]
-    ### assert v[1].value.compute() is None
+    del v[1]
+    assert v[1].value.compute() is None
     assert v[4].value == 2
     with pytest.raises(TypeError, match="Remove Element only supports"):
         del v[1:3]
@@ -268,6 +270,35 @@ def test_extract(v):
     assert w.isequal(result)
     w2 = v[1::2].new()
     assert w2.isequal(w)
+    lazy = da.from_array(np.array([1, 3, 5]), chunks=3)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
+    lazy = da.from_array(np.array([1, 3, 5]), chunks=2)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
+
+    # reverse index order:
+    result = Vector.from_values([1, 2], [1, 1], size=3)
+    w << v[[5, 3, 1]]
+    assert w.isequal(result)
+    w() << v[5::-2]
+    assert w.isequal(result)
+    w2 = v[5::-2].new()
+    assert w2.isequal(w)
+    lazy = da.from_array(np.array([5, 3, 1]), chunks=3)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
+    lazy = da.from_array(np.array([5, 3, 1]), chunks=2)
+    w << v[lazy]
+    assert w.isequal(result)
+    w = v[lazy].new()
+    assert w.isequal(result)
 
 
 def test_extract_fancy_scalars(v):
@@ -309,6 +340,13 @@ def test_assign(v):
     assert w.isequal(result)
     w = v.dup()
     w[:5:2] << u
+    assert w.isequal(result)
+
+    u_lazy = da.from_array(np.array([0, 2, 4]), chunks=3)
+    w[u_lazy] = u
+    assert w.isequal(result)
+    u_lazy = da.from_array(np.array([0, 2, 4]), chunks=2)
+    w[u_lazy] = u
     assert w.isequal(result)
 
 
