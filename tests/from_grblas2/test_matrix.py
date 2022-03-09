@@ -23,7 +23,7 @@ from numpy.testing import assert_array_equal
 from .conftest import autocompute, compute
 
 from dask_grblas import Matrix, Scalar, Vector  # isort:skip
-from dask_grblas.base import is_DOnion
+from dask_grblas.base import is_DOnion, like_DOnion
 
 
 @pytest.fixture
@@ -119,10 +119,7 @@ def test_dup(As, A_chunks):
     Ds = [Matrix.from_values([0, 1], [0, 1], [0, 2.5], dtype=dtypes.FP64)]
     Ds.append(
         Matrix.from_values(
-            da.from_array([0, 1]),
-            da.from_array([0, 1]),
-            da.from_array([0, 2.5]),
-            dtype=dtypes.FP64
+            da.from_array([0, 1]), da.from_array([0, 1]), da.from_array([0, 2.5]), dtype=dtypes.FP64
         )
     )
     for D_ in Ds:
@@ -134,9 +131,13 @@ def test_dup(As, A_chunks):
                 Matrix.from_values([0, 1], [0, 1], [0, 2], dtype=dtypes.INT64), check_dtype=True
             )
             E = D.dup(mask=D.V)
-            assert E.isequal(Matrix.from_values([1], [1], [2.5], dtype=dtypes.FP64), check_dtype=True)
+            assert E.isequal(
+                Matrix.from_values([1], [1], [2.5], dtype=dtypes.FP64), check_dtype=True
+            )
             E = D.dup(dtype=dtypes.INT64, mask=D.V)
-            assert E.isequal(Matrix.from_values([1], [1], [2], dtype=dtypes.INT64), check_dtype=True)
+            assert E.isequal(
+                Matrix.from_values([1], [1], [2], dtype=dtypes.INT64), check_dtype=True
+            )
 
 
 def test_from_values():
@@ -265,11 +266,13 @@ def test_from_values_dask():
 
 def test_from_values_scalar():
     Cs = [Matrix.from_values([0, 1, 3], [1, 1, 2], 7)]
-    Cs.append(Matrix.from_values(
-        da.from_array([0, 1, 3]),
-        da.from_array([1, 1, 2]),
-        7,
-    ))
+    Cs.append(
+        Matrix.from_values(
+            da.from_array([0, 1, 3]),
+            da.from_array([1, 1, 2]),
+            7,
+        )
+    )
     for C in Cs:
         assert C.nrows == 4
         assert C.ncols == 3
@@ -280,11 +283,13 @@ def test_from_values_scalar():
 
     # iso drumps duplicates
     C = Matrix.from_values([0, 1, 3, 0], [1, 1, 2, 1], 7)
-    Cs.append(Matrix.from_values(
-        da.from_array([0, 1, 3, 0]),
-        da.from_array([1, 1, 2, 1]),
-        7,
-    ))
+    Cs.append(
+        Matrix.from_values(
+            da.from_array([0, 1, 3, 0]),
+            da.from_array([1, 1, 2, 1]),
+            7,
+        )
+    )
     for C in Cs:
         assert C.nrows == 4
         assert C.ncols == 3
@@ -336,9 +341,10 @@ def test_resize(As, A_chunks):
             if type(A._delayed) is da.Array:
                 assert A._delayed.chunks == ((4, 2), (4, 4, 3))
             else:
-                assert A._delayed.deep_extract(
-                    None, lambda x: x._delayed.chunks
-                ) == ((4, 2), (4, 4, 3))
+                assert A._delayed.deep_extract(None, lambda x: x._delayed.chunks) == (
+                    (4, 2),
+                    (4, 4, 3),
+                )
             assert compute(A[3, 2].value) == 3
             assert compute(A[5, 7].value) is None
 
@@ -350,9 +356,10 @@ def test_resize(As, A_chunks):
             if type(A._delayed) is da.Array:
                 assert A._delayed.chunks == ((4, 4, 3), (3,))
             else:
-                assert A._delayed.deep_extract(
-                    None, lambda x: x._delayed.chunks
-                ) == ((4, 4, 3), (3,))
+                assert A._delayed.deep_extract(None, lambda x: x._delayed.chunks) == (
+                    (4, 4, 3),
+                    (3,),
+                )
             assert compute(A[3, 2].value) == 3
             assert compute(A[7, 2].value) is None
 
@@ -589,7 +596,9 @@ def test_mxm_mask(As, A_chunks):
         for chunks in A_chunks:
             A = A_.dup()
             A.rechunk(chunks=chunks, inplace=True)
-            val_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7)
+            val_mask = Matrix.from_values(
+                [0, 3, 4], [2, 3, 2], [True, True, True], nrows=7, ncols=7
+            )
             struct_mask = Matrix.from_values([0, 3, 4], [2, 3, 2], [1, 0, 0], nrows=7, ncols=7)
             C = A.dup()
             C(val_mask.V) << A.mxm(A, semiring.plus_times)
@@ -747,266 +756,439 @@ def test_extract_column(As, A_chunks):
             assert w2.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_extract_input_mask():
     # A       M
     # 0 1 2   _ 0 1
     # 3 4 5   2 3 _
-    A = Matrix.from_values(
-        [0, 0, 0, 1, 1, 1],
-        [0, 1, 2, 0, 1, 2],
-        [0, 1, 2, 3, 4, 5],
-    )
-    M = Matrix.from_values(
-        [0, 0, 1, 1],
-        [1, 2, 0, 1],
-        [0, 1, 2, 3],
-    )
-    m = M[0, :].new()
-    MT = M.T.new()
-    # Matrix structure mask
-    result = A[0, [0, 1]].new(input_mask=M.S)
-    expected = Vector.from_values([1], [1])
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=M.S) << A[0, [0, 1]]
-    assert result.isequal(expected)
+    As = [
+        Matrix.from_values(
+            [0, 0, 0, 1, 1, 1],
+            [0, 1, 2, 0, 1, 2],
+            [0, 1, 2, 3, 4, 5],
+        )
+    ]
+    As += [
+        Matrix.from_values(
+            da.from_array([0, 0, 0, 1, 1, 1]),
+            da.from_array([0, 1, 2, 0, 1, 2]),
+            da.from_array([0, 1, 2, 3, 4, 5]),
+        )
+    ]
+    Ms = [
+        Matrix.from_values(
+            [0, 0, 1, 1],
+            [1, 2, 0, 1],
+            [0, 1, 2, 3],
+        )
+    ]
+    Ms += [
+        Matrix.from_values(
+            da.from_array([0, 0, 1, 1]),
+            da.from_array([1, 2, 0, 1]),
+            da.from_array([0, 1, 2, 3]),
+        )
+    ]
+    for A_ in As:
+        for M_ in Ms:
+            A = A_.dup()
+            M = M_.dup()
+            m = M[0, :].new()
+            MT = M.T.new()
+            # Matrix structure mask
+            result = A[0, [0, 1]].new(input_mask=M.S)
+            expected = Vector.from_values([1], [1])
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=M.S) << A[0, [0, 1]]
+            assert result.isequal(expected)
 
-    # Vector mask
-    result = A[0, [0, 1]].new(input_mask=m.S)
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=m.S) << A[0, [0, 1]]
-    assert result.isequal(expected)
+            # Vector mask
+            result = A[0, [0, 1]].new(input_mask=m.S)
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=m.S) << A[0, [0, 1]]
+            assert result.isequal(expected)
 
-    # Matrix value mask
-    result = A[0, [1, 2]].new(input_mask=M.V)
-    expected = Vector.from_values([1], [2], size=2)
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=M.V) << A[0, [1, 2]]
-    assert result.isequal(expected)
+            # Matrix value mask
+            result = A[0, [1, 2]].new(input_mask=M.V)
+            expected = Vector.from_values([1], [2], size=2)
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=M.V) << A[0, [1, 2]]
+            assert result.isequal(expected)
 
-    with pytest.raises(ValueError, match="Shape of `input_mask` does not match shape of input"):
-        A[0, [0, 1]].new(input_mask=MT.S)
-    with pytest.raises(ValueError, match="Shape of `input_mask` does not match shape of input"):
-        m(input_mask=MT.S) << A[0, [0, 1]]
-    with pytest.raises(
-        ValueError, match="Size of `input_mask` Vector does not match ncols of Matrix"
-    ):
-        A[0, [0]].new(input_mask=expected.S)
-    with pytest.raises(
-        ValueError, match="Size of `input_mask` Vector does not match ncols of Matrix"
-    ):
-        m(input_mask=expected.S) << A[0, [0]]
-    with pytest.raises(
-        ValueError, match="Size of `input_mask` Vector does not match nrows of Matrix"
-    ):
-        A[[0], 0].new(input_mask=m.S)
-    with pytest.raises(
-        ValueError, match="Size of `input_mask` Vector does not match nrows of Matrix"
-    ):
-        m(input_mask=m.S) << A[[0], 0]
-    with pytest.raises(
-        TypeError, match="Got Vector `input_mask` when extracting a submatrix from a Matrix"
-    ):
-        A[[0], [0]].new(input_mask=expected.S)
-    with pytest.raises(
-        TypeError, match="Got Vector `input_mask` when extracting a submatrix from a Matrix"
-    ):
-        A(input_mask=expected.S) << A[[0], [0]]
-    with pytest.raises(TypeError, match="mask is not allowed for single element extraction"):
-        A[0, 0].new(input_mask=M.S)
-    with pytest.raises(TypeError, match="mask and input_mask arguments cannot both be given"):
-        A[0, [0, 1]].new(input_mask=M.S, mask=expected.S)
-    with pytest.raises(TypeError, match="mask and input_mask arguments cannot both be given"):
-        A(input_mask=M.S, mask=expected.S)
-    with pytest.raises(TypeError, match=r"Mask must indicate values \(M.V\) or structure \(M.S\)"):
-        A[0, [0, 1]].new(input_mask=M)
-    with pytest.raises(TypeError, match=r"Mask must indicate values \(M.V\) or structure \(M.S\)"):
-        A(input_mask=M)
-    with pytest.raises(TypeError, match="Mask object must be type Vector"):
-        expected[[0, 1]].new(input_mask=M.S)
-    with pytest.raises(TypeError, match="Mask object must be type Vector"):
-        expected(input_mask=M.S) << expected[[0, 1]]
-    with pytest.raises(TypeError, match=r"new\(\) got an unexpected keyword argument 'input_mask'"):
-        A.new(input_mask=M.S)
-    with pytest.raises(TypeError, match="`input_mask` argument may only be used for extract"):
-        A(input_mask=M.S) << A.apply(unary.ainv)
-    with pytest.raises(TypeError, match="`input_mask` argument may only be used for extract"):
-        A(input_mask=M.S)[[0], [0]] = 1
-    with pytest.raises(TypeError, match="`input_mask` argument may only be used for extract"):
-        A(input_mask=M.S)[[0], [0]]
+            with pytest.raises(
+                ValueError, match="Shape of `input_mask` does not match shape of input"
+            ):
+                A[0, [0, 1]].new(input_mask=MT.S).compute()
+
+            with pytest.raises(
+                ValueError, match="Shape of `input_mask` does not match shape of input"
+            ):
+                m(input_mask=MT.S) << A[0, [0, 1]]
+                m.compute()
+
+            with pytest.raises(
+                ValueError, match="Size of `input_mask` Vector does not match ncols of Matrix"
+            ):
+                A[0, [0]].new(input_mask=expected.S).compute()
+
+            m = M[0, :].new()
+            with pytest.raises(
+                ValueError, match="Size of `input_mask` Vector does not match ncols of Matrix"
+            ):
+                m(input_mask=expected.S) << A[0, [0]]
+                m.compute()
+
+            m = M[0, :].new()
+            with pytest.raises(
+                ValueError, match="Size of `input_mask` Vector does not match nrows of Matrix"
+            ):
+                A[[0], 0].new(input_mask=m.S).compute()
+
+            m = M[0, :].new()
+            with pytest.raises(
+                ValueError, match="Size of `input_mask` Vector does not match nrows of Matrix"
+            ):
+                m(input_mask=m.S) << A[[0], 0]
+                m.compute()
+
+            with pytest.raises(
+                TypeError, match="Got Vector `input_mask` when extracting a submatrix from a Matrix"
+            ):
+                A[[0], [0]].new(input_mask=expected.S).compute()
+
+            with pytest.raises(
+                TypeError, match="Got Vector `input_mask` when extracting a submatrix from a Matrix"
+            ):
+                A(input_mask=expected.S) << A[[0], [0]]
+                A.compute()
+
+            A = A_.dup()
+            with pytest.raises(
+                TypeError, match="mask is not allowed for single element extraction"
+            ):
+                A[0, 0].new(input_mask=M.S).compute()
+
+            with pytest.raises(
+                TypeError, match="mask and input_mask arguments cannot both be given"
+            ):
+                A[0, [0, 1]].new(input_mask=M.S, mask=expected.S).compute()
+
+            with pytest.raises(
+                TypeError, match="mask and input_mask arguments cannot both be given"
+            ):
+                A(input_mask=M.S, mask=expected.S).compute()
+
+            with pytest.raises(
+                TypeError, match=r"Mask must indicate values \(M.V\) or structure \(M.S\)"
+            ):
+                A[0, [0, 1]].new(input_mask=M).compute()
+
+            with pytest.raises(
+                TypeError, match=r"Mask must indicate values \(M.V\) or structure \(M.S\)"
+            ):
+                A(input_mask=M).compute()
+
+            with pytest.raises(TypeError, match="Mask object must be type Vector"):
+                expected[[0, 1]].new(input_mask=M.S).compute()
+
+            with pytest.raises(TypeError, match="Mask object must be type Vector"):
+                expected(input_mask=M.S) << expected[[0, 1]]
+                expected.compute()
+
+            with pytest.raises(
+                TypeError, match=r"new\(\) got an unexpected keyword argument 'input_mask'"
+            ):
+                A.new(input_mask=M.S).compute()
+
+            with pytest.raises(
+                TypeError, match="`input_mask` argument may only be used for extract"
+            ):
+                A(input_mask=M.S) << A.apply(unary.ainv)
+                A.compute()
+
+            A = A_.dup()
+            with pytest.raises(
+                TypeError, match="`input_mask` argument may only be used for extract"
+            ):
+                A(input_mask=M.S)[[0], [0]] = 1
+                A.compute()
+
+            A = A_.dup()
+            with pytest.raises(
+                TypeError, match="`input_mask` argument may only be used for extract"
+            ):
+                A(input_mask=M.S)[[0], [0]]
+                A.compute()
+
+            A = A_.dup()
+            m = M[0, :].new()
+            # With transpose input value
+            # Matrix structure mask
+            result = A.T[[0, 1], 0].new(input_mask=MT.S)
+            expected = Vector.from_values([1], [1])
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=MT.S) << A.T[[0, 1], 0]
+            assert result.isequal(expected)
+
+            # Vector mask
+            result = A.T[[0, 1], 0].new(input_mask=m.S)
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=m.S) << A.T[[0, 1], 0]
+            assert result.isequal(expected)
+
+            # Matrix value mask
+            result = A.T[[1, 2], 0].new(input_mask=MT.V)
+            expected = Vector.from_values([1], [2], size=2)
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=MT.V) << A.T[[1, 2], 0]
+            assert result.isequal(expected)
 
     # With transpose input value
     # Matrix structure mask
-    result = A.T[[0, 1], 0].new(input_mask=MT.S)
-    expected = Vector.from_values([1], [1])
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=MT.S) << A.T[[0, 1], 0]
-    assert result.isequal(expected)
-
-    # Vector mask
-    result = A.T[[0, 1], 0].new(input_mask=m.S)
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=m.S) << A.T[[0, 1], 0]
-    assert result.isequal(expected)
-
-    # Matrix value mask
-    result = A.T[[1, 2], 0].new(input_mask=MT.V)
-    expected = Vector.from_values([1], [2], size=2)
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=MT.V) << A.T[[1, 2], 0]
-    assert result.isequal(expected)
-
-    # With transpose input value
-    # Matrix structure mask
-    A = Matrix.from_values(
-        [0, 0, 0, 1, 1, 1],
-        [0, 1, 2, 0, 1, 2],
-        [0, 1, 2, 3, 4, 5],
-    )
-    M = Matrix.from_values(
-        [0, 0, 1, 1],
-        [1, 2, 0, 1],
-        [0, 1, 2, 3],
-    )
-    A.rechunk(chunks=((1, 1), (2, 1)), inplace=True)
-    result = A.T[[0, 1], 0].new(input_mask=MT.S)
-    expected = Vector.from_values([1], [1])
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=MT.S) << A.T[[0, 1], 0]
-    assert result.isequal(expected)
-
-    # Vector mask
-    result = A.T[[0, 1], 0].new(input_mask=m.S)
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=m.S) << A.T[[0, 1], 0]
-    assert result.isequal(expected)
-
-    # Matrix value mask
-    result = A.T[[1, 2], 0].new(input_mask=MT.V)
-    expected = Vector.from_values([1], [2], size=2)
-    assert result.isequal(expected)
-    # again
-    result.clear()
-    result(input_mask=MT.V) << A.T[[1, 2], 0]
-    assert result.isequal(expected)
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_extract_with_matrix(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        with pytest.raises(TypeError, match="Invalid type for index"):
-            A[A.T, 1].new()
-        with pytest.raises(TypeError, match="Invalid type for index"):
-            A[A, [1]].new()
-        with pytest.raises(TypeError, match="Invalid type for index"):
-            A[[0], A.V].new()
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
-        result = Matrix.from_values(
-            [0, 0, 2, 3, 0, 3, 5, 6, 0, 6, 1, 6, 4, 1],
-            [0, 5, 0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6],
-            [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4],
+    As = [
+        Matrix.from_values(
+            [0, 0, 0, 1, 1, 1],
+            [0, 1, 2, 0, 1, 2],
+            [0, 1, 2, 3, 4, 5],
         )
-        C = A.dup()
-        C()[[0, 2], [0, 5]] = B
-        assert C.isequal(result)
-        C = A.dup()
-        C[:3:2, :6:5]() << B
-        assert C.isequal(result)
-        with pytest.raises(TypeError, match="will make the Matrix dense"):
-            C << 1
-        nvals = C.nvals
-        C(C.S) << 1
-        assert C.nvals == nvals
-        assert C.reduce_scalar().new() == nvals
-        with pytest.raises(TypeError, match="Invalid type for index"):
-            C[C, [1]] = C
-
-        B = B.T.new()
-        C = A.dup()
-        C()[[0, 2], [0, 5]] = B.T
-        assert C.isequal(result)
-        C = A.dup()
-        C[:3:2, :6:5]() << B.T
-        assert C.isequal(result)
-
-        B.rechunk(chunks=1)
-        C = A.dup()
-        C()[[0, 2], [0, 5]] = B.T
-        assert C.isequal(result)
-        C = A.dup()
-        C[:3:2, :6:5]() << B.T
-        assert C.isequal(result)
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign_wrong_dims(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
-        with pytest.raises(DimensionMismatch):
-            A[[0, 2, 4], [0, 5]] = B
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign_row(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result = Matrix.from_values(
-            [3, 3, 5, 6, 6, 1, 6, 2, 4, 1, 0, 0, 0, 0],
-            [0, 2, 2, 2, 3, 4, 4, 5, 5, 6, 1, 3, 4, 6],
-            [3, 3, 1, 5, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
+    ]
+    As += [
+        Matrix.from_values(
+            da.from_array([0, 0, 0, 1, 1, 1]),
+            da.from_array([0, 1, 2, 0, 1, 2]),
+            da.from_array([0, 1, 2, 3, 4, 5]),
         )
-        C = A.dup()
-        C[0, :] = v
-        assert C.isequal(result)
+    ]
+    Ms = [
+        Matrix.from_values(
+            [0, 0, 1, 1],
+            [1, 2, 0, 1],
+            [0, 1, 2, 3],
+        )
+    ]
+    Ms += [
+        Matrix.from_values(
+            da.from_array([0, 0, 1, 1]),
+            da.from_array([1, 2, 0, 1]),
+            da.from_array([0, 1, 2, 3]),
+        )
+    ]
+    for A_ in As:
+        for M_ in Ms:
+            A = A_.dup()
+            M = M_.dup()
+            A.rechunk(chunks=((1, 1), (2, 1)), inplace=True)
+            result = A.T[[0, 1], 0].new(input_mask=MT.S)
+            expected = Vector.from_values([1], [1])
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=MT.S) << A.T[[0, 1], 0]
+            assert result.isequal(expected)
+
+            # Vector mask
+            result = A.T[[0, 1], 0].new(input_mask=m.S)
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=m.S) << A.T[[0, 1], 0]
+            assert result.isequal(expected)
+
+            # Matrix value mask
+            result = A.T[[1, 2], 0].new(input_mask=MT.V)
+            expected = Vector.from_values([1], [2], size=2)
+            assert result.isequal(expected)
+            # again
+            result.clear()
+            result(input_mask=MT.V) << A.T[[1, 2], 0]
+            assert result.isequal(expected)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
+def test_extract_with_matrix(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            with pytest.raises(TypeError, match="Invalid type for index"):
+                A[A.T, 1].new()
+            with pytest.raises(TypeError, match="Invalid type for index"):
+                A[A, [1]].new()
+            with pytest.raises(TypeError, match="Invalid type for index"):
+                A[[0], A.V].new()
+
+
+def test_assign(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
+            result = Matrix.from_values(
+                [0, 0, 2, 3, 0, 3, 5, 6, 0, 6, 1, 6, 4, 1],
+                [0, 5, 0, 0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 6],
+                [9, 8, 7, 3, 2, 3, 1, 5, 3, 7, 8, 3, 7, 4],
+            )
+            C = A.dup()
+            C()[[0, 2], [0, 5]] = B
+            assert C.isequal(result)
+            C = A.dup()
+            C[:3:2, :6:5]() << B
+            assert C.isequal(result)
+            with pytest.raises(TypeError, match="will make the Matrix dense"):
+                C << 1
+            nvals = C.nvals
+            C(C.S) << 1
+            assert C.nvals == nvals
+            assert C.reduce_scalar().new() == nvals
+            with pytest.raises(TypeError, match="Invalid type for index"):
+                C[C, [1]] = C
+            B = B.T.new()
+            C = A.dup()
+            C()[[0, 2], [0, 5]] = B.T
+            assert C.isequal(result)
+            C = A.dup()
+            C[:3:2, :6:5]() << B.T
+            assert C.isequal(result)
+
+            B.rechunk(chunks=1)
+            C = A.dup()
+            C()[[0, 2], [0, 5]] = B.T
+            assert C.isequal(result)
+            C = A.dup()
+            C[:3:2, :6:5]() << B.T
+            assert C.isequal(result)
+
+
+def test_assign_wrong_dims(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            B = Matrix.from_values([0, 0, 1], [0, 1, 0], [9, 8, 7])
+            with pytest.raises(DimensionMismatch):
+                A[[0, 2, 4], [0, 5]] = B
+                A.compute()
+
+
+def test_assign_row(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result = Matrix.from_values(
+                [3, 3, 5, 6, 6, 1, 6, 2, 4, 1, 0, 0, 0, 0],
+                [0, 2, 2, 2, 3, 4, 4, 5, 5, 6, 1, 3, 4, 6],
+                [3, 3, 1, 5, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
+            )
+            C = A.dup()
+            C[0, :] = v
+            assert C.isequal(result)
+
+
 def test_subassign_row_col(A_chunks):
-    A = Matrix.from_values(
+    A_0 = Matrix.from_values(
         [0, 0, 0, 1, 1, 1, 2, 2, 2],
         [0, 1, 2, 0, 1, 2, 0, 1, 2],
         [0, 1, 2, 3, 4, 5, 6, 7, 8],
     )
-    A_ = A
-    for chunks in [3, 2, 1]:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        m = Vector.from_values([1], [True])
-        v = Vector.from_values([0, 1], [10, 20])
+    A_1 = Matrix.from_values(
+        da.from_array([0, 0, 0, 1, 1, 1, 2, 2, 2]),
+        da.from_array([0, 1, 2, 0, 1, 2, 0, 1, 2]),
+        da.from_array([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    )
+    As = [A_0, A_1]
+    for A_ in As:
+        for chunks in [3, 2, 1]:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            m = Vector.from_values([1], [True])
+            v = Vector.from_values([0, 1], [10, 20])
 
-        A[[0, 1], 0](m.S) << v
+            A[[0, 1], 0](m.S) << v
+            result1 = Matrix.from_values(
+                [0, 0, 0, 1, 1, 1, 2, 2, 2],
+                [0, 1, 2, 0, 1, 2, 0, 1, 2],
+                [0, 1, 2, 20, 4, 5, 6, 7, 8],
+            )
+            assert A.isequal(result1)
+
+            A[1, [1, 2]](m.V, accum=binary.plus).update(v)
+            result2 = Matrix.from_values(
+                [0, 0, 0, 1, 1, 1, 2, 2, 2],
+                [0, 1, 2, 0, 1, 2, 0, 1, 2],
+                [0, 1, 2, 20, 4, 25, 6, 7, 8],
+            )
+            assert A.isequal(result2)
+
+            A[[0, 1], 0](m.S, binary.plus, replace=True) << v
+            result3 = Matrix.from_values(
+                [0, 0, 1, 1, 1, 2, 2, 2],
+                [1, 2, 0, 1, 2, 0, 1, 2],
+                [1, 2, 40, 4, 25, 6, 7, 8],
+            )
+            assert A.isequal(result3)
+
+            _A = A.dup()
+            with pytest.raises(DimensionMismatch):
+                A(m.S)[[0, 1], 0] << v
+                A.compute()
+
+            A = _A
+            A[[0, 1], 0](m.S) << 99
+            result4 = Matrix.from_values(
+                [0, 0, 1, 1, 1, 2, 2, 2],
+                [1, 2, 0, 1, 2, 0, 1, 2],
+                [1, 2, 99, 4, 25, 6, 7, 8],
+            )
+            assert A.isequal(result4)
+
+            A[[1, 2], 0](m.S, binary.plus, replace=True) << 100
+            result5 = Matrix.from_values(
+                [0, 0, 1, 1, 2, 2, 2],
+                [1, 2, 1, 2, 0, 1, 2],
+                [1, 2, 4, 25, 106, 7, 8],
+            )
+            assert A.isequal(result5)
+
+            A[2, [0, 1]](m.S) << -1
+            result6 = Matrix.from_values(
+                [0, 0, 1, 1, 2, 2, 2],
+                [1, 2, 1, 2, 0, 1, 2],
+                [1, 2, 4, 25, 106, -1, 8],
+            )
+            assert A.isequal(result6)
+
+
+def test_subassign_matrix():
+    A_0 = Matrix.from_values(
+        [0, 0, 0, 1, 1, 1, 2, 2, 2],
+        [0, 1, 2, 0, 1, 2, 0, 1, 2],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8],
+    )
+    A_1 = Matrix.from_values(
+        da.from_array([0, 0, 0, 1, 1, 1, 2, 2, 2]),
+        da.from_array([0, 1, 2, 0, 1, 2, 0, 1, 2]),
+        da.from_array([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    )
+    As = [A_0, A_1]
+    for A_i in As:
+        A = A_i.dup()
+        m = Matrix.from_values([1], [0], [True])
+        v = Matrix.from_values([0, 1], [0, 0], [10, 20])
+        mT = m.T.new()
+
+        A[[0, 1], [0]](m.S) << v
         result1 = Matrix.from_values(
             [0, 0, 0, 1, 1, 1, 2, 2, 2],
             [0, 1, 2, 0, 1, 2, 0, 1, 2],
@@ -1014,7 +1196,11 @@ def test_subassign_row_col(A_chunks):
         )
         assert A.isequal(result1)
 
-        A[1, [1, 2]](m.V, accum=binary.plus).update(v)
+        A_ = A.dup()
+        _A = A.dup()
+        _A_ = A.dup()
+
+        A[[1], [1, 2]](mT.V, accum=binary.plus) << v.T
         result2 = Matrix.from_values(
             [0, 0, 0, 1, 1, 1, 2, 2, 2],
             [0, 1, 2, 0, 1, 2, 0, 1, 2],
@@ -1022,7 +1208,16 @@ def test_subassign_row_col(A_chunks):
         )
         assert A.isequal(result2)
 
-        A[[0, 1], 0](m.S, binary.plus, replace=True) << v
+        A_[[1], 1:3](mT.V, accum=binary.plus) << v.T
+        assert A_.isequal(result2)
+
+        _A[1:2, [1, 2]](mT.V, accum=binary.plus) << v.T
+        assert _A.isequal(result2)
+
+        _A_[1:2, 1:3](mT.V, accum=binary.plus) << v.T
+        assert _A_.isequal(result2)
+
+        A[[0, 1], [0]](m.S, binary.plus, replace=True) << v
         result3 = Matrix.from_values(
             [0, 0, 1, 1, 1, 2, 2, 2],
             [1, 2, 0, 1, 2, 0, 1, 2],
@@ -1030,10 +1225,13 @@ def test_subassign_row_col(A_chunks):
         )
         assert A.isequal(result3)
 
+        A__ = A.dup()
         with pytest.raises(DimensionMismatch):
-            A(m.S)[[0, 1], 0] << v
+            A(m.S)[[0, 1], [0]] << v
+            A.compute()
 
-        A[[0, 1], 0](m.S) << 99
+        A = A__
+        A[[0, 1], [0]](m.S) << 99
         result4 = Matrix.from_values(
             [0, 0, 1, 1, 1, 2, 2, 2],
             [1, 2, 0, 1, 2, 0, 1, 2],
@@ -1041,7 +1239,7 @@ def test_subassign_row_col(A_chunks):
         )
         assert A.isequal(result4)
 
-        A[[1, 2], 0](m.S, binary.plus, replace=True) << 100
+        A[[1, 2], [0]](m.S, binary.plus, replace=True) << 100
         result5 = Matrix.from_values(
             [0, 0, 1, 1, 2, 2, 2],
             [1, 2, 1, 2, 0, 1, 2],
@@ -1049,7 +1247,7 @@ def test_subassign_row_col(A_chunks):
         )
         assert A.isequal(result5)
 
-        A[2, [0, 1]](m.S) << -1
+        A[[2], [0, 1]](mT.S) << -1
         result6 = Matrix.from_values(
             [0, 0, 1, 1, 2, 2, 2],
             [1, 2, 1, 2, 0, 1, 2],
@@ -1058,555 +1256,539 @@ def test_subassign_row_col(A_chunks):
         assert A.isequal(result6)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_subassign_matrix():
-    A = Matrix.from_values(
-        [0, 0, 0, 1, 1, 1, 2, 2, 2],
-        [0, 1, 2, 0, 1, 2, 0, 1, 2],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8],
-    )
-    m = Matrix.from_values([1], [0], [True])
-    v = Matrix.from_values([0, 1], [0, 0], [10, 20])
-    mT = m.T.new()
-
-    A[[0, 1], [0]](m.S) << v
-    result1 = Matrix.from_values(
-        [0, 0, 0, 1, 1, 1, 2, 2, 2],
-        [0, 1, 2, 0, 1, 2, 0, 1, 2],
-        [0, 1, 2, 20, 4, 5, 6, 7, 8],
-    )
-    assert A.isequal(result1)
-
-    A_ = A.dup()
-    _A = A.dup()
-    _A_ = A.dup()
-
-    A[[1], [1, 2]](mT.V, accum=binary.plus) << v.T
-    result2 = Matrix.from_values(
-        [0, 0, 0, 1, 1, 1, 2, 2, 2],
-        [0, 1, 2, 0, 1, 2, 0, 1, 2],
-        [0, 1, 2, 20, 4, 25, 6, 7, 8],
-    )
-    assert A.isequal(result2)
-
-    A_[[1], 1:3](mT.V, accum=binary.plus) << v.T
-    assert A_.isequal(result2)
-
-    _A[1:2, [1, 2]](mT.V, accum=binary.plus) << v.T
-    assert _A.isequal(result2)
-
-    _A_[1:2, 1:3](mT.V, accum=binary.plus) << v.T
-    assert _A_.isequal(result2)
-
-    A[[0, 1], [0]](m.S, binary.plus, replace=True) << v
-    result3 = Matrix.from_values(
-        [0, 0, 1, 1, 1, 2, 2, 2],
-        [1, 2, 0, 1, 2, 0, 1, 2],
-        [1, 2, 40, 4, 25, 6, 7, 8],
-    )
-    assert A.isequal(result3)
-
-    with pytest.raises(DimensionMismatch):
-        A(m.S)[[0, 1], [0]] << v
-
-    A[[0, 1], [0]](m.S) << 99
-    result4 = Matrix.from_values(
-        [0, 0, 1, 1, 1, 2, 2, 2],
-        [1, 2, 0, 1, 2, 0, 1, 2],
-        [1, 2, 99, 4, 25, 6, 7, 8],
-    )
-    assert A.isequal(result4)
-
-    A[[1, 2], [0]](m.S, binary.plus, replace=True) << 100
-    result5 = Matrix.from_values(
-        [0, 0, 1, 1, 2, 2, 2],
-        [1, 2, 1, 2, 0, 1, 2],
-        [1, 2, 4, 25, 106, 7, 8],
-    )
-    assert A.isequal(result5)
-
-    A[[2], [0, 1]](mT.S) << -1
-    result6 = Matrix.from_values(
-        [0, 0, 1, 1, 2, 2, 2],
-        [1, 2, 1, 2, 0, 1, 2],
-        [1, 2, 4, 25, 106, -1, 8],
-    )
-    assert A.isequal(result6)
+def test_assign_column(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result = Matrix.from_values(
+                [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4, 6],
+                [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1, 1],
+                [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
+            )
+            C = A.dup()
+            C[:, 1] = v
+            assert C.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign_column(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result = Matrix.from_values(
-            [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4, 6],
-            [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1, 1],
-            [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 1, 1, 2, 0],
-        )
-        C = A.dup()
-        C[:, 1] = v
-        assert C.isequal(result)
+def test_assign_row_scalar(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            C = A.dup()
+            C[0, :](v.S) << v
+            D = A.dup()
+            D(v.S)[0, :] << v
+            assert C.isequal(D)
+
+            C[:, :](C.S) << 1
+
+            C_ = C.dup()
+            with pytest.raises(
+                TypeError, match="Unable to use Vector mask on Matrix assignment to a Matrix"
+            ):
+                C[:, :](v.S) << 1
+                C.compute()
+
+            C = C_.dup()
+            with pytest.raises(
+                TypeError,
+                match="Unable to use Vector mask on single element assignment to a Matrix",
+            ):
+                C[0, 0](v.S) << 1
+                C.compute()
+
+            C = C_.dup()
+            with pytest.raises(TypeError):
+                C[0, 0](v.S) << v
+                C.compute()
+
+            C = C_.dup()
+            with pytest.raises(TypeError):
+                C(v.S)[0, 0] << v
+                C.compute()
+
+            C = C_.dup()
+            with pytest.raises(TypeError):
+                C[0, 0](C.S) << v
+                C.compute()
+
+            C = C_.dup()
+            with pytest.raises(TypeError):
+                C(C.S)[0, 0] << v
+                C.compute()
+
+            C = C_.dup()
+            with pytest.raises(TypeError):
+                C[0, 0](v.S) << C
+                C.compute()
+
+            C = C_.dup()
+            with pytest.raises(TypeError):
+                C[0, 0](C.S) << C
+                C.compute()
+
+            C = A.dup()
+            C(v.S)[0, :] = 10
+            result = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 0, 0],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 4, 6],
+                [3, 10, 3, 1, 5, 10, 7, 8, 3, 1, 7, 4, 10, 10],
+            )
+            assert C.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign_row_scalar(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        C = A.dup()
-        C[0, :](v.S) << v
-        D = A.dup()
-        D(v.S)[0, :] << v
-        assert C.isequal(D)
-
-        C[:, :](C.S) << 1
-
-        with pytest.raises(
-            TypeError, match="Unable to use Vector mask on Matrix assignment to a Matrix"
-        ):
-            C[:, :](v.S) << 1
-        with pytest.raises(
-            TypeError, match="Unable to use Vector mask on single element assignment to a Matrix"
-        ):
-            C[0, 0](v.S) << 1
-
-        with pytest.raises(TypeError):
-            C[0, 0](v.S) << v
-        with pytest.raises(TypeError):
-            C(v.S)[0, 0] << v
-        with pytest.raises(TypeError):
-            C[0, 0](C.S) << v
-        with pytest.raises(TypeError):
-            C(C.S)[0, 0] << v
-
-        with pytest.raises(TypeError):
-            C[0, 0](v.S) << C
-        with pytest.raises(TypeError):
-            C[0, 0](C.S) << C
-
-        C = A.dup()
-        C(v.S)[0, :] = 10
-        result = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 0, 0],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 4, 6],
-            [3, 10, 3, 1, 5, 10, 7, 8, 3, 1, 7, 4, 10, 10],
-        )
-        assert C.isequal(result)
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_assign_row_col_matrix_mask():
     # A         B       v1      v2
     # 0 1       4 _     100     10
     # 2 _       0 5             20
-    A = Matrix.from_values([0, 0, 1], [0, 1, 0], [0, 1, 2])
-    B = Matrix.from_values([0, 1, 1], [0, 0, 1], [4, 0, 5])
-    v1 = Vector.from_values([0], [100])
-    v2 = Vector.from_values([0, 1], [10, 20])
+    A_0 = Matrix.from_values([0, 0, 1], [0, 1, 0], [0, 1, 2])
+    B_0 = Matrix.from_values([0, 1, 1], [0, 0, 1], [4, 0, 5])
+    v1_0 = Vector.from_values([0], [100])
+    v2_0 = Vector.from_values([0, 1], [10, 20])
 
-    # row assign
-    C = A.dup()
-    C(B.S)[0, :] << v2
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 1, 2])
-    assert C.isequal(result)
+    A_1 = Matrix.from_values(
+        da.from_array([0, 0, 1]), da.from_array([0, 1, 0]), da.from_array([0, 1, 2])
+    )
+    B_1 = Matrix.from_values(
+        da.from_array([0, 1, 1]), da.from_array([0, 0, 1]), da.from_array([4, 0, 5])
+    )
+    v1_1 = Vector.from_values(da.from_array([0]), da.from_array([100]))
+    v2_1 = Vector.from_values(da.from_array([0, 1]), da.from_array([10, 20]))
 
-    C = A.dup()
-    C(B.S, accum=binary.plus)[1, :] = v2
-    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 12, 20])
-    assert C.isequal(result)
+    As = [A_0, A_1]
+    Bs = [B_0, B_1]
+    v1s = [v1_0, v1_1]
+    v2s = [v2_0, v2_1]
 
-    C = A.dup()
-    C(B.S, replace=True)[1, :] << v2
-    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 10, 20])
-    assert C.isequal(result)
+    for A in As:
+        for B in Bs:
+            for v1 in v1s:
+                for v2 in v2s:
+                    # row assign
+                    C = A.dup()
+                    C(B.S)[0, :] << v2
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 1, 2])
+                    assert C.isequal(result)
 
-    # col assign
-    C = A.dup()
-    C(B.S)[:, 0] = v2
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 1, 20])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, accum=binary.plus)[1, :] = v2
+                    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 12, 20])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C(B.S, accum=binary.plus)[:, 1] << v2
-    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 2, 20])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, replace=True)[1, :] << v2
+                    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 10, 20])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C(B.S, replace=True)[:, 1] = v2
-    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 2, 20])
-    assert C.isequal(result)
+                    # col assign
+                    C = A.dup()
+                    C(B.S)[:, 0] = v2
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 1, 20])
+                    assert C.isequal(result)
 
-    # row assign scalar (as a sanity check)
-    C = A.dup()
-    C(B.S)[0, :] = 100
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, accum=binary.plus)[:, 1] << v2
+                    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 2, 20])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C(B.S, accum=binary.plus)[1, :] << 100
-    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 102, 100])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, replace=True)[:, 1] = v2
+                    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 2, 20])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C(B.S, replace=True)[1, :] = 100
-    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 100, 100])
-    assert C.isequal(result)
+                    # row assign scalar (as a sanity check)
+                    C = A.dup()
+                    C(B.S)[0, :] = 100
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
+                    assert C.isequal(result)
 
-    # col assign scalar (as a sanity check)
-    C = A.dup()
-    C(B.S)[:, 0] << 100
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 100])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, accum=binary.plus)[1, :] << 100
+                    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 102, 100])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C(B.S, accum=binary.plus)[:, 1] = 100
-    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 2, 100])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, replace=True)[1, :] = 100
+                    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 100, 100])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C(B.S, replace=True)[:, 1] << 100
-    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 2, 100])
-    assert C.isequal(result)
+                    # col assign scalar (as a sanity check)
+                    C = A.dup()
+                    C(B.S)[:, 0] << 100
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 100])
+                    assert C.isequal(result)
 
-    # row subassign
-    C = A.dup()
-    C[0, :](v2.S) << v2
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 20, 2])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, accum=binary.plus)[:, 1] = 100
+                    result = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 2, 100])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C[0, [0]](v1.S) << v1
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C(B.S, replace=True)[:, 1] << 100
+                    result = Matrix.from_values([0, 1, 1], [0, 0, 1], [0, 2, 100])
+                    assert C.isequal(result)
 
-    with pytest.raises(
-        TypeError, match="Indices for subassign imply Vector submask, but got Matrix mask instead"
-    ):
-        C[0, :](B.S) << v2
+                    # row subassign
+                    C = A.dup()
+                    C[0, :](v2.S) << v2
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 20, 2])
+                    assert C.isequal(result)
 
-    # col subassign
-    C = A.dup()
-    C[:, 0](v2.S) << v2
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 1, 20])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C[0, [0]](v1.S) << v1
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C[[0], 0](v1.S) << v1
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
-    assert C.isequal(result)
+                    with pytest.raises(
+                        TypeError,
+                        match="Indices for subassign imply Vector submask, but got Matrix mask instead",
+                    ):
+                        C[0, :](B.S) << v2
+                        C.compute()
 
-    with pytest.raises(
-        TypeError, match="Indices for subassign imply Vector submask, but got Matrix mask instead"
-    ):
-        C[:, 0](B.S) << v2
+                    # col subassign
+                    C = A.dup()
+                    C[:, 0](v2.S) << v2
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [10, 1, 20])
+                    assert C.isequal(result)
 
-    # row subassign scalar
-    C = A.dup()
-    C[0, :](v2.S) << 100
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 100, 2])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C[[0], 0](v1.S) << v1
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C[0, [0]](v1.S) << 100
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
-    assert C.isequal(result)
+                    with pytest.raises(
+                        TypeError,
+                        match="Indices for subassign imply Vector submask, but got Matrix mask instead",
+                    ):
+                        C[:, 0](B.S) << v2
+                        C.compute()
 
-    with pytest.raises(
-        TypeError, match="Indices for subassign imply Vector submask, but got Matrix mask instead"
-    ):
-        C[:, 0](B.S) << 100
+                    # row subassign scalar
+                    C = A.dup()
+                    C[0, :](v2.S) << 100
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 100, 2])
+                    assert C.isequal(result)
 
-    # col subassign scalar
-    C = A.dup()
-    C[:, 0](v2.S) << 100
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 100])
-    assert C.isequal(result)
+                    C = A.dup()
+                    C[0, [0]](v1.S) << 100
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
+                    assert C.isequal(result)
 
-    C = A.dup()
-    C[[0], 0](v1.S) << 100
-    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
-    assert C.isequal(result)
+                    with pytest.raises(
+                        TypeError,
+                        match="Indices for subassign imply Vector submask, but got Matrix mask instead",
+                    ):
+                        C[:, 0](B.S) << 100
+                        C.compute()
 
-    with pytest.raises(
-        TypeError, match="Indices for subassign imply Vector submask, but got Matrix mask instead"
-    ):
-        C[:, 0](B.S) << 100
+                    # col subassign scalar
+                    C = A.dup()
+                    C[:, 0](v2.S) << 100
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 100])
+                    assert C.isequal(result)
 
-    # Bad subassign
-    with pytest.raises(TypeError, match="Single element assign does not accept a submask"):
-        C[0, 0](B.S) << 100
+                    C = A.dup()
+                    C[[0], 0](v1.S) << 100
+                    result = Matrix.from_values([0, 0, 1], [0, 1, 0], [100, 1, 2])
+                    assert C.isequal(result)
 
+                    with pytest.raises(
+                        TypeError,
+                        match="Indices for subassign imply Vector submask, but got Matrix mask instead",
+                    ):
+                        C[:, 0](B.S) << 100
+                        C.compute()
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign_column_scalar(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        C = A.dup()
-        C[:, 0](v.S) << v
-        D = A.dup()
-        D(v.S)[:, 0] << v
-        assert C.isequal(D)
-
-        C = A.dup()
-        C[:, 1] = v
-        C(v.S)[:, 1] = 10
-        result = Matrix.from_values(
-            [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4, 6],
-            [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1, 1],
-            [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 10, 10, 10, 10],
-        )
-        assert C.isequal(result)
-
-        C(v.V, replace=True, accum=binary.plus)[:, 1] = 20
-        result = Matrix.from_values(
-            [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4],
-            [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1],
-            [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 30, 30, 30],
-        )
-        assert C.isequal(result)
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign_scalar(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        # Test block
-        result_block = Matrix.from_values(
-            [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 3, 5, 1, 3, 5],
-            [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4, 4, 4],
-            [3, 2, 5, 3, 7, 3, 1, 7, 4, 0, 0, 0, 0, 0, 0],
-        )
-        C = A.dup()
-        C[[1, 3, 5], [2, 4]] = 0
-        assert C.isequal(result_block)
-        C = A.dup()
-        C[[1, 3, 5], [2, 4]] = Scalar.from_value(0)
-        assert C.isequal(result_block)
-        C = A.dup()
-        C[1::2, 2:5:2] = 0
-        assert C.isequal(result_block)
-        C = A.dup()
-        C[1::2, 2:5:2] = Scalar.from_value(0)
-        assert C.isequal(result_block)
-        # Test row
-        result_row = Matrix.from_values(
-            [3, 0, 6, 0, 6, 6, 2, 4, 1, 3, 5, 1, 1],
-            [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4],
-            [3, 2, 5, 3, 7, 3, 1, 7, 4, 3, 1, 0, 0],
-        )
-        C = A.dup()
-        C[1, [2, 4]] = 0
-        assert C.isequal(result_row)
-        C = A.dup()
-        C[1, 2] = Scalar.from_value(0)
-        C[1, 4] = Scalar.from_value(0)
-        assert C.isequal(result_row)
-        C = A.dup()
-        C[1, 2:5:2] = 0
-        assert C.isequal(result_row)
-        # Test column
-        result_column = Matrix.from_values(
-            [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 1, 3, 5],
-            [0, 1, 2, 3, 3, 4, 5, 5, 6, 4, 2, 2, 2],
-            [3, 2, 5, 3, 7, 3, 1, 7, 4, 8, 0, 0, 0],
-        )
-        C = A.dup()
-        C[[1, 3, 5], 2] = 0
-        assert C.isequal(result_column)
-        C = A.dup()
-        C[1::2, 2] = 0
-        assert C.isequal(result_column)
+                    # Bad subassign
+                    C = A.dup()
+                    with pytest.raises(
+                        TypeError, match="Single element assign does not accept a submask"
+                    ):
+                        C[0, 0](B.S) << 100
+                        C.compute()
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_assign_bad(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        with pytest.raises(TypeError, match="Bad type"):
-            A[0, 0] = object()
-        with pytest.raises(TypeError, match="Bad type"):
-            A[:, 0] = object()
-        with pytest.raises(TypeError, match="Bad type"):
-            A[0, :] = object()
-        with pytest.raises(TypeError, match="Bad type"):
-            A[:, :] = object()
-        with pytest.raises(TypeError, match="Bad type"):
-            A[0, 0] = A
-        with pytest.raises(TypeError, match="Bad type"):
-            A[:, 0] = A
-        with pytest.raises(TypeError, match="Bad type"):
-            A[0, :] = A
-        v = A[0, :].new()
-        with pytest.raises(TypeError, match="Bad type"):
-            A[0, 0] = v
-        with pytest.raises(TypeError, match="Bad type"):
-            A[:, :] = v
+def test_assign_column_scalar(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            C = A.dup()
+            C[:, 0](v.S) << v
+            D = A.dup()
+            D(v.S)[:, 0] << v
+            assert C.isequal(D)
+
+            C = A.dup()
+            C[:, 1] = v
+            C(v.S)[:, 1] = 10
+            result = Matrix.from_values(
+                [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4, 6],
+                [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1, 1],
+                [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 10, 10, 10, 10],
+            )
+            assert C.isequal(result)
+
+            C(v.V, replace=True, accum=binary.plus)[:, 1] = 20
+            result = Matrix.from_values(
+                [3, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 1, 3, 4],
+                [0, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 1, 1, 1],
+                [3, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 30, 30, 30],
+            )
+            assert C.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_apply(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [-3, -2, -3, -1, -5, -3, -7, -8, -3, -1, -7, -4],
-        )
-        C = A.apply(unary.ainv).new()
-        assert C.isequal(result)
+def test_assign_scalar(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            # Test block
+            result_block = Matrix.from_values(
+                [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 3, 5, 1, 3, 5],
+                [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4, 4, 4],
+                [3, 2, 5, 3, 7, 3, 1, 7, 4, 0, 0, 0, 0, 0, 0],
+            )
+            C = A.dup()
+            C[[1, 3, 5], [2, 4]] = 0
+            assert C.isequal(result_block)
+            C = A.dup()
+            C[[1, 3, 5], [2, 4]] = Scalar.from_value(0)
+            assert C.isequal(result_block)
+            C = A.dup()
+            C[1::2, 2:5:2] = 0
+            assert C.isequal(result_block)
+            C = A.dup()
+            C[1::2, 2:5:2] = Scalar.from_value(0)
+            assert C.isequal(result_block)
+            # Test row
+            result_row = Matrix.from_values(
+                [3, 0, 6, 0, 6, 6, 2, 4, 1, 3, 5, 1, 1],
+                [0, 1, 2, 3, 3, 4, 5, 5, 6, 2, 2, 2, 4],
+                [3, 2, 5, 3, 7, 3, 1, 7, 4, 3, 1, 0, 0],
+            )
+            C = A.dup()
+            C[1, [2, 4]] = 0
+            assert C.isequal(result_row)
+            C = A.dup()
+            C[1, 2] = Scalar.from_value(0)
+            C[1, 4] = Scalar.from_value(0)
+            assert C.isequal(result_row)
+            C = A.dup()
+            C[1, 2:5:2] = 0
+            assert C.isequal(result_row)
+            # Test column
+            result_column = Matrix.from_values(
+                [3, 0, 6, 0, 6, 6, 2, 4, 1, 1, 1, 3, 5],
+                [0, 1, 2, 3, 3, 4, 5, 5, 6, 4, 2, 2, 2],
+                [3, 2, 5, 3, 7, 3, 1, 7, 4, 8, 0, 0, 0],
+            )
+            C = A.dup()
+            C[[1, 3, 5], 2] = 0
+            assert C.isequal(result_column)
+            C = A.dup()
+            C[1::2, 2] = 0
+            assert C.isequal(result_column)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_apply_binary(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result_right = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1],
-            dtype=bool,
-        )
-        w_right = A.apply(binary.gt, right=1).new()
-        w_right2 = A.apply(binary.gt, right=Scalar.from_value(1)).new()
-        assert w_right.isequal(result_right)
-        assert w_right2.isequal(result_right)
-        result_left = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [5, 6, 5, 7, 3, 5, 1, 0, 5, 7, 1, 4],
-        )
-        w_left = A.apply(binary.minus, left=8).new()
-        w_left2 = A.apply(binary.minus, left=Scalar.from_value(8)).new()
-        assert w_left.isequal(result_left)
-        assert w_left2.isequal(result_left)
-        with pytest.raises(TypeError):
-            A.apply(binary.plus, left=A)
-        with pytest.raises(TypeError):
-            A.apply(binary.plus, right=A)
-        with pytest.raises(TypeError, match="Cannot provide both"):
-            A.apply(binary.plus, left=1, right=1)
+def test_assign_bad(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            with pytest.raises(TypeError, match="Bad type"):
+                A[0, 0] = object()
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[:, 0] = object()
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[0, :] = object()
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[:, :] = object()
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[0, 0] = A
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[:, 0] = A
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[0, :] = A
+                A.compute()
+            A = A_.dup()
+            v = A[0, :].new()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[0, 0] = v
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(TypeError, match="Bad type"):
+                A[:, :] = v
+                A.compute()
 
-        # allow monoids
-        w1 = A.apply(binary.plus, left=1).new()
-        w2 = A.apply(monoid.plus, left=1).new()
-        w3 = A.apply(monoid.plus, right=1).new()
-        assert w1.isequal(w2)
-        assert w1.isequal(w3)
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_reduce_row(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
-        w = A.reduce_rowwise(monoid.plus).new()
-        assert w.isequal(result)
-        w2 = A.reduce_rowwise(binary.plus).new()
-        assert w2.isequal(result)
+def test_apply(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [-3, -2, -3, -1, -5, -3, -7, -8, -3, -1, -7, -4],
+            )
+            C = A.apply(unary.ainv).new()
+            assert C.isequal(result)
+
+
+def test_apply_binary(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result_right = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1],
+                dtype=bool,
+            )
+            w_right = A.apply(binary.gt, right=1).new()
+            w_right2 = A.apply(binary.gt, right=Scalar.from_value(1)).new()
+            assert w_right.isequal(result_right)
+            assert w_right2.isequal(result_right)
+            result_left = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [5, 6, 5, 7, 3, 5, 1, 0, 5, 7, 1, 4],
+            )
+            w_left = A.apply(binary.minus, left=8).new()
+            w_left2 = A.apply(binary.minus, left=Scalar.from_value(8)).new()
+            assert w_left.isequal(result_left)
+            assert w_left2.isequal(result_left)
+            with pytest.raises(TypeError):
+                A.apply(binary.plus, left=A)
+            with pytest.raises(TypeError):
+                A.apply(binary.plus, right=A)
+            with pytest.raises(TypeError, match="Cannot provide both"):
+                A.apply(binary.plus, left=1, right=1)
+
+            # allow monoids
+            w1 = A.apply(binary.plus, left=1).new()
+            w2 = A.apply(monoid.plus, left=1).new()
+            w3 = A.apply(monoid.plus, right=1).new()
+            assert w1.isequal(w2)
+            assert w1.isequal(w3)
+
+
+def test_reduce_row(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
+            w = A.reduce_rowwise(monoid.plus).new()
+            assert w.isequal(result)
+            w2 = A.reduce_rowwise(binary.plus).new()
+            assert w2.isequal(result)
 
 
 @pytest.mark.slow
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_reduce_agg(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
-        w1 = A.reduce_rowwise(agg.sum).new()
-        assert w1.isequal(result)
-        w2 = A.T.reduce_columnwise(agg.sum).new()
-        assert w2.isequal(result)
+def test_reduce_agg(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
+            w1 = A.reduce_rowwise(agg.sum).new()
+            assert w1.isequal(result)
+            w2 = A.T.reduce_columnwise(agg.sum).new()
+            assert w2.isequal(result)
 
-        counts = A.dup(dtype=bool).reduce_rowwise(monoid.plus[int]).new()
-        w3 = A.reduce_rowwise(agg.count).new()
-        assert w3.isequal(counts)
-        w4 = A.T.reduce_columnwise(agg.count).new()
-        assert w4.isequal(counts)
+            counts = A.dup(dtype=bool).reduce_rowwise(monoid.plus[int]).new()
+            w3 = A.reduce_rowwise(agg.count).new()
+            assert w3.isequal(counts)
+            w4 = A.T.reduce_columnwise(agg.count).new()
+            assert w4.isequal(counts)
 
-        Asquared = monoid.times(A & A).new()
-        squared = Asquared.reduce_rowwise(monoid.plus).new()
-        expected = unary.sqrt[float](squared).new()
-        w5 = A.reduce_rowwise(agg.hypot).new()
-        assert w5.isclose(expected)
-        w6 = A.reduce_rowwise(monoid.numpy.hypot[float]).new()
-        assert w6.isclose(expected)
-        w7 = Vector.new(w5.dtype, size=w5.size)
-        w7 << A.reduce_rowwise(agg.hypot)
-        assert w7.isclose(expected)
+            Asquared = monoid.times(A & A).new()
+            squared = Asquared.reduce_rowwise(monoid.plus).new()
+            expected = unary.sqrt[float](squared).new()
+            w5 = A.reduce_rowwise(agg.hypot).new()
+            assert w5.isclose(expected)
+            w6 = A.reduce_rowwise(monoid.numpy.hypot[float]).new()
+            assert w6.isclose(expected)
+            w7 = Vector.new(w5.dtype, size=w5.size)
+            w7 << A.reduce_rowwise(agg.hypot)
+            assert w7.isclose(expected)
 
-        w8 = A.reduce_rowwise(agg.logaddexp).new()
-        expected = A.reduce_rowwise(monoid.numpy.logaddexp[float]).new()
-        assert w8.isclose(w8)
+            w8 = A.reduce_rowwise(agg.logaddexp).new()
+            expected = A.reduce_rowwise(monoid.numpy.logaddexp[float]).new()
+            assert w8.isclose(w8)
 
-        result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 9, 10, 11, 8, 4])
-        w9 = A.reduce_columnwise(agg.sum).new()
-        assert w9.isequal(result)
-        w10 = A.T.reduce_rowwise(agg.sum).new()
-        assert w10.isequal(result)
+            result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 9, 10, 11, 8, 4])
+            w9 = A.reduce_columnwise(agg.sum).new()
+            assert w9.isequal(result)
+            w10 = A.T.reduce_rowwise(agg.sum).new()
+            assert w10.isequal(result)
 
-        counts = A.dup(dtype=bool).reduce_columnwise(monoid.plus[int]).new()
-        w11 = A.reduce_columnwise(agg.count).new()
-        assert w11.isequal(counts)
-        w12 = A.T.reduce_rowwise(agg.count).new()
-        assert w12.isequal(counts)
+            counts = A.dup(dtype=bool).reduce_columnwise(monoid.plus[int]).new()
+            w11 = A.reduce_columnwise(agg.count).new()
+            assert w11.isequal(counts)
+            w12 = A.T.reduce_rowwise(agg.count).new()
+            assert w12.isequal(counts)
 
-        w13 = A.reduce_rowwise(agg.mean).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [2.5, 6, 1, 3, 7, 1, 5])
-        assert w13.isequal(expected)
-        w14 = A.reduce_columnwise(agg.mean).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 3, 5, 5.5, 4, 4])
-        assert w14.isequal(expected)
+            w13 = A.reduce_rowwise(agg.mean).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [2.5, 6, 1, 3, 7, 1, 5])
+            assert w13.isequal(expected)
+            w14 = A.reduce_columnwise(agg.mean).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 3, 5, 5.5, 4, 4])
+            assert w14.isequal(expected)
 
-        w15 = A.reduce_rowwise(agg.exists).new()
-        w16 = A.reduce_columnwise(agg.exists).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [1, 1, 1, 1, 1, 1, 1])
-        assert w15.isequal(expected)
-        assert w16.isequal(expected)
+            w15 = A.reduce_rowwise(agg.exists).new()
+            w16 = A.reduce_columnwise(agg.exists).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [1, 1, 1, 1, 1, 1, 1])
+            assert w15.isequal(expected)
+            assert w16.isequal(expected)
 
-        assert A.reduce_scalar(agg.sum).new() == 47
-        assert A.reduce_scalar(agg.prod).new() == 1270080
-        assert A.reduce_scalar(agg.count).new() == 12
-        assert A.reduce_scalar(agg.count_nonzero).new() == 12
-        assert A.reduce_scalar(agg.count_zero).new() == 0
-        assert A.reduce_scalar(agg.sum_of_squares).new() == 245
-        assert A.reduce_scalar(agg.hypot).new().isclose(245 ** 0.5)
-        assert A.reduce_scalar(agg.logaddexp).new().isclose(8.6071076)
-        assert A.reduce_scalar(agg.logaddexp2).new().isclose(9.2288187)
-        assert A.reduce_scalar(agg.mean).new().isclose(47 / 12)
-        assert A.reduce_scalar(agg.exists).new() == 1
+            assert A.reduce_scalar(agg.sum).new() == 47
+            assert A.reduce_scalar(agg.prod).new() == 1270080
+            assert A.reduce_scalar(agg.count).new() == 12
+            assert A.reduce_scalar(agg.count_nonzero).new() == 12
+            assert A.reduce_scalar(agg.count_zero).new() == 0
+            assert A.reduce_scalar(agg.sum_of_squares).new() == 245
+            assert A.reduce_scalar(agg.hypot).new().isclose(245 ** 0.5)
+            assert A.reduce_scalar(agg.logaddexp).new().isclose(8.6071076)
+            assert A.reduce_scalar(agg.logaddexp2).new().isclose(9.2288187)
+            assert A.reduce_scalar(agg.mean).new().isclose(47 / 12)
+            assert A.reduce_scalar(agg.exists).new() == 1
 
-        silly = agg.Aggregator(
-            "silly",
-            composite=[agg.varp, agg.stdp],
-            finalize=lambda x, y: binary.times(x & y),
-            types=[agg.varp],
-        )
-        v1 = A.reduce_rowwise(agg.varp).new()
-        v2 = A.reduce_rowwise(agg.stdp).new()
-        assert v1.isclose(binary.times(v2 & v2).new())
-        v3 = A.reduce_rowwise(silly).new()
-        assert v3.isclose(binary.times(v1 & v2).new())
+            silly = agg.Aggregator(
+                "silly",
+                composite=[agg.varp, agg.stdp],
+                finalize=lambda x, y: binary.times(x & y),
+                types=[agg.varp],
+            )
+            v1 = A.reduce_rowwise(agg.varp).new()
+            v2 = A.reduce_rowwise(agg.stdp).new()
+            assert v1.isclose(binary.times(v2 & v2).new())
+            v3 = A.reduce_rowwise(silly).new()
+            assert v3.isclose(binary.times(v1 & v2).new())
 
-        s1 = A.reduce_scalar(agg.varp).new()
-        s2 = A.reduce_scalar(agg.stdp).new()
-        assert s1.isclose(s2.value.compute() * s2.value.compute())
-        s3 = A.reduce_scalar(silly).new()
-        assert s3.isclose(s1.value.compute() * s2.value.compute())
+            s1 = A.reduce_scalar(agg.varp).new()
+            s2 = A.reduce_scalar(agg.stdp).new()
+            assert s1.isclose(s2.value.compute() * s2.value.compute())
+            s3 = A.reduce_scalar(silly).new()
+            assert s3.isclose(s1.value.compute() * s2.value.compute())
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
@@ -1798,83 +1980,83 @@ def test_reduce_agg_empty(A_chunks):
                     assert compute(s.value) is None
 
 
-def test_reduce_row_udf(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
-        binop = grblas.operator.BinaryOp.register_anonymous(lambda x, y: x + y)
-        with pytest.raises(NotImplementedException):
-            # Although allowed by the spec, SuiteSparse doesn't like user-defined binarops here
-            A.reduce_rowwise(binop).new()
-        # If the user creates a monoid from the binop, then we can use the monoid instead
-        monoid = grblas.operator.Monoid.register_anonymous(binop, 0)
-        w = A.reduce_rowwise(binop).new()
-        assert w.isequal(result)
-        w2 = A.reduce_rowwise(monoid).new()
-        assert w2.isequal(result)
+def test_reduce_row_udf(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
+            binop = grblas.operator.BinaryOp.register_anonymous(lambda x, y: x + y)
+            with pytest.raises(NotImplementedException):
+                # Although allowed by the spec, SuiteSparse doesn't like user-defined binarops here
+                A.reduce_rowwise(binop).new()
+            # If the user creates a monoid from the binop, then we can use the monoid instead
+            monoid = grblas.operator.Monoid.register_anonymous(binop, 0)
+            w = A.reduce_rowwise(binop).new()
+            assert w.isequal(result)
+            w2 = A.reduce_rowwise(monoid).new()
+            assert w2.isequal(result)
 
 
-def test_reduce_column(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 9, 10, 11, 8, 4])
-        w = A.reduce_columnwise(monoid.plus).new()
-        assert w.isequal(result)
-        w2 = A.reduce_columnwise(binary.plus).new()
-        assert w2.isequal(result)
+def test_reduce_column(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 9, 10, 11, 8, 4])
+            w = A.reduce_columnwise(monoid.plus).new()
+            assert w.isequal(result)
+            w2 = A.reduce_columnwise(binary.plus).new()
+            assert w2.isequal(result)
 
 
-def test_reduce_scalar(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        s = A.reduce_scalar(monoid.plus).new()
-        assert s == 47
-        assert A.reduce_scalar(binary.plus).new() == 47
-        with pytest.raises(TypeError, match="Expected type: Monoid"):
-            A.reduce_scalar(binary.minus)
+def test_reduce_scalar(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            s = A.reduce_scalar(monoid.plus).new()
+            assert s == 47
+            assert A.reduce_scalar(binary.plus).new() == 47
+            with pytest.raises(TypeError, match="Expected type: Monoid"):
+                A.reduce_scalar(binary.minus)
 
-        # test dtype coercion
-        assert A.dtype == dtypes.INT64
-        s = A.reduce_scalar().new(dtype=float)
-        assert s == 47.0
-        assert s.dtype == dtypes.FP64
-        t = Scalar.new(float)
-        t << A.reduce_scalar(monoid.plus)
-        assert t == 47.0
-        t = Scalar.new(float)
-        t() << A.reduce_scalar(monoid.plus)
-        assert t == 47.0
-        t(accum=binary.times) << A.reduce_scalar(monoid.plus)
-        assert t == 47 * 47
-        assert A.reduce_scalar(monoid.plus[dtypes.UINT64]).new() == 47
-        # Make sure we accumulate as a float, not int
-        t.value = 1.23
-        t(accum=binary.plus) << A.reduce_scalar()
-        assert t == 48.23
+            # test dtype coercion
+            assert A.dtype == dtypes.INT64
+            s = A.reduce_scalar().new(dtype=float)
+            assert s == 47.0
+            assert s.dtype == dtypes.FP64
+            t = Scalar.new(float)
+            t << A.reduce_scalar(monoid.plus)
+            assert t == 47.0
+            t = Scalar.new(float)
+            t() << A.reduce_scalar(monoid.plus)
+            assert t == 47.0
+            t(accum=binary.times) << A.reduce_scalar(monoid.plus)
+            assert t == 47 * 47
+            assert A.reduce_scalar(monoid.plus[dtypes.UINT64]).new() == 47
+            # Make sure we accumulate as a float, not int
+            t.value = 1.23
+            t(accum=binary.plus) << A.reduce_scalar()
+            assert t == 48.23
 
 
-def test_transpose(A, A_chunks):
+def test_transpose(As, A_chunks):
     # C << A.T
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        rows, cols, vals = A.to_values()
-        result = Matrix.from_values(cols, rows, vals)
-        C = Matrix.new(A.dtype, A.ncols, A.nrows)
-        C << A.T
-        assert C.isequal(result)
-        C2 = A.T.new()
-        assert C2.isequal(result)
-        assert A.T.T is A
-        C3 = A.T.new(dtype=float)
-        assert C3.isequal(result)
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            rows, cols, vals = A.to_values()
+            result = Matrix.from_values(cols, rows, vals)
+            C = Matrix.new(A.dtype, A.ncols, A.nrows)
+            C << A.T
+            assert C.isequal(result)
+            C2 = A.T.new()
+            assert C2.isequal(result)
+            assert A.T.T is A
+            C3 = A.T.new(dtype=float)
+            assert C3.isequal(result)
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
@@ -1899,111 +2081,113 @@ def test_kronecker():
     assert C.isequal(result)
 
 
-def test_simple_assignment(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        # C << A
-        C = Matrix.new(A.dtype, A.nrows, A.ncols)
-        C << A
-        assert C.isequal(A)
+def test_simple_assignment(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            # C << A
+            C = Matrix.new(A.dtype, A.nrows, A.ncols)
+            C << A
+            assert C.isequal(A)
 
 
-def test_assign_transpose(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        C = Matrix.new(A.dtype, A.ncols, A.nrows)
-        C << A.T
-        assert C.isequal(A.T.new())
+def test_assign_transpose(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            C = Matrix.new(A.dtype, A.ncols, A.nrows)
+            C << A.T
+            assert C.isequal(A.T.new())
 
-        with pytest.raises(TypeError):
-            C.T << A
-        with pytest.raises(TypeError, match="does not support item assignment"):
-            C.T[:, :] << A
-        with pytest.raises(AttributeError):
-            C[:, :].T << A
+            with pytest.raises(TypeError):
+                C.T << A
+            with pytest.raises(TypeError, match="does not support item assignment"):
+                C.T[:, :] << A
+            with pytest.raises(AttributeError):
+                C[:, :].T << A
 
-        C = Matrix.new(A.dtype, A.ncols + 1, A.nrows + 1)
-        C[: A.ncols, : A.nrows] << A.T
-        assert C[: A.ncols, : A.nrows].new().isequal(A.T.new())
-
-
-def test_isequal(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        assert A.isequal(A)
-        with pytest.raises(TypeError, match="Matrix"):
-            A.isequal(v)  # equality is not type-checking
-        C = Matrix.from_values([1], [1], [1])
-        assert not C.isequal(A)
-        D = Matrix.from_values([1], [2], [1])
-        assert not C.isequal(D)
-        D2 = Matrix.from_values([0], [2], [1], nrows=D.nrows, ncols=D.ncols)
-        assert not D2.isequal(D)
-        C2 = Matrix.from_values([1], [1], [1], nrows=7, ncols=7)
-        assert not C2.isequal(A)
-        C3 = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [3.0, 2.0, 3.0, 1.0, 5.0, 3.0, 7.0, 8.0, 3.0, 1.0, 7.0, 4.0],
-        )
-        assert not C3.isequal(A, check_dtype=True), "different datatypes are not equal"
-        C4 = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
-        )
-        assert not C4.isequal(A)
+            nrows, ncols = A.nrows, A.ncols
+            if A.is_dOnion:
+                nrows, ncols = nrows.compute(), ncols.compute()
+            C = Matrix.new(A.dtype, ncols + 1, nrows + 1)
+            C[:ncols, :nrows] << A.T
+            assert C[:ncols, :nrows].new().isequal(A.T.new())
 
 
-@pytest.mark.slow
-def test_isclose(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        assert A.isclose(A)
-        with pytest.raises(TypeError, match="Matrix"):
-            A.isclose(v)  # equality is not type-checking
-        C = Matrix.from_values([1], [1], [1])  # wrong size
-        assert not C.isclose(A)
-        D = Matrix.from_values([1], [2], [1])
-        assert not C.isclose(D)
-        D2 = Matrix.from_values([0], [2], [1], nrows=D.nrows, ncols=D.ncols)
-        assert not D2.isclose(D)
-        C2 = Matrix.from_values([1], [1], [1], nrows=7, ncols=7)  # missing values
-        assert not C2.isclose(A)
-        C3 = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 0],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 2],
-            [3, 2, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 3],
-        )  # extra values
-        assert not C3.isclose(A)
-        C4 = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [3.0, 2.0, 3.0, 1.0, 5.0, 3.0, 7.0, 8.0, 3.0, 1.0, 7.0, 4.0],
-        )
-        assert not C4.isclose(A, check_dtype=True), "different datatypes are not equal"
-        # fmt: off
-        C5 = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
-        )
-        # fmt: on
-        assert C5.isclose(A)
-        C6 = Matrix.from_values(
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [3.0, 2.000001, 3.0, 1.0, 5.0, 3.0, 7.0, 7.9999999, 3.0, 1.0, 7.0, 4.0],
-        )
-        assert C6.isclose(A, rel_tol=1e-3)
+def test_isequal(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            assert A.isequal(A)
+            with pytest.raises(TypeError, match="Matrix"):
+                A.isequal(v)  # equality is not type-checking
+            C = Matrix.from_values([1], [1], [1])
+            assert not C.isequal(A)
+            D = Matrix.from_values([1], [2], [1])
+            assert not C.isequal(D)
+            D2 = Matrix.from_values([0], [2], [1], nrows=D.nrows, ncols=D.ncols)
+            assert not D2.isequal(D)
+            C2 = Matrix.from_values([1], [1], [1], nrows=7, ncols=7)
+            assert not C2.isequal(A)
+            C3 = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [3.0, 2.0, 3.0, 1.0, 5.0, 3.0, 7.0, 8.0, 3.0, 1.0, 7.0, 4.0],
+            )
+            assert not C3.isequal(A, check_dtype=True), "different datatypes are not equal"
+            C4 = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
+            )
+            assert not C4.isequal(A)
+
+
+def test_isclose(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            assert A.isclose(A)
+            with pytest.raises(TypeError, match="Matrix"):
+                A.isclose(v)  # equality is not type-checking
+            C = Matrix.from_values([1], [1], [1])  # wrong size
+            assert not C.isclose(A)
+            D = Matrix.from_values([1], [2], [1])
+            assert not C.isclose(D)
+            D2 = Matrix.from_values([0], [2], [1], nrows=D.nrows, ncols=D.ncols)
+            assert not D2.isclose(D)
+            C2 = Matrix.from_values([1], [1], [1], nrows=7, ncols=7)  # missing values
+            assert not C2.isclose(A)
+            C3 = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1, 0],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6, 2],
+                [3, 2, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4, 3],
+            )  # extra values
+            assert not C3.isclose(A)
+            C4 = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [3.0, 2.0, 3.0, 1.0, 5.0, 3.0, 7.0, 8.0, 3.0, 1.0, 7.0, 4.0],
+            )
+            assert not C4.isclose(A, check_dtype=True), "different datatypes are not equal"
+            # fmt: off
+            C5 = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [3.0, 2.0, 3.0, 1.0, 5.0, 3.000000000000000001, 7.0, 8.0, 3.0, 1 - 1e-11, 7.0, 4.0],
+            )
+            # fmt: on
+            assert C5.isclose(A)
+            C6 = Matrix.from_values(
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [3.0, 2.000001, 3.0, 1.0, 5.0, 3.0, 7.0, 7.9999999, 3.0, 1.0, 7.0, 4.0],
+            )
+            assert C6.isclose(A, rel_tol=1e-3)
 
 
 @pytest.mark.slow

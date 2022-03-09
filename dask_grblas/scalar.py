@@ -3,7 +3,7 @@ import grblas as gb
 import numpy as np
 from dask.delayed import Delayed, delayed
 
-from .base import BaseType, InnerBaseType, DOnion
+from .base import BaseType, InnerBaseType, DOnion, Box
 from .expr import AmbiguousAssignOrExtract, GbDelayed
 from .utils import get_meta, np_dtype
 
@@ -76,13 +76,96 @@ class Scalar(BaseType):
         self._meta = meta
         self.dtype = meta.dtype
 
-    def update(self, expr):
+    def update(self, expr, in_DOnion=False):
+        typ = type(expr)
+        if (
+            self.is_dOnion
+            or typ is AmbiguousAssignOrExtract
+            and expr.has_dOnion
+            or typ is GbDelayed
+            and expr.has_dOnion
+            or typ is Scalar
+            and expr.is_dOnion
+        ):
+            self_copy = self.__class__(self._delayed, meta=self._meta)
+            expr_ = expr
+            if typ is AmbiguousAssignOrExtract and expr.has_dOnion:
+
+                def update_by_aae(c, p, t, k_0, k_1):
+                    p = p.T if t else p
+                    keys = k_0 if k_1 is None else (k_0, k_1)
+                    aae = AmbiguousAssignOrExtract(p, keys)
+                    return c.update(aae, in_DOnion=True)
+
+                aae_parent = expr_.parent.dOnion_if
+                aae_parent_is_T = expr_.parent.is_dOnion and getattr(
+                    expr_.parent, "_is_transposed", False
+                )
+                if type(expr_.index) is tuple and len(expr_.index) == 2:
+                    keys_0, keys_1 = expr_.index[0], expr_.index[1]
+                else:
+                    keys_0, keys_1 = expr_.index, None
+
+                donion = DOnion.multiple_access(
+                    self._meta,
+                    update_by_aae,
+                    self_copy.dOnion_if,
+                    aae_parent,
+                    aae_parent_is_T,
+                    *(keys_0, keys_1),
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            if typ is GbDelayed and expr.has_dOnion:
+
+                def update_by_gbd(c, t, *args, **kwargs):
+                    args = tuple(a.T if xt else a for (xt, a) in zip(t, args))
+                    gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
+                    return c.update(gbd, in_DOnion=True)
+
+                gbd_parent = expr_.parent.dOnion_if
+                gbd_method = expr.method_name
+                gbd_args = (gbd_parent, gbd_method) + tuple(
+                    getattr(x, "dOnion_if", x) for x in expr.args
+                )
+                gbd_parent_is_T = expr_.parent.is_dOnion and getattr(
+                    expr_.parent, "_is_transposed", False
+                )
+                is_T = (gbd_parent_is_T, False) + tuple(
+                    getattr(x, "is_dOnion", False) and getattr(x, "_is_transposed", False)
+                    for x in expr.args
+                )
+                gbd_kwargs = {k: getattr(v, "dOnion_if", v) for k, v in expr.kwargs.items()}
+                donion = DOnion.multiple_access(
+                    self._meta,
+                    update_by_gbd,
+                    self_copy.dOnion_if,
+                    is_T,
+                    *gbd_args,
+                    **gbd_kwargs,
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            elif typ is Scalar and expr.is_dOnion:
+                expr_ = expr._delayed
+            donion = DOnion.multiple_access(
+                self._meta, Scalar.update, self_copy.dOnion_if, expr_, in_DOnion=True
+            )
+            self.__init__(donion, self._meta)
+            return
+
+        if typ is Box:
+            expr = expr.content
+            typ = type(expr)
+
         self._meta.update(get_meta(expr))
         self._meta.clear()
-        typ = type(expr)
         if typ is AmbiguousAssignOrExtract:
             # Extract (s << v[index])
-            self.value = expr.new(dtype=self.dtype).value
+            expr_new = expr.new(dtype=self.dtype)
+            self.value = expr_new.value
         elif typ is Scalar:
             # Simple assignment (s << t)
             self.value = expr.value
@@ -92,11 +175,63 @@ class Scalar(BaseType):
         else:
             # Try simple assignment (s << 1)
             self.value = expr
+        if in_DOnion:
+            return self.__class__(self._delayed, meta=self._meta)
 
-    def _update(self, delayed, *, accum):
+    def _update(self, rhs, *, accum, in_DOnion=False):
         # s(accum=accum) << v.reduce()
-        assert type(delayed) is GbDelayed
-        delayed._update(self, accum=accum)
+        typ = type(rhs)
+        if typ is Box:
+            rhs = rhs.content
+
+        assert type(rhs) is GbDelayed
+
+        if self.is_dOnion or rhs.parent.is_dOnion:
+            self_copy = self.__class__(self._delayed, meta=self._meta)
+            self_ = self_copy.dOnion_if
+            rhs_ = rhs
+            if typ is GbDelayed and rhs.has_dOnion:
+
+                def _update_by_gbd(c, t, *args, accum=None, **kwargs):
+                    args = tuple(a.T if xt else a for (xt, a) in zip(t, args))
+                    gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
+                    return c._update(gbd, accum=accum, in_DOnion=True)
+
+                gbd_parent = rhs_.parent.dOnion_if
+                gbd_method = rhs.method_name
+                gbd_args = (gbd_parent, gbd_method) + tuple(
+                    getattr(x, "dOnion_if", x) for x in rhs.args
+                )
+                gbd_parent_is_T = rhs_.parent.is_dOnion and getattr(
+                    rhs_.parent, "_is_transposed", False
+                )
+                is_T = (gbd_parent_is_T, False) + tuple(
+                    getattr(x, "is_dOnion", False) and getattr(x, "_is_transposed", False)
+                    for x in rhs.args
+                )
+                gbd_kwargs = {k: getattr(v, "dOnion_if", v) for k, v in rhs.kwargs.items()}
+                donion = DOnion.multiple_access(
+                    self._meta,
+                    _update_by_gbd,
+                    self_copy.dOnion_if,
+                    is_T,
+                    *gbd_args,
+                    accum=accum,
+                    **gbd_kwargs,
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            rhs_ = rhs.parent.dOnion_if
+            donion = DOnion.multiple_access(
+                self._meta, Scalar._update, self_, rhs_, accum=accum, in_DOnion=True
+            )
+            self.__init__(donion, self._meta)
+            return
+
+        rhs._update(self, accum=accum)
+        if in_DOnion:
+            return self.__class__(self._delayed, meta=self._meta)
 
     def dup(self, dtype=None, *, name=None):
         if dtype is None:
@@ -155,6 +290,8 @@ class Scalar(BaseType):
     def isequal(self, other, *, check_dtype=False):
         if other is None:
             return self.is_empty
+        if type(other) is Box:
+            other = other.content
         if type(other) is not Scalar:
             self._meta.isequal(get_meta(other))
             other = Scalar.from_value(other)
@@ -199,6 +336,11 @@ class Scalar(BaseType):
 
     @value.setter
     def value(self, val):
+        if type(self._delayed) is DOnion:
+            donion = DOnion.multiple_access(self._meta, Scalar.from_value, val)
+            self.__init__(donion, meta=self._meta)
+            return
+
         scalar = Scalar.from_value(val, dtype=self.dtype)
         self._delayed = scalar._delayed
 
@@ -230,8 +372,8 @@ class PythonScalar:
     def compute(self, *args, **kwargs):
         innerval = self._delayed.compute(*args, **kwargs)
         if type(self._delayed) is DOnion:
-            return innerval.value if hasattr(innerval, 'value') else innerval
-            
+            return innerval.value if hasattr(innerval, "value") else innerval
+
         return innerval.value.value
 
 

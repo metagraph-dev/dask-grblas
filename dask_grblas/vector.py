@@ -2,14 +2,13 @@ import dask.array as da
 import numpy as np
 import grblas as gb
 
-from numbers import Integral
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 from grblas.exceptions import IndexOutOfBound
 
-from .base import BaseType, InnerBaseType, _nvals, DOnion, is_DOnion
+from .base import BaseType, InnerBaseType, _nvals, DOnion, is_DOnion, Box
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
@@ -196,6 +195,16 @@ class Vector(BaseType):
 
     @classmethod
     def new(cls, dtype, size=0, *, chunks="auto", name=None):
+        if is_DOnion(size):
+            meta = gb.Vector.new(dtype)
+            donion = DOnion.multiple_access(
+                meta, cls.new, dtype, size=size, chunks=chunks, name=name
+            )
+            return Vector(donion, meta=meta)
+
+        if type(size) is Box:
+            size = size.content
+
         if size > 0:
             chunks = da.core.normalize_chunks(chunks, (size,), dtype=int)
             meta = gb.Vector.new(dtype)
@@ -357,40 +366,12 @@ class Vector(BaseType):
             self.resize(*self.shape, chunks=chunks)
         else:
             return self.resize(*self.shape, chunks=chunks, inplace=False)
-        # chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
-        # id = self.to_values()
-        # new = Vector.from_values(*id, *self.shape, trust_size=True, chunks=chunks)
-        # if inplace:
-        #     self.__init__(new._delayed)
-        # else:
-        #     return new
 
     def __getitem__(self, index):
-        if type(self._delayed) is DOnion:
-            from .scalar import Scalar, PythonScalar
-
-            if isinstance(index, (Integral, Scalar, PythonScalar)):
-                meta = gb.Scalar.new(self._meta.dtype)
-            else:
-                meta = gb.Vector.new(self._meta.dtype)
-            return self._delayed.getattr(meta, "__getitem__", index)
-        if type(index) is DOnion:
-            meta = self._meta
-            return DOnion.multiple_access(meta, self.__getitem__, index)
         return AmbiguousAssignOrExtract(self, index)
 
     def __delitem__(self, keys):
         del Updater(self)[keys]
-
-        # del self._meta[index]
-        # delayed = self._optional_dup()
-        # TODO: normalize index
-        # delayed = delayed.map_blocks(
-        #     _delitem,
-        #     index,
-        #     dtype=np_dtype(self.dtype),
-        # )
-        # raise NotImplementedError()
 
     def __setitem__(self, index, delayed):
         Assigner(Updater(self), index).update(delayed)
@@ -411,11 +392,13 @@ class Vector(BaseType):
 
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
         assert type(other) is Vector
+
         meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
         return GbDelayed(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
 
     def ewise_mult(self, other, op=binary.times):
         assert type(other) is Vector
+
         meta = self._meta.ewise_mult(other._meta, op=op)
         return GbDelayed(self, "ewise_mult", other, op, meta=meta)
 

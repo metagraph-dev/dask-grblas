@@ -24,7 +24,8 @@ from .utils import (
 
 
 class GbDelayed:
-    def __init__(self, parent, method_name, *args, meta, **kwargs):
+    def __init__(self, parent, method_name, *args, meta=None, **kwargs):
+        self.has_dOnion = np.any([getattr(x, "is_dOnion", False) for x in (parent,) + args])
         self.parent = parent
         self.method_name = method_name
         self.args = args
@@ -232,13 +233,85 @@ class GbDelayed:
         if mask is not None:
             _check_mask(mask)
 
-        if is_DOnion(self.parent) or mask is not None and is_DOnion(mask.mask):
-            meta = self._meta.new(dtype=dtype)
-            ret_type = get_return_type(meta)
-            donion = DOnion.multiple_access(
-                meta, self.__class__.new, self.parent, dtype=dtype, mask=mask, name=name
+        if self.has_dOnion or mask is not None and mask.is_dOnion:
+
+            def GbDelayed_new(p, pt, m, t, *args, dtype=None, mask=None, **kwargs):
+                p = p.T if pt else p
+                args = tuple(a.T if xt else a for (xt, a) in zip(t, args))
+                gbd = getattr(p, m)(*args, **kwargs)
+                return gbd.new(dtype=dtype, mask=mask)
+
+            gbd_args = tuple(getattr(x, "dOnion_if", x) for x in self.args)
+            is_T = tuple(
+                getattr(x, "is_dOnion", False) and getattr(x, "_is_transposed", False)
+                for x in self.args
             )
-            return ret_type(donion, meta=meta)
+            gbd_kwargs = {k: getattr(v, "dOnion_if", v) for k, v in self.kwargs.items()}
+            meta_kwargs = {k: getattr(v, "_meta", v) for k, v in self.kwargs.items()}
+
+            if self.method_name.startswith(("reduce", "apply")):
+                # unary operations
+                a = self.parent
+                op = self.args[0]
+                args = self.args[1:]
+                if self.method_name == "apply":
+                    # grblas does not like empty Scalars!
+                    if "left" in meta_kwargs and type(meta_kwargs["left"]) is gb.Scalar:
+                        meta_kwargs["left"] = gb.Scalar.from_value(
+                            1, dtype=meta_kwargs["left"].dtype
+                        )
+                    if "right" in meta_kwargs and type(meta_kwargs["right"]) is gb.Scalar:
+                        meta_kwargs["right"] = gb.Scalar.from_value(
+                            1, dtype=meta_kwargs["right"].dtype
+                        )
+                elif self.method_name.startswith("reduce"):
+                    # grblas bug occurs when shape is (0, 0)
+                    if a._meta.shape == (0,) * a.ndim:
+                        a._meta.resize(*((1,) * a.ndim))
+                meta = getattr(a._meta, self.method_name)(op, *args, **meta_kwargs).new(dtype=dtype)
+                meta.clear()
+            else:
+                # binary operations
+                a = self.parent
+                b = self.args[0]
+                op = self.args[1]
+
+                try:
+                    meta = getattr(a._meta, self.method_name)(b._meta, op=op, **meta_kwargs).new(
+                        dtype=dtype
+                    )
+                except DimensionMismatch:
+                    if self.method_name == "mxm":
+                        b_meta = gb.Matrix.new(
+                            dtype=b._meta.dtype, nrows=a._meta.ncols, ncols=b._meta.ncols
+                        )
+                    elif self.method_name == "vxm":
+                        b_meta = gb.Matrix.new(
+                            dtype=b._meta.dtype, nrows=a._meta.size, ncols=b._meta.ncols
+                        )
+                    elif self.method_name == "mxv":
+                        b_meta = gb.Vector.new(dtype=b._meta.dtype, size=a._meta.ncols)
+
+                    elif self.method_name in ("ewise_add", "ewise_mult"):
+                        b_meta = a._meta.dup(dtype=b._meta.dtype)
+
+                    meta = getattr(a._meta, self.method_name)(b_meta, op=op, **meta_kwargs).new(
+                        dtype=dtype
+                    )
+
+            donion = DOnion.multiple_access(
+                meta,
+                GbDelayed_new,
+                a.dOnion_if,
+                a.is_dOnion and getattr(a, "_is_transposed", False),
+                self.method_name,
+                is_T,
+                *gbd_args,
+                dtype=dtype,
+                mask=None if mask is None else mask.dOnion_if,
+                **gbd_kwargs,
+            )
+            return get_return_type(meta)(donion, meta=meta)
 
         if mask is not None:
             meta = self._meta.new(dtype=dtype, mask=mask._meta)
@@ -283,7 +356,6 @@ class GbDelayed:
                 dtype=np_dtype(meta.dtype),
             )
         elif self.method_name in {"vxm", "mxv", "mxm"}:
-            # TODO: handle dtype and mask
             delayed = self._matmul2(meta, mask=mask)
         else:
             raise ValueError(self.method_name)
@@ -446,7 +518,11 @@ class IndexerResolver:
                     AxisIndex(obj._ncols, slice(*normalized1)),
                 ]
         else:
-            self.indices = self.parse_indices(indices, obj.shape, check_shape)
+            if not check_shape and hasattr(obj, "_meta"):
+                shape = obj._meta.shape
+            else:
+                shape = obj.shape
+            self.indices = self.parse_indices(indices, shape, check_shape)
 
     @property
     def is_single_element(self):
@@ -492,13 +568,16 @@ class IndexerResolver:
                 if index < 0:
                     if check_shape:
                         raise IndexError(f"Index out of range: index={index - size}, size={size}")
-            return AxisIndex(None, IndexerResolver.normalize_index(index, size))
+            return AxisIndex(None, IndexerResolver.normalize_index(index, size, check_shape))
         if typ is list:
             index = [IndexerResolver.normalize_index(i, size, check_shape) for i in index]
             return AxisIndex(len(index), index)
         elif typ is slice:
-            normalized = index.indices(size)
-            return AxisIndex(len(range(*normalized)), slice(*normalized))
+            if check_shape:
+                normalized = index.indices(size)
+                return AxisIndex(len(range(*normalized)), slice(*normalized))
+            else:
+                return AxisIndex(None, index)
 
         elif typ in {np.ndarray, da.Array}:
             if len(index.shape) != 1:
@@ -506,6 +585,10 @@ class IndexerResolver:
             if not np.issubdtype(index.dtype, np.integer):
                 raise TypeError(f"Invalid dtype for index: {index.dtype}")
             return AxisIndex(index.shape[0], index)
+
+        elif is_DOnion(index):
+            return AxisIndex(None, index)
+
         else:
             from .scalar import Scalar
 
@@ -627,6 +710,10 @@ class Updater:
         if self.input_mask is not None:
             if type(delayed) is AmbiguousAssignOrExtract:
                 # w(input_mask) << v[index]
+                if self.parent is delayed.parent:
+                    delayed.parent = delayed.parent.__class__(
+                        delayed.parent._delayed, delayed.parent._meta
+                    )
                 self.parent._update(
                     delayed.new(mask=self.mask, input_mask=self.input_mask),
                     accum=self.accum,
@@ -640,7 +727,7 @@ class Updater:
         if isinstance(delayed, Number) or (
             isinstance(delayed, BaseType) and get_meta(delayed)._is_scalar
         ):
-            ndim = len(self.parent.shape)
+            ndim = self.parent.ndim
             if ndim > 0:
                 self.__setitem__(_squeeze((slice(None),) * ndim), delayed)
             elif self.accum is not None:
@@ -652,9 +739,7 @@ class Updater:
         if self.mask is None and self.accum is None:
             return self.parent.update(delayed)
 
-        if like_DOnion(self.parent) or like_DOnion(delayed):
-            self.parent._meta = delayed._meta.new()
-        else:
+        if not (like_DOnion(self.parent) or like_DOnion(delayed)):
             self.parent._meta._update(
                 get_meta(delayed),
                 mask=get_meta(self.mask),
@@ -1264,17 +1349,49 @@ def _defrag_to_index_chunk(*args, x_chunks, dtype=None):
     return wrap_inner(fused_fragments[index_tuple].new())
 
 
+def _adjust_meta_to_index(meta, index):
+    from .scalar import Scalar, PythonScalar
+
+    # Since grblas does not support indices that are dask arrays
+    # this complicates meta deduction.  We therefore substitute
+    # any non-Integral type indices with `slice(None)`
+    index = index if type(index) is tuple else (index,)
+    # Next, we resize `meta` to accept any Integral-type indices:
+    numbers = [x for x in index if isinstance(x, (Integral, Scalar, PythonScalar))]
+    max_index = np.max(numbers) if numbers else None
+    meta = meta.dup()
+    if max_index is not None:
+        if len(index) == 1:
+            meta.resize(max_index + 1)
+        else:
+            meta.resize(max_index + 1, max_index + 1)
+
+    meta_index = tuple(
+        x if isinstance(x, (Integral, Scalar, PythonScalar)) else slice(None) for x in index
+    )
+    return meta[_squeeze(meta_index)]
+
+
 class AmbiguousAssignOrExtract:
-    def __init__(self, parent, index, self_donion=None, meta=None):
+    def __init__(self, parent, index, meta=None):
         self.parent = parent
         self.index = index
-        self._donion = self_donion
-        self._meta = parent._meta[index] if meta is None else meta
-        if (
-                not (hasattr(parent, '_delayed') and is_DOnion(parent._delayed))
-                and not (hasattr(parent, '_matrix') and is_DOnion(parent._matrix))
-        ):
+        input_ndim = parent.ndim
+        self.keys_0_is_dOnion = input_ndim == 1 and is_DOnion(index)
+        self.keys_1_is_dOnion = (
+            input_ndim == 2
+            and type(index) is tuple
+            and len(index) == 2
+            and (is_DOnion(index[0]) or is_DOnion(index[1]))
+        )
+        if parent.is_dOnion or self.keys_0_is_dOnion or self.keys_1_is_dOnion:
+            IndexerResolver(self.parent, index, check_shape=False)
+            self._meta = _adjust_meta_to_index(parent._meta, index)
+            self.has_dOnion = True
+        else:
             self.resolved_indices = IndexerResolver(parent, index)
+            self._meta = parent._meta[index] if meta is None else meta
+            self.has_dOnion = False
             # infix expression requirements:
             shape = tuple(i.size for i in self.resolved_indices.indices if i.size)
             self.ndim = len(shape)
@@ -1286,11 +1403,46 @@ class AmbiguousAssignOrExtract:
                 self._ncols = shape[1]
 
     def new(self, *, dtype=None, mask=None, input_mask=None, name=None):
-        if self._donion is not None:
-            return get_return_type(self._meta.new(dtype=dtype))(
-                self._donion.new(dtype=dtype, mask=mask, input_mask=input_mask, name=name)
+        def getitem(parent, at, keys_0, keys_1, dtype, mask, input_mask):
+            keys = keys_0 if keys_1 is None else (keys_0, keys_1)
+            return AmbiguousAssignOrExtract(parent.T if at else parent, keys).new(
+                dtype=dtype, mask=mask, input_mask=input_mask
             )
 
+        if mask is not None:
+            _check_mask(mask)
+        if input_mask is not None:
+            _check_mask(input_mask)
+
+        mask_is_DOnion = mask is not None and mask.is_dOnion
+        input_mask_is_DOnion = input_mask is not None and input_mask.is_dOnion
+        if (
+            self.parent.is_dOnion
+            or self.keys_0_is_dOnion
+            or self.keys_1_is_dOnion
+            or mask_is_DOnion
+            or input_mask_is_DOnion
+        ):
+            meta = self._meta.new(dtype=dtype)
+
+            if type(self.index) is tuple and len(self.index) == 2:
+                keys_0, keys_1 = self.index[0], self.index[1]
+            else:
+                keys_0, keys_1 = self.index, None
+
+            donion = DOnion.multiple_access(
+                meta,
+                getitem,
+                self.parent.dOnion_if,
+                self.parent.is_dOnion and getattr(self.parent, "_is_transposed", False),
+                *(keys_0, keys_1),
+                dtype=dtype,
+                mask=None if mask is None else mask.dOnion_if,
+                input_mask=None if input_mask is None else input_mask.dOnion_if,
+            )
+            return get_return_type(meta)(donion)
+
+        # no dOnions
         parent = self.parent
         xt = False  # xt = parent._is_transposed
         dxn = 1  # dxn = -1 if xt else 1
@@ -1475,12 +1627,13 @@ class AmbiguousAssignOrExtract:
         return Assigner(self.parent(*args, **kwargs), self.index, subassign=True)
 
     def update(self, obj):
+        if getattr(self.parent, "_is_transposed", False):
+            raise TypeError("'TransposedMatrix' object does not support item assignment")
+
         if is_DOnion(self.parent._delayed):
             self.parent.__setitem__(self.index, obj)
             return
 
-        if getattr(self.parent, "_is_transposed", False):
-            raise TypeError("'TransposedMatrix' object does not support item assignment")
         Assigner(Updater(self.parent), self.index).update(obj)
 
     def __lshift__(self, rhs):
@@ -1488,12 +1641,9 @@ class AmbiguousAssignOrExtract:
 
     @property
     def value(self):
-        if self._donion is not None:
-            ret_type = get_return_type(self._meta.new())
-            return ret_type(self._donion.new()).value
-
         self._meta.value
-        return self.new().value
+        scalar = self.new()
+        return scalar.value
 
 
 def _uniquify(ndim, index, obj, mask=None, ot=False):
@@ -1543,12 +1693,69 @@ class Assigner:
     def __init__(self, updater, index, subassign=False):
         self.updater = updater
         self.parent = updater.parent
-        self.resolved_indices = IndexerResolver(self.parent, index).indices
-        self.index = tuple(i.index for i in self.resolved_indices)
         self._meta = updater.parent._meta
         self.subassign = subassign
 
+        input_ndim = self.parent.ndim
+        self.keys_0_is_dOnion = input_ndim == 1 and is_DOnion(index)
+        self.keys_1_is_dOnion = (
+            input_ndim == 2
+            and type(index) is tuple
+            and len(index) == 2
+            and (is_DOnion(index[0]) or is_DOnion(index[1]))
+        )
+        if self.parent.is_dOnion or self.keys_0_is_dOnion or self.keys_1_is_dOnion:
+            IndexerResolver(self.parent, index, check_shape=False)
+            self.index = index
+        else:
+            self.resolved_indices = IndexerResolver(self.parent, index).indices
+            self.index = tuple(i.index for i in self.resolved_indices)
+
     def update(self, obj):
+        def setitem(lhs, mask, accum, replace, keys_0, keys_1, obj, ot, subassign, in_dOnion=False):
+            keys = (keys_0,) if keys_1 is None else (keys_0, keys_1)
+            updater = Updater(lhs, mask=mask, accum=accum, replace=replace)
+            Assigner(updater, keys, subassign=subassign).update(obj.T if ot else obj)
+            if in_dOnion:
+                return lhs
+
+        # check for dOnions:
+        lhs = self.parent
+        updater = self.updater
+        if (
+            lhs.is_dOnion
+            or updater.mask is not None
+            and updater.mask.is_dOnion
+            or self.keys_0_is_dOnion
+            or self.keys_1_is_dOnion
+            or getattr(obj, "is_dOnion", False)
+        ):
+            lhs_ = lhs.__class__(lhs._delayed, meta=lhs._meta)
+            mask = None if updater.mask is None else updater.mask.dOnion_if
+
+            if type(self.index) is tuple and len(self.index) == 2:
+                keys_0, keys_1 = self.index[0], self.index[1]
+            else:
+                keys_0, keys_1 = self.index, None
+
+            donion = DOnion.multiple_access(
+                lhs._meta,
+                setitem,
+                lhs_.dOnion_if,
+                mask,
+                updater.accum,
+                updater.replace,
+                keys_0,
+                keys_1,
+                getattr(obj, "dOnion_if", obj),
+                getattr(obj, "is_dOnion", False) and getattr(obj, "_is_transposed", False),
+                self.subassign,
+                in_dOnion=True,
+            )
+            lhs.__init__(donion, meta=lhs._meta)
+            return
+
+        # no dOnions
         if not (isinstance(obj, BaseType) or isinstance(obj, Number)):
             try:
                 obj_transposed = obj._is_transposed

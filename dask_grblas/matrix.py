@@ -10,7 +10,7 @@ from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 from grblas.exceptions import IndexOutOfBound, EmptyObject, DimensionMismatch
 
-from .base import BaseType, InnerBaseType, DOnion, is_DOnion, like_DOnion, skip
+from .base import BaseType, InnerBaseType, DOnion, is_DOnion, Box, skip
 from .base import _nvals as _nvals_in_chunk
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
@@ -152,8 +152,10 @@ class Matrix(BaseType):
             return Matrix(out_donion, meta=meta)
 
         # no DOnions
-        if type(rows) is da.Array and type(columns) is da.Array and (
-                type(values) is da.Array or isinstance(values, Number)
+        if (
+            type(rows) is da.Array
+            and type(columns) is da.Array
+            and (type(values) is da.Array or isinstance(values, Number))
         ):
             np_idtype_ = np_dtype(lookup_dtype(rows.dtype))
             if nrows is not None and ncols is not None:
@@ -298,9 +300,7 @@ class Matrix(BaseType):
         if type(values) is list:
             values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
 
-        if type(values) is da.Array and (
-            rows.size != columns.size or columns.size != values.size
-        ):
+        if type(values) is da.Array and (rows.size != columns.size or columns.size != values.size):
             raise ValueError(
                 "`rows` and `columns` and `values` lengths must match: "
                 f"{rows.size}, {columns.size}, {values.size}"
@@ -315,7 +315,8 @@ class Matrix(BaseType):
         idtype = gb.Matrix.new(rows.dtype).dtype
         np_idtype_ = np_dtype(idtype)
         vdtype = (
-            lookup_dtype(type(values)) if isinstance(values, Number)
+            lookup_dtype(type(values))
+            if isinstance(values, Number)
             else gb.Matrix.new(values.dtype).dtype
         )
         np_vdtype_ = np_dtype(vdtype)
@@ -355,6 +356,19 @@ class Matrix(BaseType):
 
     @classmethod
     def new(cls, dtype, nrows=0, ncols=0, *, chunks="auto", name=None):
+        if is_DOnion(nrows) or is_DOnion(ncols):
+            meta = gb.Matrix.new(dtype)
+            donion = DOnion.multiple_access(
+                meta, cls.new, dtype, nrows=nrows, ncols=ncols, chunks=chunks, name=name
+            )
+            return Matrix(donion, meta=meta)
+
+        if type(nrows) is Box:
+            nrows = nrows.content
+
+        if type(ncols) is Box:
+            ncols = ncols.content
+
         dtype = dtype.lower() if isinstance(dtype, str) else dtype
         if nrows == 0 and ncols == 0:
             matrix = gb.Matrix.new(dtype, nrows, ncols)
@@ -422,8 +436,6 @@ class Matrix(BaseType):
 
     @property
     def T(self):
-        if is_DOnion(self._delayed):
-            return TransposedMatrix(self._delayed.T)
         return TransposedMatrix(self)
 
     @property
@@ -447,7 +459,7 @@ class Matrix(BaseType):
     def resize(self, nrows, ncols, inplace=True, chunks="auto"):
         if is_DOnion(self._delayed):
             donion = self._delayed.getattr(
-                self._meta, 'resize', nrows, ncols, inplace=False, chunks=chunks
+                self._meta, "resize", nrows, ncols, inplace=False, chunks=chunks
             )
             if inplace:
                 self.__init__(donion, meta=self._meta)
@@ -497,7 +509,7 @@ class Matrix(BaseType):
     def rechunk(self, inplace=False, chunks="auto"):
         if is_DOnion(self._delayed):
             meta = self._meta
-            donion = self._delayed.getattr(meta, 'rechunk', inplace=False, chunks=chunks)
+            donion = self._delayed.getattr(meta, "rechunk", inplace=False, chunks=chunks)
             if inplace:
                 self.__init__(donion, meta=meta)
                 return
@@ -614,39 +626,6 @@ class Matrix(BaseType):
         return get_return_type(meta)(delayed, nvals=nvals)
 
     def __getitem__(self, index):
-        if (
-                type(self._delayed) is DOnion
-                or type(index) is tuple and len(index) == 2
-                and (is_DOnion(index[0]) or is_DOnion(index[1]))
-        ):
-            from .scalar import Scalar, PythonScalar
-            from .expr import IndexerResolver
-
-            self_delayed = self._delayed if type(self._delayed) is DOnion else self
-            if type(index) is tuple and len(index) == 2:
-                def getitem(self_, i0, i1):
-                    return self.__class__.__getitem__(self_, (i0, i1))
-
-                # Since grblas does not support indices that are dask arrays
-                # this complicates meta deduction.  We therefore substitute
-                # any non-Integral type indices with `slice(None)`
-                meta_index = tuple(
-                    x if isinstance(x, (Integral, Scalar, PythonScalar))
-                    else slice(None) for x in index
-                )
-                # Next, we resize `meta` to accept any Integral-type indices:
-                numbers = [x for x in index if isinstance(x, (Integral, Scalar, PythonScalar))]
-                max_index = np.max(numbers) if numbers else None
-                if max_index is not None:
-                    self._meta.resize(nrows=max_index + 1, ncols=max_index + 1)
-                meta = self._meta[meta_index]
-                
-                IndexerResolver(self._meta, index, check_shape=False)
-                donion = DOnion.multiple_access(meta, getitem, self_delayed, index[0], index[1])
-                return AmbiguousAssignOrExtract(self, index, self_donion=donion, meta=meta)
-            else:
-                raise ValueError("Matrix indices must be a 2-tuple.")
-
         return AmbiguousAssignOrExtract(self, index)
 
     def __delitem__(self, keys, in_DOnion=False):
@@ -655,9 +634,7 @@ class Matrix(BaseType):
             if len(good_keys) != 2:
                 raise TypeError("Remove Element only supports scalars.")
 
-            donion = self._delayed.getattr(
-                self._meta, '__delitem__', keys, in_DOnion=True
-            )
+            donion = self._delayed.getattr(self._meta, "__delitem__", keys, in_DOnion=True)
             self.__init__(donion, meta=self._meta)
             return
 
@@ -666,32 +643,7 @@ class Matrix(BaseType):
             return self
 
     def __setitem__(self, index, delayed, in_DOnion=False):
-        if is_DOnion(self._delayed):
-            donion = self._delayed.getattr(
-                self._meta, '__setitem__', index, delayed, in_DOnion=True
-            )
-            self.__init__(donion, meta=self._meta)
-            return
-
-        dlayd_is_donion = like_DOnion(delayed)
-        if dlayd_is_donion:
-            delayed = (
-                delayed._delayed if hasattr(delayed, '_delayed') and is_DOnion(delayed._delayed)
-                else delayed
-            )
-        if dlayd_is_donion or type(index) is tuple and len(index) == 2 and (
-                is_DOnion(index[0]) or is_DOnion(index[1])
-        ):
-            def func(i0, i1, delayed):
-                return self.__setitem__((i0, i1), delayed)
-
-            donion = DOnion.multiple_access(self._meta, func, index[0], index[1], delayed)
-            self.__init__(donion, meta=self._meta)
-            return
-
         Updater(self)[index] = delayed
-        if in_DOnion:
-            return self
 
     def __contains__(self, index):
         extractor = self[index]
@@ -710,41 +662,20 @@ class Matrix(BaseType):
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
         assert type(other) is Matrix  # TODO: or TransposedMatrix
 
-        self_delayed = self._matrix if self._is_transposed else self._delayed
-        other_delayed = other._matrix if other._is_transposed else other._delayed
-        if is_DOnion(self_delayed) or is_DOnion(other_delayed):
-            self_ = self_delayed if is_DOnion(self_delayed) else self
-            other_ = other_delayed if is_DOnion(other_delayed) else other
-            try:
-                meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
-            except DimensionMismatch:
-                meta = self._meta.ewise_add(self._meta, op=op, require_monoid=require_monoid)
-
-            donion = DOnion.multiple_access(
-                meta, Matrix.ewise_add, self_, other_, op=op, require_monoid=require_monoid
-            )
-            return GbDelayed(donion, 'ewise_add', op, meta=meta)
-
-        meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
+        try:
+            meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
+        except DimensionMismatch:
+            meta = self._meta.ewise_add(self._meta, op=op, require_monoid=require_monoid)
         return GbDelayed(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
 
     def ewise_mult(self, other, op=binary.times):
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
+        assert type(other) is Matrix
 
-        self_delayed = self._matrix if self._is_transposed else self._delayed
-        other_delayed = other._matrix if other._is_transposed else other._delayed
-        if is_DOnion(self_delayed) or is_DOnion(other_delayed):
-            self_ = self_delayed if is_DOnion(self_delayed) else self
-            other_ = other_delayed if is_DOnion(other_delayed) else other
-            try:
-                meta = self._meta.ewise_mult(other._meta, op=op)
-            except DimensionMismatch:
-                meta = self._meta.ewise_mult(self._meta, op=op)
+        try:
+            meta = self._meta.ewise_mult(other._meta, op=op)
+        except DimensionMismatch:
+            meta = self._meta.ewise_mult(self._meta, op=op)
 
-            donion = DOnion.multiple_access(meta, Matrix.ewise_mult, self_, other_, op=op)
-            return GbDelayed(donion, 'ewise_mult', op, meta=meta)
-
-        meta = self._meta.ewise_mult(other._meta, op=op)
         return GbDelayed(self, "ewise_mult", other, op, meta=meta)
 
     def mxv(self, other, op=semiring.plus_times):
@@ -752,40 +683,24 @@ class Matrix(BaseType):
 
         assert type(other) is Vector
 
-        self_delayed = self._matrix if self._is_transposed else self._delayed
-        if is_DOnion(self_delayed) or is_DOnion(other._delayed):
-            self_ = self_delayed if is_DOnion(self_delayed) else self
-            other_ = other._delayed if is_DOnion(other._delayed) else other
-            try:
-                meta = self._meta.mxv(other._meta, op=op)
-            except DimensionMismatch:
-                other_meta = gb.Vector.new(dtype=other._meta.dtype, size=self._meta.ncols)
-                meta = self._meta.mxv(other_meta, op=op)
-            donion = DOnion.multiple_access(meta, Matrix.mxv, self_, other_, op=op)
-            return GbDelayed(donion, 'mxv', op, meta=meta)
+        try:
+            meta = self._meta.mxv(other._meta, op=op)
+        except DimensionMismatch:
+            other_meta = gb.Vector.new(dtype=other._meta.dtype, size=self._meta.ncols)
+            meta = self._meta.mxv(other_meta, op=op)
 
-        meta = self._meta.mxv(other._meta, op=op)
         return GbDelayed(self, "mxv", other, op, meta=meta)
 
     def mxm(self, other, op=semiring.plus_times):
         assert type(other) in (Matrix, TransposedMatrix)
 
-        self_delayed = self._matrix if self._is_transposed else self._delayed
-        other_delayed = other._matrix if other._is_transposed else other._delayed
-        if is_DOnion(self_delayed) or is_DOnion(other_delayed):
-            self_ = self_delayed if is_DOnion(self_delayed) else self
-            other_ = other_delayed if is_DOnion(other_delayed) else other
-            try:
-                meta = self._meta.mxm(other._meta, op=op)
-            except DimensionMismatch:
-                other_meta = gb.Matrix.new(
-                    dtype=other._meta.dtype, nrows=self._meta.ncols, ncols=other._meta.ncols
-                )
-                meta = self._meta.mxm(other_meta, op=op)
-            donion = DOnion.multiple_access(meta, Matrix.mxm, self_, other_, op=op)
-            return GbDelayed(donion, 'mxm', op, meta=meta)
-
-        meta = self._meta.mxm(other._meta, op=op)
+        try:
+            meta = self._meta.mxm(other._meta, op=op)
+        except DimensionMismatch:
+            other_meta = gb.Matrix.new(
+                dtype=other._meta.dtype, nrows=self._meta.ncols, ncols=other._meta.ncols
+            )
+            meta = self._meta.mxm(other_meta, op=op)
         return GbDelayed(self, "mxm", other, op, meta=meta)
 
     def kronecker(self, other, op=binary.times):
@@ -804,6 +719,8 @@ class Matrix(BaseType):
         if type(right) is Scalar:
             right_meta = right.dtype.np_type(0)
 
+        if self._meta.shape == (0,) * self.ndim:
+            self._meta.resize(*((1,) * self.ndim))
         meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
         return GbDelayed(self, "apply", op, right, meta=meta, left=left)
 
@@ -816,11 +733,6 @@ class Matrix(BaseType):
         return GbDelayed(self, "reduce_columnwise", op, meta=meta)
 
     def reduce_scalar(self, op=monoid.plus):
-        if is_DOnion(self._delayed):
-            meta = self._meta.reduce_scalar(op)
-            donion = self._delayed.getattr(meta, 'reduce_scalar', op=op)
-            return GbDelayed(donion, 'reduce_scalar', op, meta=meta)
-
         meta = self._meta.reduce_scalar(op)
         return GbDelayed(self, "reduce_scalar", op, meta=meta)
 
@@ -947,16 +859,37 @@ class TransposedMatrix:
     ndim = 2
     _is_transposed = True
 
-    def __init__(self, matrix):
-        assert type(matrix) in {Matrix, DOnion}
+    def __init__(self, matrix, meta=None):
+        assert type(matrix) is Matrix
         self._matrix = matrix
-        self._meta = matrix._meta.T
+        self._meta = matrix._meta.T if meta is None else meta
 
         # Aggregator-specific requirements:
         self._nrows = self._meta.nrows
         self._ncols = self._meta.ncols
 
+    @property
+    def is_dOnion(self):
+        return is_DOnion(self._matrix._delayed)
+
+    @property
+    def dOnion_if(self):
+        return self._matrix._delayed if self.is_dOnion else self
+
     def new(self, *, dtype=None, mask=None):
+        mask_is_DOnion = mask is not None and mask.is_dOnion
+        if self.is_dOnion or mask_is_DOnion:
+
+            def T(matrix, dtype=None, mask=None):
+                return TransposedMatrix(matrix).new(dtype=dtype, mask=mask)
+
+            _matrix = self._matrix._delayed if self.is_dOnion else self._matrix
+            mask = mask.mask if mask_is_DOnion else mask
+            donion = DOnion.multiple_access(
+                self._meta.new(dtype), T, _matrix, dtype=dtype, mask=mask
+            )
+            return Matrix(donion)
+
         gb_dtype = self._matrix.dtype if dtype is None else lookup_dtype(dtype)
         dtype = np_dtype(gb_dtype)
 
@@ -981,8 +914,6 @@ class TransposedMatrix:
 
     @property
     def T(self):
-        if is_DOnion(self._matrix._delayed):
-            return Matrix(self._matrix._delayed.T)
         return self._matrix
 
     @property
@@ -990,77 +921,53 @@ class TransposedMatrix:
         return self._meta.dtype
 
     def to_values(self, dtype=None, chunks="auto"):
-        if is_DOnion(self._matrix):
+        if self.is_dOnion:
             out_meta = np.array([])
-            result = self._matrix.getattr(out_meta, 'to_values', dtype=dtype, chunks=chunks)
+            result = self.dOnion_if.getattr(out_meta, "to_values", dtype=dtype, chunks=chunks)
             meta_i, _, meta_v = self._meta.to_values(dtype)
             rows = result.getattr(meta_i, "__getitem__", 0)
-            columns = result.getattr(meta_i, "__getitem__", 1)
-            values = result.getattr(meta_v, "__getitem__", 2)
-            return rows, columns, values
-
-        rows, cols, vals = self._matrix.to_values(dtype=dtype, chunks=chunks)
+            cols = result.getattr(meta_i, "__getitem__", 1)
+            vals = result.getattr(meta_v, "__getitem__", 2)
+        else:
+            rows, cols, vals = self._matrix.to_values(dtype=dtype, chunks=chunks)
         return cols, rows, vals
 
     # Properties
     @property
     def nrows(self):
-        if is_DOnion(self._matrix._delayed):
-            return self._matrix._delayed.nrows
+        if self.is_dOnion:
+            return DOnion.multiple_access(
+                self._meta.nrows, lambda x: x.ncols, self._matrix._delayed
+            )
         return self._meta.nrows
 
     @property
     def ncols(self):
-        if is_DOnion(self._matrix._delayed):
-            return self._matrix._delayed.ncols
+        if self.is_dOnion:
+            return DOnion.multiple_access(
+                self._meta.ncols, lambda x: x.nrows, self._matrix._delayed
+            )
         return self._meta.ncols
 
     @property
     def shape(self):
-        if is_DOnion(self._matrix._delayed):
-            return self._matrix._delayed.shape
+        if self.is_dOnion:
+
+            def shape(matrix):
+                return matrix.shape[::-1]
+
+            return DOnion.multiple_access(self._meta.shape, shape, self._matrix._delayed)
         return self._meta.shape
 
     @property
     def nvals(self):
-        if is_DOnion(self._matrix._delayed):
-            return self._matrix._delayed.nvals
-        return self._meta.shape
+        if self.is_dOnion:
+            return DOnion.multiple_access(
+                self._meta.nvals, lambda x: x.nvals, self._matrix._delayed
+            )
+        return self._meta.nvals
 
     def __getitem__(self, index):
-        if (
-                type(self._matrix) is DOnion
-                or type(index) is tuple and len(index) == 2
-                and (is_DOnion(index[0]) or is_DOnion(index[1]))
-        ):
-            from .scalar import Scalar, PythonScalar
-            from .expr import IndexerResolver
-
-            self_delayed = self._matrix if type(self._matrix) is DOnion else self
-            if type(index) is tuple and len(index) == 2:
-                def getitem(self_, i0, i1):
-                    return self.__class__.__getitem__(self_, (i0, i1))
-
-                # Since grblas does not support indices that are dask arrays
-                # this complicates meta deduction.  We therefore substitute
-                # any non-Integral type indices with `slice(None)`
-                meta_index = tuple(
-                    x if isinstance(x, (Integral, Scalar, PythonScalar))
-                    else slice(None) for x in index
-                )
-                # Next, we resize `meta` to accept any Integral-type indices:
-                numbers = [x for x in index if isinstance(x, (Integral, Scalar, PythonScalar))]
-                max_index = np.max(numbers) if numbers else None
-                if max_index is not None:
-                    self._meta.resize(nrows=max_index + 1, ncols=max_index + 1)
-                meta = self._meta[meta_index]
-                
-                IndexerResolver(self._meta, index, check_shape=False)
-                donion = DOnion.multiple_access(meta, getitem, self_delayed, index[0], index[1])
-                return AmbiguousAssignOrExtract(self, index, self_donion=donion, meta=meta)
-            else:
-                raise ValueError("Matrix indices must be a 2-tuple.")
-
         return AmbiguousAssignOrExtract(self, index)
 
     # Delayed methods
