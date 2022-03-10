@@ -7,23 +7,19 @@ class Mask:
     value = False
 
     def __init__(self, mask):
-        from . import matrix, vector, base
+        from . import matrix, vector
 
         assert type(mask) in {vector.Vector, matrix.Matrix}
         self.mask = mask
         self._meta = get_grblas_type(self)(mask._meta)
-        if base.is_DOnion(mask._delayed):
-            self.mask = mask._delayed.deep_extract(self._meta, self.__class__)
 
     @property
     def is_dOnion(self):
-        from .base import is_DOnion
-
-        return is_DOnion(self.mask)
+        return getattr(self.mask, "is_dOnion", False)
 
     @property
     def dOnion_if(self):
-        return self.mask if self.is_dOnion else self
+        return self.mask._delayed if self.is_dOnion else self
 
 
 class StructuralMask(Mask):

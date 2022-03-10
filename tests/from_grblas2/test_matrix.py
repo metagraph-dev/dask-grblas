@@ -23,7 +23,7 @@ from numpy.testing import assert_array_equal
 from .conftest import autocompute, compute
 
 from dask_grblas import Matrix, Scalar, Vector  # isort:skip
-from dask_grblas.base import is_DOnion, like_DOnion
+from dask_grblas.base import is_DOnion, like_dOnion
 
 
 @pytest.fixture
@@ -2190,28 +2190,26 @@ def test_isclose(As, A_chunks, v):
             assert C6.isclose(A, rel_tol=1e-3)
 
 
-@pytest.mark.slow
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_transpose_equals(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        data = [
-            [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
-            [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
-            [3, 2, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4],
-        ]
-        B = Matrix.from_values(*data)
-        assert A.isequal(B.T)
-        assert B.isequal(A.T)
-        assert A.T.isequal(B)
-        assert A.T.isequal(A.T)
-        assert A.isclose(A)
-        assert A.isclose(B.T)
-        assert B.isclose(A.T)
-        assert A.T.isclose(B)
-        assert A.T.isclose(A.T)
+def test_transpose_equals(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            data = [
+                [0, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 6],
+                [3, 0, 3, 5, 6, 0, 6, 1, 6, 2, 4, 1],
+                [3, 2, 3, 1, 5, 3, 7, 8, 3, 1, 7, 4],
+            ]
+            B = Matrix.from_values(*data)
+            assert A.isequal(B.T)
+            assert B.isequal(A.T)
+            assert A.T.isequal(B)
+            assert A.T.isequal(A.T)
+            assert A.isclose(A)
+            assert A.isclose(B.T)
+            assert B.isclose(A.T)
+            assert A.T.isclose(B)
+            assert A.T.isclose(A.T)
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)

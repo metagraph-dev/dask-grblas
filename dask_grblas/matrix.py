@@ -970,6 +970,20 @@ class TransposedMatrix:
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
 
+    def isequal(self, other, *, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isequal", argname="other"
+        )
+        return BaseType.isequal(self, other, check_dtype=check_dtype)
+
+    def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isclose", argname="other"
+        )
+        return BaseType.isclose(
+            self, other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype
+        )
+
     # Delayed methods
     ewise_add = Matrix.ewise_add
     ewise_mult = Matrix.ewise_mult
@@ -982,8 +996,7 @@ class TransposedMatrix:
     reduce_scalar = Matrix.reduce_scalar
 
     # Misc.
-    isequal = Matrix.isequal
-    isclose = Matrix.isclose
+    _expect_type = Matrix._expect_type
     __array__ = Matrix.__array__
     name = Matrix.name
 
