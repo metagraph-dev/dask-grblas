@@ -446,9 +446,11 @@ class BaseType:
             # "C << A.T"
             C = expr.new(dtype=self.dtype)
             self.__init__(C._delayed)
+        elif typ is type(None):
+            raise TypeError("Assignment value must be a valid expression")
         else:
             # Anything else we need to handle?
-            raise TypeError()
+            raise NotImplementedError()
         if in_dOnion:
             return self.__class__(self._delayed, meta=self._meta)
 

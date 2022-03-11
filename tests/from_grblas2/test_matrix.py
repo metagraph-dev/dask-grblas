@@ -2212,32 +2212,43 @@ def test_transpose_equals(As, A_chunks):
             assert A.T.isclose(A.T)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_transpose_exceptional():
-    A = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [True, True, False, True])
-    B = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [1, 2, 3, 4])
-
-    with pytest.raises(TypeError, match="not callable"):
-        B.T(mask=A.V) << B.ewise_mult(B, op=binary.plus)
-    with pytest.raises(AttributeError):
-        B(mask=A.T.V) << B.ewise_mult(B, op=binary.plus)
-    with pytest.raises(AttributeError):
-        B.T(mask=A.T.V) << B.ewise_mult(B, op=binary.plus)
-    with pytest.raises(TypeError, match="does not support item assignment"):
-        B.T[1, 0] << 10
-    with pytest.raises(TypeError, match="not callable"):
-        B.T[1, 0]() << 10
-    with pytest.raises(TypeError, match="not callable"):
-        B.T()[1, 0] << 10
-    # with pytest.raises(AttributeError):
-    # should use new instead--Now okay.
-    assert B.T.dup().isequal(B.T.new())
-    # Not exceptional, but while we're here...
-    C = B.T.new(mask=A.V)
-    D = B.T.new()
-    D = D.dup(mask=A.V)
-    assert C.isequal(D)
-    assert C.isequal(Matrix.from_values([0, 0, 1], [0, 1, 1], [1, 3, 4]))
+    A0 = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [True, True, False, True])
+    B0 = Matrix.from_values([0, 0, 1, 1], [0, 1, 0, 1], [1, 2, 3, 4])
+    A1 = Matrix.from_values(
+        da.from_array([0, 0, 1, 1]),
+        da.from_array([0, 1, 0, 1]),
+        da.from_array([True, True, False, True]),
+    )
+    B1 = Matrix.from_values(
+        da.from_array([0, 0, 1, 1]),
+        da.from_array([0, 1, 0, 1]),
+        da.from_array([1, 2, 3, 4]),
+    )
+    As, Bs = [A0, A1], [B0, B1]
+    for A in As:
+        for B in Bs:
+            with pytest.raises(TypeError, match="not callable"):
+                B.T(mask=A.V) << B.ewise_mult(B, op=binary.plus)
+            with pytest.raises(AttributeError):
+                B(mask=A.T.V) << B.ewise_mult(B, op=binary.plus)
+            with pytest.raises(AttributeError):
+                B.T(mask=A.T.V) << B.ewise_mult(B, op=binary.plus)
+            with pytest.raises(TypeError, match="does not support item assignment"):
+                B.T[1, 0] << 10
+            with pytest.raises(TypeError, match="not callable"):
+                B.T[1, 0]() << 10
+            with pytest.raises(TypeError, match="not callable"):
+                B.T()[1, 0] << 10
+            # with pytest.raises(AttributeError):
+            # should use new instead--Now okay.
+            assert B.T.dup().isequal(B.T.new())
+            # Not exceptional, but while we're here...
+            C = B.T.new(mask=A.V)
+            D = B.T.new()
+            D = D.dup(mask=A.V)
+            assert C.isequal(D)
+            assert C.isequal(Matrix.from_values([0, 0, 1], [0, 1, 1], [1, 3, 4]))
 
 
 def test_nested_matrix_operations():
@@ -2253,37 +2264,41 @@ def test_bad_init():
         Matrix(None, float, name="bad_matrix")
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_equals(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        assert (A == A).new().reduce_scalar(monoid.land)
+def test_equals(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            assert (A == A).new().reduce_scalar(monoid.land)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_bad_update(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        with pytest.raises(TypeError, match="Assignment value must be a valid expression"):
-            A << None
+def test_bad_update(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            with pytest.raises(TypeError, match="Assignment value must be a valid expression"):
+                A << None
+                A.compute()
 
 
-def test_incompatible_shapes(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        B = A[:-1, :-1].new()
-        with pytest.raises(DimensionMismatch):
-            A.mxm(B)
-        with pytest.raises(DimensionMismatch):
-            A.ewise_add(B)
-        with pytest.raises(DimensionMismatch):
-            A.ewise_mult(B)
+def test_incompatible_shapes(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            B = A[:-1, :-1].new()
+            with pytest.raises(DimensionMismatch):
+                A.mxm(B)
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(DimensionMismatch):
+                A.ewise_add(B)
+                A.compute()
+            A = A_.dup()
+            with pytest.raises(DimensionMismatch):
+                A.ewise_mult(B)
+                A.compute()
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)

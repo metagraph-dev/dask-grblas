@@ -83,6 +83,13 @@ class Vector(BaseType):
     __slots__ = ("ss",)
     ndim = 1
 
+    __eq__ = gb.Vector.__eq__
+    __ge__ = gb.Vector.__ge__
+    __gt__ = gb.Vector.__gt__
+    __le__ = gb.Vector.__le__
+    __lt__ = gb.Vector.__lt__
+    __ne__ = gb.Vector.__ne__
+
     @classmethod
     def from_delayed(cls, vector, dtype, size, *, nvals=None, name=None):
         if not isinstance(vector, Delayed):

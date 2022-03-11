@@ -6,6 +6,7 @@ from numbers import Integral, Number
 from dask.base import tokenize, is_dask_collection
 from dask.delayed import Delayed, delayed
 from dask.highlevelgraph import HighLevelGraph
+from grblas import _automethods
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 from grblas.exceptions import IndexOutOfBound, EmptyObject, DimensionMismatch
@@ -50,6 +51,13 @@ class Matrix(BaseType):
     __slots__ = ("ss",)
     ndim = 2
     _is_transposed = False
+
+    __eq__ = gb.Matrix.__eq__
+    __ge__ = gb.Matrix.__ge__
+    __gt__ = gb.Matrix.__gt__
+    __le__ = gb.Matrix.__le__
+    __lt__ = gb.Matrix.__lt__
+    __ne__ = gb.Matrix.__ne__
 
     @classmethod
     def from_delayed(cls, matrix, dtype, nrows, ncols, *, nvals=None, name=None):
@@ -868,6 +876,13 @@ class TransposedMatrix:
     ndim = 2
     _is_transposed = True
 
+    __eq__ = gb.matrix.TransposedMatrix.__eq__
+    __ge__ = gb.matrix.TransposedMatrix.__ge__
+    __gt__ = gb.matrix.TransposedMatrix.__gt__
+    __le__ = gb.matrix.TransposedMatrix.__le__
+    __lt__ = gb.matrix.TransposedMatrix.__lt__
+    __ne__ = gb.matrix.TransposedMatrix.__ne__
+
     def __init__(self, matrix, meta=None):
         assert type(matrix) is Matrix
         self._matrix = matrix
@@ -885,6 +900,9 @@ class TransposedMatrix:
     def dOnion_if(self):
         return self._matrix._delayed if self.is_dOnion else self
 
+    def dup(self, dtype=None, *, mask=None, name=None):
+        return self.new(dtype=dtype, mask=mask)
+
     def new(self, *, dtype=None, mask=None):
         if any_dOnions(self, mask):
             donion = DOnion.multi_access(
@@ -897,12 +915,12 @@ class TransposedMatrix:
 
         delayed = self._matrix._delayed
         if mask is None:
-            mask_ind = None
             mask_type = None
+            mask_ind = None
         else:
-            mask = mask.mask
-            mask_ind = "ji"
             mask_type = get_grblas_type(mask)
+            mask = mask.mask._delayed
+            mask_ind = "ji"
         delayed = da.core.blockwise(
             *(_transpose, "ji"),
             *(delayed, "ij"),
