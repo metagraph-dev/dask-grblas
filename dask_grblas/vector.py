@@ -2,13 +2,14 @@ import dask.array as da
 import numpy as np
 import grblas as gb
 
+from numbers import Integral
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 from grblas.exceptions import IndexOutOfBound
 
-from .base import BaseType, InnerBaseType, _nvals, DOnion, is_DOnion, Box
+from .base import BaseType, InnerBaseType, _nvals, DOnion, Box, any_dOnions
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
@@ -117,22 +118,28 @@ class Vector(BaseType):
         if hasattr(values, "dtype"):
             dtype = lookup_dtype(values.dtype if dtype is None else dtype)
 
-        meta = gb.Vector.new(dtype) if size is None else gb.Vector.new(dtype, size=size)
+        meta = gb.Vector.new(dtype, size=size if isinstance(size, Integral) else 0)
 
         # check for any DOnions:
-        pkd_args = pack_args(indices, values)
-        pkd_kwargs = pack_kwargs(size=size, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
-        donions = [True for arg in pkd_args if is_DOnion(arg)]
-        donions += [True for (k, v) in pkd_kwargs.items() if is_DOnion(v)]
-        if np.any(donions):
+        args = pack_args(indices, values, size)
+        kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+        if any_dOnions(*args, **kwargs):
             # dive into DOnion(s):
-            out_donion = DOnion.multiple_access(meta, Vector.from_values, *pkd_args, **pkd_kwargs)
+            out_donion = DOnion.multi_access(meta, Vector.from_values, *args, **kwargs)
             return Vector(out_donion, meta=meta)
 
         # no DOnions
-        if type(indices) is da.Array and type(values) is da.Array:
+        if type(indices) is da.Array or type(values) is da.Array:
+            size_ = size
+            if type(indices) in {tuple, list, np.ndarray}:
+                size_ = size or (np.max(indices) + 1)
+                indices = da.asarray(indices)
+            if type(values) in {tuple, list, np.ndarray}:
+                values = da.asarray(values)
+
             np_idtype_ = np_dtype(lookup_dtype(indices.dtype))
-            if size is not None:
+            if isinstance(size_, Integral):
+                size = size_
                 chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
             else:
                 if indices.size == 0:
@@ -143,11 +150,13 @@ class Vector(BaseType):
 
                 # Note: uint + int = float which numpy cannot cast to uint.  So we
                 # ensure the same dtype for each summand here:
-                size = da.max(indices) + np.asarray(1, dtype=indices.dtype)
+                size = size_
+                if size is None:
+                    size = da.max(indices) + np.asarray(1, dtype=indices.dtype)
                 # Here `size` is a dask 0d-array whose computed value is
                 # used to determine the size of the Vector to be returned.
                 # But since we do not want to compute anything just now,
-                # we instead create a "DOnion" (dask onion) object.  This
+                # we instead create a "dOnion" (dask Onion) object.  This
                 # effectively means that we will use the inner value of
                 # `size` to create the new Vector:
                 args = pack_args(indices, values)
@@ -155,6 +164,7 @@ class Vector(BaseType):
                 donion = DOnion.sprout(size, meta, Vector.from_values, *args, **kwargs)
                 return Vector(donion, meta=meta)
 
+            # output shape `(size,)` is completely determined
             if indices.size > 0:
                 if indices.size != values.size:
                     raise ValueError("`indices` and `values` lengths must match")
@@ -195,11 +205,9 @@ class Vector(BaseType):
 
     @classmethod
     def new(cls, dtype, size=0, *, chunks="auto", name=None):
-        if is_DOnion(size):
+        if any_dOnions(size):
             meta = gb.Vector.new(dtype)
-            donion = DOnion.multiple_access(
-                meta, cls.new, dtype, size=size, chunks=chunks, name=name
-            )
+            donion = DOnion.multi_access(meta, cls.new, dtype, size=size, chunks=chunks, name=name)
             return Vector(donion, meta=meta)
 
         if type(size) is Box:

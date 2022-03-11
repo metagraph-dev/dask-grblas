@@ -42,7 +42,7 @@ class ss:
         nrows=None,
         ncols=None,
         chunks=None,
-        in_DOnion=False,  # not part of the API
+        in_dOnion=False,  # not part of the API
     ):
         self._parent.build(
             rows,

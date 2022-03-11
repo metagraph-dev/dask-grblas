@@ -10,7 +10,7 @@ from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
 from grblas.exceptions import IndexOutOfBound, EmptyObject, DimensionMismatch
 
-from .base import BaseType, InnerBaseType, DOnion, is_DOnion, Box, skip
+from .base import BaseType, InnerBaseType, DOnion, is_DOnion, any_dOnions, Box, skip
 from .base import _nvals as _nvals_in_chunk
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
@@ -137,28 +137,35 @@ class Matrix(BaseType):
         elif hasattr(values, "dtype"):
             dtype = lookup_dtype(values.dtype if dtype is None else dtype)
 
-        meta = gb.Matrix.new(dtype, nrows=nrows or 0, ncols=ncols or 0)
-
-        # check for any DOnions:
-        pkd_args = pack_args(rows, columns, values)
-        pkd_kwargs = pack_kwargs(
-            nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=dtype, chunks=chunks, name=name
+        meta = gb.Matrix.new(
+            dtype,
+            nrows=nrows if isinstance(nrows, Number) else 0,
+            ncols=ncols if isinstance(ncols, Number) else 0,
         )
-        donions = [True for arg in pkd_args if is_DOnion(arg)]
-        donions += [True for (k, v) in pkd_kwargs.items() if is_DOnion(v)]
-        if np.any(donions):
-            # dive into DOnion(s):
-            out_donion = DOnion.multiple_access(meta, Matrix.from_values, *pkd_args, **pkd_kwargs)
+
+        # check for any dOnions:
+        args = pack_args(rows, columns, values, nrows, ncols)
+        kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+        if any_dOnions(*args, **kwargs):
+            # dive into dOnion(s):
+            out_donion = DOnion.multi_access(meta, Matrix.from_values, *args, **kwargs)
             return Matrix(out_donion, meta=meta)
 
-        # no DOnions
-        if (
-            type(rows) is da.Array
-            and type(columns) is da.Array
-            and (type(values) is da.Array or isinstance(values, Number))
-        ):
+        # no dOnions
+        if type(rows) is da.Array or type(columns) is da.Array or type(values) is da.Array:
+            nrows_, ncols_ = nrows, ncols
+            if type(rows) in {tuple, list, np.ndarray}:
+                nrows_ = nrows or (np.max(rows) + 1)
+                rows = da.asarray(rows)
+            if type(columns) in {tuple, list, np.ndarray}:
+                ncols_ = ncols or (np.max(columns) + 1)
+                columns = da.asarray(columns)
+            if type(values) in {tuple, list, np.ndarray}:
+                values = da.asarray(values)
+
             np_idtype_ = np_dtype(lookup_dtype(rows.dtype))
-            if nrows is not None and ncols is not None:
+            if isinstance(nrows_, Integral) and isinstance(ncols_, Integral):
+                nrows, ncols = nrows_, ncols_
                 chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_idtype_)
             else:
                 if nrows is None and rows.size == 0:
@@ -185,13 +192,16 @@ class Matrix(BaseType):
                 if columns.dtype.kind not in "ui":
                     raise ValueError(f"columns must be integers, not {columns.dtype}")
 
+                nrows = nrows_
                 if nrows is None:
                     nrows = da.max(rows) + np.asarray(1, dtype=rows.dtype)
 
+                ncols = ncols_
                 if ncols is None:
                     ncols = da.max(columns) + np.asarray(1, dtype=columns.dtype)
 
-                # use the inner value of `nrows` or `ncols` to create the new Matrix:
+                # Create dOnion from `nrows` and/or `ncols`, that is,
+                # use the inner value of `nrows` and/or `ncols` to create the new Matrix:
                 shape = (nrows, ncols)
                 _shape = [skip if is_dask_collection(x) else x for x in shape]
                 dasks = [x for x in shape if is_dask_collection(x)]
@@ -200,6 +210,7 @@ class Matrix(BaseType):
                 donion = DOnion.sprout(dasks, meta, Matrix.from_values, *args, **kwargs)
                 return Matrix(donion, meta=meta)
 
+            # output shape `(nrows, ncols)` is completely determined
             vdtype = dtype
             np_vdtype_ = np_dtype(vdtype)
 
@@ -253,27 +264,25 @@ class Matrix(BaseType):
         nrows=None,
         ncols=None,
         chunks=None,
-        in_DOnion=False,  # not part of the API
+        in_dOnion=False,  # not part of the API
     ):
         if not clear and self._nvals != 0:
             raise gb.exceptions.OutputNotEmpty()
 
+        # TODO: delayed nrows/ncols
         nrows = nrows or self._nrows
         ncols = ncols or self._ncols
         meta = self._meta
         meta.resize(nrows, ncols)
 
         # check for any DOnions:
-        self_ = self._delayed if is_DOnion(self._delayed) else self
-        pkd_args = pack_args(self_, rows, columns, values)
-        pkd_kwargs = pack_kwargs(
-            dup_op=dup_op, clear=clear, nrows=nrows, ncols=ncols, chunks=chunks, in_DOnion=True
+        args = pack_args(self, rows, columns, values)
+        kwargs = pack_kwargs(
+            dup_op=dup_op, clear=clear, nrows=nrows, ncols=ncols, chunks=chunks, in_dOnion=True
         )
-        donions = [True for arg in pkd_args if is_DOnion(arg)]
-        donions += [True for (k, v) in pkd_kwargs.items() if is_DOnion(v)]
-        if np.any(donions):
+        if any_dOnions(*args, **kwargs):
             # dive into DOnion(s):
-            out_donion = DOnion.multiple_access(meta, Matrix.build, *pkd_args, **pkd_kwargs)
+            out_donion = DOnion.multi_access(meta, Matrix.build, *args, **kwargs)
             self.__init__(out_donion, meta=meta)
             return
 
@@ -287,17 +296,17 @@ class Matrix(BaseType):
             self.rechunk(inplace=True, chunks=chunks)
 
         x = self._optional_dup()
-        if type(rows) is list:
+        if type(rows) in {tuple, list, np.ndarray}:
             if np.max(rows) >= self._nrows:
                 raise gb.exceptions.IndexOutOfBound
             rows = da.core.from_array(np.array(rows), name="rows-" + tokenize(rows))
 
-        if type(columns) is list:
+        if type(columns) in {tuple, list, np.ndarray}:
             if np.max(columns) >= self._ncols:
                 raise gb.exceptions.IndexOutOfBound
             columns = da.core.from_array(np.array(columns), name="columns-" + tokenize(columns))
 
-        if type(values) is list:
+        if type(values) in {tuple, list, np.ndarray}:
             values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
 
         if type(values) is da.Array and (rows.size != columns.size or columns.size != values.size):
@@ -350,15 +359,15 @@ class Matrix(BaseType):
             dtype=np_vdtype_,
             meta=meta,
         )
-        if in_DOnion:
+        if in_dOnion:
             return Matrix(delayed)
         self.__init__(delayed)
 
     @classmethod
     def new(cls, dtype, nrows=0, ncols=0, *, chunks="auto", name=None):
-        if is_DOnion(nrows) or is_DOnion(ncols):
+        if any_dOnions(nrows, ncols):
             meta = gb.Matrix.new(dtype)
-            donion = DOnion.multiple_access(
+            donion = DOnion.multi_access(
                 meta, cls.new, dtype, nrows=nrows, ncols=ncols, chunks=chunks, name=name
             )
             return Matrix(donion, meta=meta)
@@ -440,24 +449,24 @@ class Matrix(BaseType):
 
     @property
     def nrows(self):
-        if is_DOnion(self._delayed):
-            return self._delayed.nrows
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta.nrows, getattr, self, "nrows")
         return self._meta.nrows
 
     @property
     def ncols(self):
-        if is_DOnion(self._delayed):
-            return self._delayed.ncols
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta.ncols, getattr, self, "ncols")
         return self._meta.ncols
 
     @property
     def shape(self):
-        if is_DOnion(self._delayed):
-            return self._delayed.shape
-        return (self._meta.nrows, self._meta.ncols)
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta.shape, getattr, self, "shape")
+        return self._meta.shape
 
     def resize(self, nrows, ncols, inplace=True, chunks="auto"):
-        if is_DOnion(self._delayed):
+        if self.is_dOnion:
             donion = self._delayed.getattr(
                 self._meta, "resize", nrows, ncols, inplace=False, chunks=chunks
             )
@@ -507,7 +516,7 @@ class Matrix(BaseType):
             return Matrix(x, nvals=nvals)
 
     def rechunk(self, inplace=False, chunks="auto"):
-        if is_DOnion(self._delayed):
+        if self.is_dOnion:
             meta = self._meta
             donion = self._delayed.getattr(meta, "rechunk", inplace=False, chunks=chunks)
             if inplace:
@@ -628,21 +637,21 @@ class Matrix(BaseType):
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
 
-    def __delitem__(self, keys, in_DOnion=False):
+    def __delitem__(self, keys, in_dOnion=False):
         if is_DOnion(self._delayed):
             good_keys = [x for x in keys if isinstance(x, Integral)]
             if len(good_keys) != 2:
                 raise TypeError("Remove Element only supports scalars.")
 
-            donion = self._delayed.getattr(self._meta, "__delitem__", keys, in_DOnion=True)
+            donion = self._delayed.getattr(self._meta, "__delitem__", keys, in_dOnion=True)
             self.__init__(donion, meta=self._meta)
             return
 
         del Updater(self)[keys]
-        if in_DOnion:
+        if in_dOnion:
             return self
 
-    def __setitem__(self, index, delayed, in_DOnion=False):
+    def __setitem__(self, index, delayed, in_dOnion=False):
         Updater(self)[index] = delayed
 
     def __contains__(self, index):
@@ -877,16 +886,9 @@ class TransposedMatrix:
         return self._matrix._delayed if self.is_dOnion else self
 
     def new(self, *, dtype=None, mask=None):
-        mask_is_DOnion = mask is not None and mask.is_dOnion
-        if self.is_dOnion or mask_is_DOnion:
-
-            def T(matrix, dtype=None, mask=None):
-                return TransposedMatrix(matrix).new(dtype=dtype, mask=mask)
-
-            _matrix = self._matrix._delayed if self.is_dOnion else self._matrix
-            mask = mask.mask if mask_is_DOnion else mask
-            donion = DOnion.multiple_access(
-                self._meta.new(dtype), T, _matrix, dtype=dtype, mask=mask
+        if any_dOnions(self, mask):
+            donion = DOnion.multi_access(
+                self._meta.new(dtype), self.__class__.new, self, dtype=dtype, mask=mask
             )
             return Matrix(donion)
 
@@ -933,40 +935,6 @@ class TransposedMatrix:
         return cols, rows, vals
 
     # Properties
-    @property
-    def nrows(self):
-        if self.is_dOnion:
-            return DOnion.multiple_access(
-                self._meta.nrows, lambda x: x.ncols, self._matrix._delayed
-            )
-        return self._meta.nrows
-
-    @property
-    def ncols(self):
-        if self.is_dOnion:
-            return DOnion.multiple_access(
-                self._meta.ncols, lambda x: x.nrows, self._matrix._delayed
-            )
-        return self._meta.ncols
-
-    @property
-    def shape(self):
-        if self.is_dOnion:
-
-            def shape(matrix):
-                return matrix.shape[::-1]
-
-            return DOnion.multiple_access(self._meta.shape, shape, self._matrix._delayed)
-        return self._meta.shape
-
-    @property
-    def nvals(self):
-        if self.is_dOnion:
-            return DOnion.multiple_access(
-                self._meta.nvals, lambda x: x.nvals, self._matrix._delayed
-            )
-        return self._meta.nvals
-
     def __getitem__(self, index):
         return AmbiguousAssignOrExtract(self, index)
 
@@ -996,6 +964,10 @@ class TransposedMatrix:
     reduce_scalar = Matrix.reduce_scalar
 
     # Misc.
+    nrows = Matrix.nrows
+    ncols = Matrix.ncols
+    shape = Matrix.shape
+    nvals = Matrix.nvals
     _expect_type = Matrix._expect_type
     __array__ = Matrix.__array__
     name = Matrix.name

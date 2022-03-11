@@ -76,7 +76,7 @@ class Scalar(BaseType):
         self._meta = meta
         self.dtype = meta.dtype
 
-    def update(self, expr, in_DOnion=False):
+    def update(self, expr, in_dOnion=False):
         typ = type(expr)
         if any_dOnions(self, expr):
             self_copy = self.__class__(self._delayed, meta=self._meta)
@@ -86,7 +86,7 @@ class Scalar(BaseType):
                 def update_by_aae(c, p, k_0, k_1):
                     keys = k_0 if k_1 is None else (k_0, k_1)
                     aae = AmbiguousAssignOrExtract(p, keys)
-                    return c.update(aae, in_DOnion=True)
+                    return c.update(aae, in_dOnion=True)
 
                 if _is_pair(expr_.index):
                     keys_0, keys_1 = expr_.index[0], expr_.index[1]
@@ -107,7 +107,7 @@ class Scalar(BaseType):
 
                 def update_by_gbd(c, *args, **kwargs):
                     gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
-                    return c.update(gbd, in_DOnion=True)
+                    return c.update(gbd, in_dOnion=True)
 
                 donion = DOnion.multi_access(
                     self._meta,
@@ -122,7 +122,7 @@ class Scalar(BaseType):
                 return
 
             donion = DOnion.multi_access(
-                self._meta, Scalar.update, self_copy, expr_, in_DOnion=True
+                self._meta, Scalar.update, self_copy, expr_, in_dOnion=True
             )
             self.__init__(donion, self._meta)
             return
@@ -146,10 +146,10 @@ class Scalar(BaseType):
         else:
             # Try simple assignment (s << 1)
             self.value = expr
-        if in_DOnion:
+        if in_dOnion:
             return self.__class__(self._delayed, meta=self._meta)
 
-    def _update(self, rhs, *, accum, in_DOnion=False):
+    def _update(self, rhs, *, accum, in_dOnion=False):
         # s(accum=accum) << v.reduce()
         typ = type(rhs)
         if typ is Box:
@@ -164,7 +164,7 @@ class Scalar(BaseType):
 
                 def _update_by_gbd(c, *args, accum=None, **kwargs):
                     gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
-                    return c._update(gbd, accum=accum, in_DOnion=True)
+                    return c._update(gbd, accum=accum, in_dOnion=True)
 
                 donion = DOnion.multi_access(
                     self._meta,
@@ -181,13 +181,13 @@ class Scalar(BaseType):
 
             rhs_ = rhs.parent.dOnion_if
             donion = DOnion.mult_access(
-                self._meta, Scalar._update, self_copy, rhs_, accum=accum, in_DOnion=True
+                self._meta, Scalar._update, self_copy, rhs_, accum=accum, in_dOnion=True
             )
             self.__init__(donion, self._meta)
             return
 
         rhs._update(self, accum=accum)
-        if in_DOnion:
+        if in_dOnion:
             return self.__class__(self._delayed, meta=self._meta)
 
     def dup(self, dtype=None, *, name=None):
@@ -293,8 +293,8 @@ class Scalar(BaseType):
 
     @value.setter
     def value(self, val):
-        if type(self._delayed) is DOnion:
-            donion = DOnion.multiple_access(self._meta, Scalar.from_value, val)
+        if any_dOnions(self, val):
+            donion = DOnion.multi_access(self._meta, Scalar.from_value, val)
             self.__init__(donion, meta=self._meta)
             return
 

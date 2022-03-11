@@ -316,8 +316,9 @@ class BaseType:
     def nvals(self):
         from .scalar import PythonScalar
 
-        if type(self._delayed) is DOnion:
-            return PythonScalar(self._delayed.nvals)
+        if self.is_dOnion:
+            donion = DOnion.multi_access(self._meta.nvals, getattr, self, "nvals")
+            return PythonScalar(donion)
 
         delayed = da.core.elemwise(
             _nvals,
@@ -348,7 +349,7 @@ class BaseType:
             return self.name
         return f"{split[0]}<sub>{split[1]}</sub>"
 
-    def update(self, expr, in_DOnion=False):
+    def update(self, expr, in_dOnion=False):
         if isinstance(expr, Number):
             if self.ndim == 2:
                 raise TypeError(
@@ -368,7 +369,7 @@ class BaseType:
                 def update_by_aae(c, p, k_0, k_1):
                     keys = k_0 if k_1 is None else (k_0, k_1)
                     aae = AmbiguousAssignOrExtract(p, keys)
-                    return c.update(aae, in_DOnion=True)
+                    return c.update(aae, in_dOnion=True)
 
                 if _is_pair(expr_.index):
                     keys_0, keys_1 = expr_.index[0], expr_.index[1]
@@ -389,7 +390,7 @@ class BaseType:
 
                 def update_by_gbd(c, *args, **kwargs):
                     gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
-                    return c.update(gbd, in_DOnion=True)
+                    return c.update(gbd, in_dOnion=True)
 
                 donion = DOnion.multi_access(
                     self._meta,
@@ -406,13 +407,13 @@ class BaseType:
             elif typ is TransposedMatrix and expr.is_dOnion:
 
                 donion = DOnion.multi_access(
-                    self._meta, BaseType.update, self_copy, expr_, in_DOnion=True
+                    self._meta, BaseType.update, self_copy, expr_, in_dOnion=True
                 )
                 self.__init__(donion, self._meta)
                 return
 
             donion = DOnion.multi_access(
-                self._meta, BaseType.update, self_copy, expr_, in_DOnion=True
+                self._meta, BaseType.update, self_copy, expr_, in_dOnion=True
             )
             self.__init__(donion, self._meta)
             return
@@ -423,7 +424,7 @@ class BaseType:
 
         if isinstance(expr, Number):
             Updater(self)[...] << expr
-            if in_DOnion:
+            if in_dOnion:
                 return self.__class__(self._delayed, meta=self._meta)
             return
 
@@ -448,10 +449,10 @@ class BaseType:
         else:
             # Anything else we need to handle?
             raise TypeError()
-        if in_DOnion:
+        if in_dOnion:
             return self.__class__(self._delayed, meta=self._meta)
 
-    def _update(self, expr, *, mask=None, accum=None, replace=None, in_DOnion=False):
+    def _update(self, expr, *, mask=None, accum=None, replace=None, in_dOnion=False):
         typ = type(expr)
         if any_dOnions(self, expr, mask):
             self_copy = self.__class__(self._delayed, meta=self._meta)
@@ -462,7 +463,7 @@ class BaseType:
                 def _update_by_aae(c, p, k_0, k_1, mask=None, accum=None, replace=None):
                     keys = k_0 if k_1 is None else (k_0, k_1)
                     aae = AmbiguousAssignOrExtract(p, keys)
-                    return c.update(aae, mask=mask, accum=accum, replace=replace, in_DOnion=True)
+                    return c.update(aae, mask=mask, accum=accum, replace=replace, in_dOnion=True)
 
                 if _is_pair(expr_.index):
                     keys_0, keys_1 = expr_.index[0], expr_.index[1]
@@ -486,7 +487,7 @@ class BaseType:
 
                 def _update_by_gbd(c, *args, mask=None, accum=None, replace=None, **kwargs):
                     gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
-                    return c._update(gbd, mask=mask, accum=accum, replace=replace, in_DOnion=True)
+                    return c._update(gbd, mask=mask, accum=accum, replace=replace, in_dOnion=True)
 
                 donion = DOnion.multi_access(
                     self._meta,
@@ -511,7 +512,7 @@ class BaseType:
                 mask=mask_,
                 accum=accum,
                 replace=replace,
-                in_DOnion=True,
+                in_dOnion=True,
             )
             self.__init__(donion, meta=self._meta)
             return
@@ -522,7 +523,7 @@ class BaseType:
 
         if mask is None and accum is None:
             self.update(expr)
-            if in_DOnion:
+            if in_dOnion:
                 return self
             return
         if typ is AmbiguousAssignOrExtract:
@@ -578,7 +579,7 @@ class BaseType:
         else:
             raise NotImplementedError(f"{typ}")
 
-        if in_DOnion:
+        if in_dOnion:
             return self.__class__(self._delayed, meta=self._meta)
 
     def wait(self):
@@ -723,6 +724,8 @@ class DOnion:
         def adaptor(func, ts, cs, ss, vs, kwargs_desc, *args, **kwargs):
             args_ = ()
             for arg, t, c, s, v in zip(args, ts, cs, ss, vs):
+                if type(arg) is Box:
+                    arg = arg.content
                 if t:
                     arg = arg.T
                 if s:
