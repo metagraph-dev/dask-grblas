@@ -1,3 +1,4 @@
+from grblas.mask import Mask as gb_Mask
 from .utils import get_grblas_type
 
 
@@ -5,6 +6,9 @@ class Mask:
     complement = False
     structure = False
     value = False
+
+    __bool__ = gb_Mask.__bool__
+    __eq__ = gb_Mask.__eq__
 
     def __init__(self, mask):
         from . import matrix, vector

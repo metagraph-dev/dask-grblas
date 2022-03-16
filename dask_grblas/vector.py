@@ -7,8 +7,9 @@ from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
-from grblas.exceptions import IndexOutOfBound
+from grblas.exceptions import IndexOutOfBound, DimensionMismatch
 
+from . import _automethods
 from .base import BaseType, InnerBaseType, _nvals, DOnion, Box, any_dOnions
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
@@ -82,13 +83,43 @@ class InnerVector(InnerBaseType):
 class Vector(BaseType):
     __slots__ = ("ss",)
     ndim = 1
-
+    __abs__ = gb.Vector.__abs__
+    __add__ = gb.Vector.__add__
+    __divmod__ = gb.Vector.__divmod__
     __eq__ = gb.Vector.__eq__
+    __floordiv__ = gb.Vector.__floordiv__
     __ge__ = gb.Vector.__ge__
     __gt__ = gb.Vector.__gt__
+    __iadd__ = gb.Vector.__iadd__
+    __iand__ = gb.Vector.__iand__
+    __ifloordiv__ = gb.Vector.__ifloordiv__
+    __imod__ = gb.Vector.__imod__
+    __imul__ = gb.Vector.__imul__
+    __invert__ = gb.Vector.__invert__
+    __ior__ = gb.Vector.__ior__
+    __ipow__ = gb.Vector.__ipow__
+    __isub__ = gb.Vector.__isub__
+    __itruediv__ = gb.Vector.__itruediv__
+    __ixor__ = gb.Vector.__ixor__
     __le__ = gb.Vector.__le__
     __lt__ = gb.Vector.__lt__
+    __mod__ = gb.Vector.__mod__
+    __mul__ = gb.Vector.__mul__
     __ne__ = gb.Vector.__ne__
+    __neg__ = gb.Vector.__neg__
+    __pow__ = gb.Vector.__pow__
+    __radd__ = gb.Vector.__radd__
+    __rdivmod__ = gb.Vector.__rdivmod__
+    __rfloordiv__ = gb.Vector.__rfloordiv__
+    __rmod__ = gb.Vector.__rmod__
+    __rmul__ = gb.Vector.__rmul__
+    __rpow__ = gb.Vector.__rpow__
+    __rsub__ = gb.Vector.__rsub__
+    __rtruediv__ = gb.Vector.__rtruediv__
+    __rxor__ = gb.Vector.__rxor__
+    __sub__ = gb.Vector.__sub__
+    __truediv__ = gb.Vector.__truediv__
+    __xor__ = gb.Vector.__xor__
 
     @classmethod
     def from_delayed(cls, vector, dtype, size, *, nvals=None, name=None):
@@ -256,8 +287,8 @@ class Vector(BaseType):
             if meta is None:
                 meta = gb.Vector.new(delayed.dtype)
         self._meta = meta
-        self._size = meta.size
         self.dtype = meta.dtype
+        self._size = self.size
         self._nvals = nvals
         # Add ss extension methods
         self.ss = ss(self)
@@ -290,12 +321,14 @@ class Vector(BaseType):
 
     @property
     def size(self):
-        if type(self._delayed) is DOnion:
-            return self._delayed.size
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta.size, getattr, self, "size")
         return self._meta.size
 
     @property
     def shape(self):
+        if self.is_dOnion:
+            return (self.size,)
         return self._meta.shape
 
     def resize(self, size, inplace=True, chunks="auto"):
@@ -409,13 +442,13 @@ class Vector(BaseType):
         assert type(other) is Vector
 
         meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
-        return GbDelayed(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
+        return VectorExpression(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
 
     def ewise_mult(self, other, op=binary.times):
         assert type(other) is Vector
 
         meta = self._meta.ewise_mult(other._meta, op=op)
-        return GbDelayed(self, "ewise_mult", other, op, meta=meta)
+        return VectorExpression(self, "ewise_mult", other, op, meta=meta)
 
     # Unofficial methods
     def inner(self, other, op=semiring.plus_times):
@@ -473,9 +506,21 @@ class Vector(BaseType):
     def vxm(self, other, op=semiring.plus_times):
         from .matrix import Matrix, TransposedMatrix
 
-        assert type(other) in (Matrix, TransposedMatrix)
-        meta = self._meta.vxm(other._meta, op=op)
-        return GbDelayed(self, "vxm", other, op, meta=meta)
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix) + gb_types, within="vxm", argname="other"
+        )
+        try:
+            meta = self._meta.vxm(other._meta, op=op)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                other_meta = gb.Matrix.new(
+                    dtype=other._meta.dtype, nrows=self._meta.size, ncols=other._meta.ncols
+                )
+                meta = self._meta.vxm(other_meta, op=op)
+            else:
+                raise
+        return VectorExpression(self, "vxm", other, op, meta=meta, size=other.ncols)
 
     def apply(self, op, right=None, *, left=None):
         from .scalar import Scalar
@@ -489,11 +534,11 @@ class Vector(BaseType):
             right_meta = right.dtype.np_type(0)
 
         meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
-        return GbDelayed(self, "apply", op, right, meta=meta, left=left)
+        return VectorExpression(self, "apply", op, right, meta=meta, left=left)
 
     def reduce(self, op=monoid.plus):
         meta = self._meta.reduce(op)
-        return GbDelayed(self, "reduce", op, meta=meta)
+        return ScalarExpression(self, "reduce", op, meta=meta)
 
     def build(self, indices, values, *, size=None, chunks=None, dup_op=None, clear=False):
         if clear:
@@ -622,11 +667,15 @@ class Vector(BaseType):
         return indices, values
 
     def isequal(self, other, *, check_dtype=False):
-        other = self._expect_type(other, Vector, within="isequal", argname="other")
+        other = self._expect_type(
+            other, (Vector, gb.Vector), within="isequal", argname="other"
+        )
         return super().isequal(other, check_dtype=check_dtype)
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
-        other = self._expect_type(other, Vector, within="isclose", argname="other")
+        other = self._expect_type(
+            other, (Vector, gb.Vector), within="isclose", argname="other"
+        )
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
     def _delete_element(self, resolved_indexes):
@@ -652,6 +701,102 @@ class Vector(BaseType):
 
 
 Vector.ss = gb.utils.class_property(Vector.ss, ss)
+
+
+class VectorExpression(GbDelayed):
+    __slots__ = ()
+    output_type = gb.Vector
+    ndim = 1
+    _is_scalar = False
+
+    # automethods:
+    __and__ = gb.vector.VectorExpression.__and__
+    __bool__ = gb.vector.VectorExpression.__bool__
+    __or__ = gb.vector.VectorExpression.__or__
+    _get_value = _automethods._get_value
+    S = gb.vector.VectorExpression.S
+    V = gb.vector.VectorExpression.V
+    apply = gb.vector.VectorExpression.apply
+    ewise_add = gb.vector.VectorExpression.ewise_add
+    ewise_mult = gb.vector.VectorExpression.ewise_mult
+    isclose = gb.vector.VectorExpression.isclose
+    isequal = gb.vector.VectorExpression.isequal
+    nvals = gb.vector.VectorExpression.nvals
+    reduce = gb.vector.VectorExpression.reduce
+    shape = gb.vector.VectorExpression.shape
+    size = gb.vector.VectorExpression.size
+    vxm = gb.vector.VectorExpression.vxm
+
+    # infix sugar:
+    __abs__ = gb.vector.VectorExpression.__abs__
+    __add__ = gb.vector.VectorExpression.__add__
+    __divmod__ = gb.vector.VectorExpression.__divmod__
+    __eq__ = gb.vector.VectorExpression.__eq__
+    __floordiv__ = gb.vector.VectorExpression.__floordiv__
+    __ge__ = gb.vector.VectorExpression.__ge__
+    __gt__ = gb.vector.VectorExpression.__gt__
+    __invert__ = gb.vector.VectorExpression.__invert__
+    __le__ = gb.vector.VectorExpression.__le__
+    __lt__ = gb.vector.VectorExpression.__lt__
+    __mod__ = gb.vector.VectorExpression.__mod__
+    __mul__ = gb.vector.VectorExpression.__mul__
+    __ne__ = gb.vector.VectorExpression.__ne__
+    __neg__ = gb.vector.VectorExpression.__neg__
+    __pow__ = gb.vector.VectorExpression.__pow__
+    __radd__ = gb.vector.VectorExpression.__radd__
+    __rdivmod__ = gb.vector.VectorExpression.__rdivmod__
+    __rfloordiv__ = gb.vector.VectorExpression.__rfloordiv__
+    __rmod__ = gb.vector.VectorExpression.__rmod__
+    __rmul__ = gb.vector.VectorExpression.__rmul__
+    __rpow__ = gb.vector.VectorExpression.__rpow__
+    __rsub__ = gb.vector.VectorExpression.__rsub__
+    __rtruediv__ = gb.vector.VectorExpression.__rtruediv__
+    __rxor__ = gb.vector.VectorExpression.__rxor__
+    __sub__ = gb.vector.VectorExpression.__sub__
+    __truediv__ = gb.vector.VectorExpression.__truediv__
+    __xor__ = gb.vector.VectorExpression.__xor__
+
+    # bad sugar:
+    __itruediv__ = gb.vector.VectorExpression.__itruediv__
+    __imul__ = gb.vector.VectorExpression.__imul__
+    __imatmul__ = gb.vector.VectorExpression.__imatmul__
+    __iadd__ = gb.vector.VectorExpression.__iadd__
+    __iand__ = gb.vector.VectorExpression.__iand__
+    __ipow__ = gb.vector.VectorExpression.__ipow__
+    __imod__ = gb.vector.VectorExpression.__imod__
+    __isub__ = gb.vector.VectorExpression.__isub__
+    __ixor__ = gb.vector.VectorExpression.__ixor__
+    __ifloordiv__ = gb.vector.VectorExpression.__ifloordiv__
+    __ior__ = gb.vector.VectorExpression.__ior__
+
+    def __init__(
+        self,
+        parent,
+        method_name,
+        *args,
+        meta=None,
+        size=None,
+        **kwargs,
+    ):
+        super().__init__(
+            parent,
+            method_name,
+            *args,
+            meta=meta,
+            **kwargs,
+        )
+        if size is None:
+            size = self.parent._size
+        self._size = size
+
+    # def __getattr__(self, item):
+    #     return getattr(gb.vector.VectorExpression, item)
+
+    # def construct_output(self, dtype=None, *, name=None):
+    #     if dtype is None:
+    #         dtype = self.dtype
+    #     size = 0 if self._size.is_dOnion else self._size
+    #     return Vector.new(dtype, size, name=name)
 
 
 def _chunk_diag(
@@ -891,4 +1036,5 @@ def _concat_vector(seq, axis=0):
 
 
 gb.utils._output_types[Vector] = gb.Vector
+gb.utils._output_types[VectorExpression] = gb.Vector
 from .matrix import InnerMatrix  # noqa isort:skip

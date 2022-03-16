@@ -20,11 +20,12 @@ def is_type(arg_type, a):
     return type(a) is arg_type
 
 
-def _check_mask(mask, output=None):
+def _check_mask(mask, output=None, ignore_None=False):
     if not isinstance(mask, Mask):
         if isinstance(mask, BaseType):
             raise TypeError("Mask must indicate values (M.V) or structure (M.S)")
-        raise TypeError(f"Invalid mask: {type(mask)}")
+        elif mask is None and not ignore_None:
+            raise TypeError(f"Invalid mask: {type(mask)}")
     if output is not None:
         from .vector import Vector
 
@@ -48,6 +49,9 @@ class BaseType:
     @property
     def dOnion_if(self):
         return self._delayed if self.is_dOnion else self
+
+    def strip(self, *args, **kwargs):
+        return self._delayed.strip(*args, **kwargs) if self.is_dOnion else self
 
     def isequal(self, other, *, check_dtype=False):
         from .scalar import PythonScalar
@@ -294,6 +298,9 @@ class BaseType:
     __imatmul__ = gb.base.BaseType.__imatmul__
 
     def _optional_dup(self):
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta, _dOnion_dup, self)
+
         # TODO: maybe try to create an optimization pass that remove these if they are unnecessary
         return da.core.elemwise(
             _optional_dup,
@@ -362,7 +369,7 @@ class BaseType:
                 )
         typ = type(expr)
         if any_dOnions(self, expr):
-            self_copy = self.__class__(self._delayed, meta=self._meta)
+            self_copy = self.__class__(self._optional_dup(), meta=self._meta)
             expr_ = expr
             if typ is AmbiguousAssignOrExtract and expr.has_dOnion:
 
@@ -386,7 +393,7 @@ class BaseType:
                 self.__init__(donion, self._meta)
                 return
 
-            if typ is GbDelayed and expr.has_dOnion:
+            if isinstance(expr, GbDelayed) and expr.has_dOnion:
 
                 def update_by_gbd(c, *args, **kwargs):
                     gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
@@ -440,7 +447,7 @@ class BaseType:
                 self.__init__(expr._optional_dup())
             else:
                 self.__init__(expr.dup(dtype=self.dtype)._delayed)
-        elif typ is GbDelayed:
+        elif isinstance(expr, GbDelayed):
             expr._update(self)
         elif typ is TransposedMatrix:
             # "C << A.T"
@@ -457,7 +464,7 @@ class BaseType:
     def _update(self, expr, *, mask=None, accum=None, replace=None, in_dOnion=False):
         typ = type(expr)
         if any_dOnions(self, expr, mask):
-            self_copy = self.__class__(self._delayed, meta=self._meta)
+            self_copy = self.__class__(self._optional_dup(), meta=self._meta)
             mask_ = mask.dOnion_if if mask is not None else None
             expr_ = expr
             if typ is AmbiguousAssignOrExtract and expr.has_dOnion:
@@ -485,7 +492,7 @@ class BaseType:
                 self.__init__(donion, self._meta)
                 return
 
-            if typ is GbDelayed and expr.has_dOnion:
+            if isinstance(expr, GbDelayed) and expr.has_dOnion:
 
                 def _update_by_gbd(c, *args, mask=None, accum=None, replace=None, **kwargs):
                     gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
@@ -552,7 +559,7 @@ class BaseType:
                     dtype=np_dtype(self._meta.dtype),
                 )
             )
-        elif typ is GbDelayed:
+        elif isinstance(expr, GbDelayed):
             # v(mask=mask) << left.ewise_mult(right)
             # Meta check handled in Updater
             expr._update(self, mask=mask, accum=accum, replace=replace)
@@ -591,7 +598,7 @@ class BaseType:
     def compute(self, *args, **kwargs):
         # kwargs['scheduler'] = 'synchronous'
         val = self._delayed.compute(*args, **kwargs)
-        if type(self._delayed) is DOnion:
+        if self.is_dOnion:
             return val
         return val.value
 
@@ -677,15 +684,12 @@ class DOnion:
 
     def __init__(self, kernel, meta=None):
         self.kernel = kernel
-        # Why ._meta and .dtype? B'cos Scalar, Vector & Matrix need them
+        # Why have ._meta and .dtype attributes? B'cos Scalar, Vector & Matrix need them
         self._meta = meta
-        try:
-            self.dtype = meta.dtype
-        except AttributeError:
-            self.dtype = type(meta)
+        self.dtype = getattr(meta, 'dtype', type(meta))
 
     def __eq__(self, other):
-        if type(other) is DOnion:
+        if like_dOnion(other):
             other = other.compute()
         return self.compute() == other
 
@@ -703,23 +707,35 @@ class DOnion:
             value = value.content
         return value
 
-    def persist(self, *args, **kwargs):
+    def strip(self, *args, **kwargs):
         value = self.compute_once(*args, **kwargs)
-        while type(value) is DOnion or (
-            hasattr(value, "_delayed") and type(value._delayed) is DOnion
-        ):
+        while like_dOnion(value):
             if type(value) is DOnion:
                 value = value.compute_once(*args, **kwargs)
             else:
                 value = value._delayed.compute_once(*args, **kwargs)
+        return value
 
+    def persist(self, *args, **kwargs):
+        value = self.strip(*args, **kwargs)
         if hasattr(value, "persist"):
             return value.persist(*args, **kwargs)
-        elif hasattr(value, "_persist") and hasattr(value, "_delayed"):
+        else:
+            raise AttributeError(
+                f'Something went wrong: stripped dOnion {self} value {value} has'
+                ' no `persist()` attribute.'
+            )
+
+    def _persist(self, *args, **kwargs):
+        value = self.strip(*args, **kwargs)
+        if hasattr(value, "_persist"):
             value._persist(*args, **kwargs)
             return value._delayed
         else:
-            raise TypeError(f'Something went wrong: {self} cannot be "persisted".')
+            raise AttributeError(
+                f'Something went wrong: stripped dOnion {self} value {value} has'
+                ' no `_persist()` attribute.'
+            )
 
     @classmethod
     def multi_access(cls, out_meta, func, *args, **kwargs):
@@ -832,8 +848,10 @@ class DOnion:
         return self.getattr(meta, "__call__", *args, **kwargs)
 
     def __getattr__(self, item):
-        # TODO: how to compute meta of attribute?!!!
-        meta = getattr(self._meta, item)
+        try:
+            meta = getattr(self._meta, item, getattr(self.kernel, item))
+        except AttributeError:
+            raise AttributeError(f'Unable to compute meta corresponding to attribute {item}.')
         _getattr = flexible_partial(getattr, skip, item)
         return self.deep_extract(meta, _getattr)
 
@@ -854,7 +872,6 @@ def like_dOnion(arg):
         is_DOnion(arg)
         or getattr(arg, "is_dOnion", False)
         or getattr(arg, "has_dOnion", False)
-        or type(arg) is tuple
     )
 
 
@@ -897,6 +914,10 @@ def _nvals(x):
 
 def _optional_dup(x):
     return wrap_inner(x.value.dup())
+
+
+def _dOnion_dup(x):
+    return x.dup()
 
 
 def _reduction_value(x, val):

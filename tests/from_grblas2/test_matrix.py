@@ -338,7 +338,7 @@ def test_resize(As, A_chunks):
             assert A.nrows == 6
             assert A.ncols == 11
             assert A.nvals.compute() == 9
-            if type(A._delayed) is da.Array:
+            if not A.is_dOnion:
                 assert A._delayed.chunks == ((4, 2), (4, 4, 3))
             else:
                 assert A._delayed.deep_extract(None, lambda x: x._delayed.chunks) == (
@@ -2269,7 +2269,7 @@ def test_equals(As, A_chunks):
         for chunks in A_chunks:
             A = A_.dup()
             A.rechunk(chunks=chunks, inplace=True)
-            assert (A == A).new().reduce_scalar(monoid.land)
+            assert (A == A).new().reduce_scalar(monoid.land).new()
 
 
 def test_bad_update(As, A_chunks):
@@ -2289,16 +2289,13 @@ def test_incompatible_shapes(As, A_chunks):
             A.rechunk(chunks=chunks, inplace=True)
             B = A[:-1, :-1].new()
             with pytest.raises(DimensionMismatch):
-                A.mxm(B)
-                A.compute()
+                A.mxm(B).new().compute()
             A = A_.dup()
             with pytest.raises(DimensionMismatch):
-                A.ewise_add(B)
-                A.compute()
+                A.ewise_add(B).new().compute()
             A = A_.dup()
             with pytest.raises(DimensionMismatch):
-                A.ewise_mult(B)
-                A.compute()
+                A.ewise_mult(B).new().compute()
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
@@ -2890,104 +2887,100 @@ def test_import_export_auto(A, A_chunks, do_iso, methods):
         assert C_orig.ss.is_iso is do_iso
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_no_bool_or_eq(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        with pytest.raises(TypeError, match="not defined"):
-            bool(A)
-        # with pytest.raises(TypeError, match="not defined"):
-        A == A
-        with pytest.raises(TypeError, match="not defined"):
-            bool(A.S)
-        with pytest.raises(TypeError, match="not defined"):
-            A.S == A.S
-        expr = A.ewise_mult(A)
-        with pytest.raises(TypeError, match="not defined"):
-            bool(expr)
-        with pytest.raises(TypeError, match="not enabled"):
-            expr == expr
-        assigner = A[1, 2]()
-        with pytest.raises(TypeError, match="not defined"):
-            bool(assigner)
-        with pytest.raises(TypeError, match="not defined"):
-            assigner == assigner
-        updater = A()
-        with pytest.raises(TypeError, match="not defined"):
-            bool(updater)
-        with pytest.raises(TypeError, match="not defined"):
-            updater == updater
+def test_no_bool_or_eq(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            with pytest.raises(TypeError, match="not defined"):
+                bool(A)
+            # with pytest.raises(TypeError, match="not defined"):
+            A == A
+            with pytest.raises(TypeError, match="not defined"):
+                bool(A.S)
+            with pytest.raises(TypeError, match="not defined"):
+                A.S == A.S
+            expr = A.ewise_mult(A)
+            with pytest.raises(TypeError, match="not defined"):
+                bool(expr)
+            with pytest.raises(TypeError, match="not enabled"):
+                expr == expr
+            assigner = A[1, 2]()
+            with pytest.raises(TypeError, match="not defined"):
+                bool(assigner)
+            with pytest.raises(TypeError, match="not defined"):
+                assigner == assigner
+            updater = A()
+            with pytest.raises(TypeError, match="not defined"):
+                bool(updater)
+            with pytest.raises(TypeError, match="not defined"):
+                updater == updater
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_bool_eq_on_scalar_expressions(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        expr = A.reduce_scalar()
-        assert expr == 47
-        assert bool(expr)
-        assert int(expr) == 47
-        assert float(expr) == 47.0
-        assert range(expr) == range(47)
+def test_bool_eq_on_scalar_expressions(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            expr = A.reduce_scalar()
+            assert expr == 47
+            assert bool(expr)
+            assert int(expr) == 47
+            assert float(expr) == 47.0
+            assert range(expr) == range(47)
 
-        expr = A[0, 1]
-        assert expr == 2
-        assert bool(expr)
-        assert int(expr) == 2
-        assert float(expr) == 2.0
-        assert range(expr) == range(2)
+            expr = A[0, 1]
+            assert expr == 2
+            assert bool(expr)
+            assert int(expr) == 2
+            assert float(expr) == 2.0
+            assert range(expr) == range(2)
 
-        expr = A[0, [1, 1]]
-        with pytest.raises(TypeError, match="not defined"):
-            expr == expr
-        with pytest.raises(TypeError, match="not defined"):
-            bool(expr)
-        with pytest.raises(TypeError, match="not defined"):
-            int(expr)
-        with pytest.raises(TypeError, match="not defined"):
-            float(expr)
-        with pytest.raises(TypeError, match="not defined"):
-            range(expr)
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_bool_eq_on_scalar_expressions_no_auto(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        expr = A.reduce_scalar()
-        with pytest.raises(TypeError, match="autocompute"):
-            expr == 47
-        with pytest.raises(TypeError, match="autocompute"):
-            bool(expr)
-        with pytest.raises(TypeError, match="autocompute"):
-            int(expr)
+            expr = A[0, [1, 1]]
+            with pytest.raises(TypeError, match="not defined"):
+                expr == expr
+            with pytest.raises(TypeError, match="not defined"):
+                bool(expr)
+            with pytest.raises(TypeError, match="not defined"):
+                int(expr)
+            with pytest.raises(TypeError, match="not defined"):
+                float(expr)
+            with pytest.raises(TypeError, match="not defined"):
+                range(expr)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_contains(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        assert (0, 1) in A
-        assert (1, 0) in A.T
+def test_bool_eq_on_scalar_expressions_no_auto(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            expr = A.reduce_scalar()
+            with pytest.raises(TypeError, match="autocompute"):
+                expr == 47
+            with pytest.raises(TypeError, match="autocompute"):
+                bool(expr)
+            with pytest.raises(TypeError, match="autocompute"):
+                int(expr)
 
-        assert (0, 1) not in A.T
-        assert (1, 0) not in A
 
-        with pytest.raises(TypeError):
-            1 in A
-        with pytest.raises(TypeError):
-            (1,) in A.T
-        with pytest.raises(TypeError, match="Invalid index"):
-            (1, [1, 2]) in A
+def test_contains(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            assert (0, 1) in A
+            assert (1, 0) in A.T
+    
+            assert (0, 1) not in A.T
+            assert (1, 0) not in A
+    
+            with pytest.raises(TypeError):
+                1 in A
+            with pytest.raises(TypeError):
+                (1,) in A.T
+            with pytest.raises(TypeError, match="Invalid index"):
+                (1, [1, 2]) in A
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
@@ -3226,111 +3219,109 @@ def test_nbytes(A, A_chunks):
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_auto(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        expected = binary.land[bool](A & A).new()
-        B = A.dup(dtype=bool)
-        for expr in [(B & B), binary.land[bool](A & A)]:
-            assert expr.dtype == expected.dtype
-            assert expr.nrows == expected.nrows
-            assert expr.ncols == expected.ncols
-            assert expr.shape == expected.shape
-            assert expr.nvals == expected.nvals
-            assert expr.isclose(expected)
-            assert expected.isclose(expr)
-            assert expr.isequal(expected)
-            assert expected.isequal(expr)
-            assert expr.mxv(v).isequal(expected.mxv(v))
-            assert expected.T.mxv(v).isequal(expr.T.mxv(v))
-            for method in [
-                # "ewise_add",
-                # "ewise_mult",
-                # "mxm",
-                # "__matmul__",
-                "__and__",
-                "__or__",
-                # "kronecker",
-            ]:
-                val1 = getattr(expected, method)(expected).new()
-                val2 = getattr(expected, method)(expr)
-                val3 = getattr(expr, method)(expected)
-                val4 = getattr(expr, method)(expr)
-                assert val1.isequal(val2)
-                assert val1.isequal(val3)
-                assert val1.isequal(val4)
-            for method in ["reduce_rowwise", "reduce_columnwise", "reduce_scalar"]:
-                s1 = getattr(expected, method)(monoid.lor).new()
-                s2 = getattr(expr, method)(monoid.lor)
-                assert s1.isequal(s2.new())
-                assert s1.isequal(s2)
-
-        expected = binary.times(A & A).new()
-        for expr in [binary.times(A & A)]:
-            assert expr.dtype == expected.dtype
-            assert expr.nrows == expected.nrows
-            assert expr.ncols == expected.ncols
-            assert expr.shape == expected.shape
-            assert expr.nvals == expected.nvals
-            assert expr.isclose(expected)
-            assert expected.isclose(expr)
-            assert expr.isequal(expected)
-            assert expected.isequal(expr)
-            assert expr.mxv(v).isequal(expected.mxv(v))
-            assert expected.T.mxv(v).isequal(expr.T.mxv(v))
-            for method in [
-                "ewise_add",
-                "ewise_mult",
-                "mxm",
-                # "__matmul__",
-                # "__and__",
-                # "__or__",
-                "kronecker",
-            ]:
-                val1 = getattr(expected, method)(expected).new()
-                val2 = getattr(expected, method)(expr)
-                val3 = getattr(expr, method)(expected)
-                val4 = getattr(expr, method)(expr)
-                assert val1.isequal(val2)
-                assert val1.isequal(val3)
-                assert val1.isequal(val4)
-            for method in ["reduce_rowwise", "reduce_columnwise", "reduce_scalar"]:
-                s1 = getattr(expected, method)().new()
-                s2 = getattr(expr, method)()
-                assert s1.isequal(s2.new())
-                assert s1.isequal(s2)
-
-        expected = semiring.plus_times(A @ v).new()
-        for expr in [(A @ v), (v @ A.T), semiring.plus_times(A @ v)]:
-            assert expr.vxm(A).isequal(expected.vxm(A))
-            assert expr.vxm(A).new(mask=expr.S).isequal(expected.vxm(A).new(mask=expected.S))
-            assert expr.vxm(A).new(mask=expr.V).isequal(expected.vxm(A).new(mask=expected.V))
+def test_auto(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            expected = binary.land[bool](A & A).new()
+            B = A.dup(dtype=bool)
+            for expr in [(B & B), binary.land[bool](A & A)]:
+                assert expr.dtype == expected.dtype
+                assert expr.nrows == expected.nrows
+                assert expr.ncols == expected.ncols
+                assert expr.shape == expected.shape
+                assert expr.nvals == expected.nvals
+                assert expr.isclose(expected)
+                assert expected.isclose(expr)
+                assert expr.isequal(expected)
+                assert expected.isequal(expr)
+                assert expr.mxv(v).isequal(expected.mxv(v))
+                assert expected.T.mxv(v).isequal(expr.T.mxv(v))
+                for method in [
+                    # "ewise_add",
+                    # "ewise_mult",
+                    # "mxm",
+                    # "__matmul__",
+                    "__and__",
+                    "__or__",
+                    # "kronecker",
+                ]:
+                    val1 = getattr(expected, method)(expected).new()
+                    val2 = getattr(expected, method)(expr)
+                    val3 = getattr(expr, method)(expected)
+                    val4 = getattr(expr, method)(expr)
+                    assert val1.isequal(val2)
+                    assert val1.isequal(val3)
+                    assert val1.isequal(val4)
+                for method in ["reduce_rowwise", "reduce_columnwise", "reduce_scalar"]:
+                    s1 = getattr(expected, method)(monoid.lor).new()
+                    s2 = getattr(expr, method)(monoid.lor)
+                    assert s1.isequal(s2.new())
+                    assert s1.isequal(s2)
+    
+            expected = binary.times(A & A).new()
+            for expr in [binary.times(A & A)]:
+                assert expr.dtype == expected.dtype
+                assert expr.nrows == expected.nrows
+                assert expr.ncols == expected.ncols
+                assert expr.shape == expected.shape
+                assert expr.nvals == expected.nvals
+                assert expr.isclose(expected)
+                assert expected.isclose(expr)
+                assert expr.isequal(expected)
+                assert expected.isequal(expr)
+                assert expr.mxv(v).isequal(expected.mxv(v))
+                assert expected.T.mxv(v).isequal(expr.T.mxv(v))
+                for method in [
+                    "ewise_add",
+                    "ewise_mult",
+                    "mxm",
+                    # "__matmul__",
+                    # "__and__",
+                    # "__or__",
+                    # "kronecker",
+                ]:
+                    val1 = getattr(expected, method)(expected).new()
+                    val2 = getattr(expected, method)(expr)
+                    val3 = getattr(expr, method)(expected)
+                    val4 = getattr(expr, method)(expr)
+                    assert val1.isequal(val2)
+                    assert val1.isequal(val3)
+                    assert val1.isequal(val4)
+                for method in ["reduce_rowwise", "reduce_columnwise", "reduce_scalar"]:
+                    s1 = getattr(expected, method)().new()
+                    s2 = getattr(expr, method)()
+                    assert s1.isequal(s2.new())
+                    assert s1.isequal(s2)
+    
+            expected = semiring.plus_times(A @ v).new()
+            for expr in [(A @ v), (v @ A.T), semiring.plus_times(A @ v)]:
+                assert expr.vxm(A).isequal(expected.vxm(A))
+                assert expr.vxm(A).new(mask=expr.S).isequal(expected.vxm(A).new(mask=expected.S))
+                assert expr.vxm(A).new(mask=expr.V).isequal(expected.vxm(A).new(mask=expected.V))
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_auto_assign(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        expected = A.dup()
-        B = A[1:4, 1:4].new(dtype=bool)
-        expr = B & B
-        expected[:3, :3] = expr.new()
-        A[:3, :3] = expr
-        assert expected.isequal(A)
-        with pytest.raises(TypeError):
-            # Not yet supported, but we could!
-            A[:3, :3] = A[1:4, 1:4]
-        v = A[2:5, 5].new(dtype=bool)
-        expr = v & v
-        A[:3, 4] << expr
-        expected[:3, 4] << expr.new()
-        assert expected.isequal(A)
+def test_auto_assign(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            expected = A.dup()
+            B = A[1:4, 1:4].new(dtype=bool)
+            expr = B & B
+            expected[:3, :3] = expr.new()
+            A[:3, :3] = expr
+            assert expected.isequal(A)
+            with pytest.raises(TypeError):
+                # Not yet supported, but we could!
+                A[:3, :3] = A[1:4, 1:4]
+            v = A[2:5, 5].new(dtype=bool)
+            expr = v & v
+            A[:3, 4] << expr
+            expected[:3, 4] << expr.new()
+            assert expected.isequal(A)
 
 
 @autocompute
@@ -3437,149 +3428,147 @@ def test_flatten(A, A_chunks):
             v.ss.reshape(A.shape + (1,))
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_autocompute_argument_messages(A, A_chunks, v):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        with pytest.raises(TypeError, match="autocompute"):
-            A.ewise_mult(A & A)
-        with pytest.raises(TypeError, match="autocompute"):
-            A.mxv(A @ v)
+def test_autocompute_argument_messages(As, A_chunks, v):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            with pytest.raises(TypeError, match="autocompute"):
+                A.ewise_mult(A & A)
+            with pytest.raises(TypeError, match="autocompute"):
+                A.mxv(A @ v)
 
 
 @autocompute
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_infix_sugar(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        assert type(A + 1) is not Matrix
-        assert binary.plus(A, 1).isequal(A + 1)
-        assert binary.plus(A.T, 1).isequal(A.T + 1)
-        assert binary.plus(1, A).isequal(1 + A)
-        assert binary.minus(A, 1).isequal(A - 1)
-        assert binary.minus(1, A).isequal(1 - A)
-        assert binary.times(A, 2).isequal(A * 2)
-        assert binary.times(2, A).isequal(2 * A)
-        assert binary.truediv(A, 2).isequal(A / 2)
-        assert binary.truediv(5, A).isequal(5 / A)
-        assert binary.floordiv(A, 2).isequal(A // 2)
-        assert binary.floordiv(5, A).isequal(5 // A)
-        assert binary.numpy.mod(A, 2).isequal(A % 2)
-        assert binary.numpy.mod(5, A).isequal(5 % A)
-        assert binary.pow(A, 2).isequal(A ** 2)
-        assert binary.pow(2, A).isequal(2 ** A)
-        assert binary.pow(A, 2).isequal(pow(A, 2))
-        assert unary.ainv(A).isequal(-A)
-        assert unary.ainv(A.T).isequal(-A.T)
-        B = A.dup(dtype=bool)
-        assert unary.lnot(B).isequal(~B)
-        assert unary.lnot(B.T).isequal(~B.T)
-        with pytest.raises(TypeError):
-            assert unary.lnot(A).isequal(~A)
-        with pytest.raises(TypeError):
-            assert unary.lnot(A.T).isequal(~A.T)
-        assert binary.lxor(True, B).isequal(True ^ B)
-        assert binary.lxor(B, True).isequal(B ^ True)
-        with pytest.raises(TypeError):
-            A ^ True
-        with pytest.raises(TypeError):
-            A ^ B
-        with pytest.raises(TypeError):
-            6 ^ B
-        assert binary.lt(A, 4).isequal(A < 4)
-        assert binary.le(A, 4).isequal(A <= 4)
-        assert binary.gt(A, 4).isequal(A > 4)
-        assert binary.ge(A, 4).isequal(A >= 4)
-        assert binary.eq(A, 4).isequal(A == 4)
-        assert binary.ne(A, 4).isequal(A != 4)
-        x, y = divmod(A, 3)
-        assert binary.floordiv(A, 3).isequal(x)
-        assert binary.numpy.mod(A, 3).isequal(y)
-        assert binary.fmod(A, 3).isequal(y)
-        assert A.isequal(binary.plus((3 * x) & y))
-        x, y = divmod(-A, 3)
-        assert binary.floordiv(-A, 3).isequal(x)
-        assert binary.numpy.mod(-A, 3).isequal(y)
-        # assert binary.fmod(-A, 3).isequal(y)  # The reason we use numpy.mod
-        assert (-A).isequal(binary.plus((3 * x) & y))
-        x, y = divmod(3, A)
-        assert binary.floordiv(3, A).isequal(x)
-        assert binary.numpy.mod(3, A).isequal(y)
-        assert binary.fmod(3, A).isequal(y)
-        assert binary.plus(binary.times(A & x) & y).isequal(3 * unary.one(A))
-        x, y = divmod(-3, A)
-        assert binary.floordiv(-3, A).isequal(x)
-        assert binary.numpy.mod(-3, A).isequal(y)
-        # assert binary.fmod(-3, A).isequal(y)  # The reason we use numpy.mod
-        assert binary.plus(binary.times(A & x) & y).isequal(-3 * unary.one(A))
-
-        assert binary.eq(A & A).isequal(A == A)
-        assert binary.ne(A.T & A.T).isequal(A.T != A.T)
-        assert binary.lt(A & A.T).isequal(A < A.T)
-        assert binary.ge(A.T & A).isequal(A.T >= A)
-
-        B = A.dup()
-        B += 1
-        assert type(B) is Matrix
-        assert binary.plus(A, 1).isequal(B)
-        B = A.dup()
-        B -= 1
-        assert type(B) is Matrix
-        assert binary.minus(A, 1).isequal(B)
-        B = A.dup()
-        B *= 2
-        assert type(B) is Matrix
-        assert binary.times(A, 2).isequal(B)
-        B = A.dup(dtype=float)
-        B /= 2
-        assert type(B) is Matrix
-        assert binary.truediv(A, 2).isequal(B)
-        B = A.dup()
-        B //= 2
-        assert type(B) is Matrix
-        assert binary.floordiv(A, 2).isequal(B)
-        B = A.dup()
-        B %= 2
-        assert type(B) is Matrix
-        assert binary.numpy.mod(A, 2).isequal(B)
-        B = A.dup()
-        B **= 2
-        assert type(B) is Matrix
-        assert binary.pow(A, 2).isequal(B)
-        B = A.dup(dtype=bool)
-        B ^= True
-        assert type(B) is Matrix
-        assert B.isequal(~A.dup(dtype=bool))
-        B = A.dup(dtype=bool)
-        B ^= B
-        assert type(B) is Matrix
-        assert not B.reduce_scalar(agg.any).new()
-
-        expr = binary.plus(A & A)
-        assert unary.abs(expr).isequal(abs(expr))
-        assert unary.ainv(expr).isequal(-expr)
-        with pytest.raises(TypeError):
-            assert unary.lnot(expr).isequal(~expr)
-        with pytest.raises(TypeError):
-            expr += 1
-        with pytest.raises(TypeError):
-            expr -= 1
-        with pytest.raises(TypeError):
-            expr *= 1
-        with pytest.raises(TypeError):
-            expr /= 1
-        with pytest.raises(TypeError):
-            expr //= 1
-        with pytest.raises(TypeError):
-            expr %= 1
-        with pytest.raises(TypeError):
-            expr **= 1
-        with pytest.raises(TypeError):
-            expr ^= 1
+def test_infix_sugar(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            assert type(A + 1) is not Matrix
+            assert binary.plus(A, 1).isequal(A + 1)
+            assert binary.plus(A.T, 1).isequal(A.T + 1)
+            assert binary.plus(1, A).isequal(1 + A)
+            assert binary.minus(A, 1).isequal(A - 1)
+            assert binary.minus(1, A).isequal(1 - A)
+            assert binary.times(A, 2).isequal(A * 2)
+            assert binary.times(2, A).isequal(2 * A)
+            assert binary.truediv(A, 2).isequal(A / 2)
+            assert binary.truediv(5, A).isequal(5 / A)
+            assert binary.floordiv(A, 2).isequal(A // 2)
+            assert binary.floordiv(5, A).isequal(5 // A)
+            assert binary.numpy.mod(A, 2).isequal(A % 2)
+            assert binary.numpy.mod(5, A).isequal(5 % A)
+            assert binary.pow(A, 2).isequal(A ** 2)
+            assert binary.pow(2, A).isequal(2 ** A)
+            assert binary.pow(A, 2).isequal(pow(A, 2))
+            assert unary.ainv(A).isequal(-A)
+            assert unary.ainv(A.T).isequal(-A.T)
+            B = A.dup(dtype=bool)
+            assert unary.lnot(B).isequal(~B)
+            assert unary.lnot(B.T).isequal(~B.T)
+            with pytest.raises(TypeError):
+                assert unary.lnot(A).isequal(~A)
+            with pytest.raises(TypeError):
+                assert unary.lnot(A.T).isequal(~A.T)
+            assert binary.lxor(True, B).isequal(True ^ B)
+            assert binary.lxor(B, True).isequal(B ^ True)
+            with pytest.raises(TypeError):
+                A ^ True
+            with pytest.raises(TypeError):
+                A ^ B
+            with pytest.raises(TypeError):
+                6 ^ B
+            assert binary.lt(A, 4).isequal(A < 4)
+            assert binary.le(A, 4).isequal(A <= 4)
+            assert binary.gt(A, 4).isequal(A > 4)
+            assert binary.ge(A, 4).isequal(A >= 4)
+            assert binary.eq(A, 4).isequal(A == 4)
+            assert binary.ne(A, 4).isequal(A != 4)
+            x, y = divmod(A, 3)
+            assert binary.floordiv(A, 3).isequal(x)
+            assert binary.numpy.mod(A, 3).isequal(y)
+            assert binary.fmod(A, 3).isequal(y)
+            assert A.isequal(binary.plus((3 * x) & y))
+            x, y = divmod(-A, 3)
+            assert binary.floordiv(-A, 3).isequal(x)
+            assert binary.numpy.mod(-A, 3).isequal(y)
+            # assert binary.fmod(-A, 3).isequal(y)  # The reason we use numpy.mod
+            assert (-A).isequal(binary.plus((3 * x) & y))
+            x, y = divmod(3, A)
+            assert binary.floordiv(3, A).isequal(x)
+            assert binary.numpy.mod(3, A).isequal(y)
+            assert binary.fmod(3, A).isequal(y)
+            assert binary.plus(binary.times(A & x) & y).isequal(3 * unary.one(A))
+            x, y = divmod(-3, A)
+            assert binary.floordiv(-3, A).isequal(x)
+            assert binary.numpy.mod(-3, A).isequal(y)
+            # assert binary.fmod(-3, A).isequal(y)  # The reason we use numpy.mod
+            assert binary.plus(binary.times(A & x) & y).isequal(-3 * unary.one(A))
+    
+            assert binary.eq(A & A).isequal(A == A)
+            assert binary.ne(A.T & A.T).isequal(A.T != A.T)
+            assert binary.lt(A & A.T).isequal(A < A.T)
+            assert binary.ge(A.T & A).isequal(A.T >= A)
+    
+            B = A.dup()
+            B += 1
+            assert type(B) is Matrix
+            assert binary.plus(A, 1).isequal(B)
+            B = A.dup()
+            B -= 1
+            assert type(B) is Matrix
+            assert binary.minus(A, 1).isequal(B)
+            B = A.dup()
+            B *= 2
+            assert type(B) is Matrix
+            assert binary.times(A, 2).isequal(B)
+            B = A.dup(dtype=float)
+            B /= 2
+            assert type(B) is Matrix
+            assert binary.truediv(A, 2).isequal(B)
+            B = A.dup()
+            B //= 2
+            assert type(B) is Matrix
+            assert binary.floordiv(A, 2).isequal(B)
+            B = A.dup()
+            B %= 2
+            assert type(B) is Matrix
+            assert binary.numpy.mod(A, 2).isequal(B)
+            B = A.dup()
+            B **= 2
+            assert type(B) is Matrix
+            assert binary.pow(A, 2).isequal(B)
+            B = A.dup(dtype=bool)
+            B ^= True
+            assert type(B) is Matrix
+            assert B.isequal(~A.dup(dtype=bool))
+            B = A.dup(dtype=bool)
+            B ^= B
+            assert type(B) is Matrix
+            assert not B.reduce_scalar(agg.any).new()
+    
+            expr = binary.plus(A & A)
+            assert unary.abs(expr).isequal(abs(expr))
+            assert unary.ainv(expr).isequal(-expr)
+            with pytest.raises(TypeError):
+                assert unary.lnot(expr).isequal(~expr)
+            with pytest.raises(TypeError):
+                expr += 1
+            with pytest.raises(TypeError):
+                expr -= 1
+            with pytest.raises(TypeError):
+                expr *= 1
+            with pytest.raises(TypeError):
+                expr /= 1
+            with pytest.raises(TypeError):
+                expr //= 1
+            with pytest.raises(TypeError):
+                expr %= 1
+            with pytest.raises(TypeError):
+                expr **= 1
+            with pytest.raises(TypeError):
+                expr ^= 1
 
 
 @pytest.mark.slow
@@ -3892,15 +3881,15 @@ def test_deprecated(A, A_chunks):
             A.ss.scan_columns()
 
 
-def test_ndim(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        assert A.ndim == 2
-        assert A.ewise_mult(A).ndim == 2
-        assert (A & A).ndim == 2
-        assert (A @ A).ndim == 2
+def test_ndim(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            assert A.ndim == 2
+            assert A.ewise_mult(A).ndim == 2
+            assert (A & A).ndim == 2
+            assert (A @ A).ndim == 2
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)

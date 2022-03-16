@@ -8,15 +8,18 @@ import grblas as gb
 
 from grblas.exceptions import DimensionMismatch
 from dask.base import tokenize
+from dask.highlevelgraph import HighLevelGraph
 
 from .base import BaseType, InnerBaseType, _check_mask, DOnion, is_DOnion, any_dOnions
 from .mask import Mask
 from .utils import (
     get_grblas_type,
+    get_inner_type,
     get_meta,
     get_return_type,
     np_dtype,
     wrap_inner,
+    flatten,
     build_chunk_offsets_dask_array,
     build_chunk_ranges_dask_array,
     build_slice_dask_array_from_chunks,
@@ -25,7 +28,7 @@ from .utils import (
 
 class GbDelayed:
     def __init__(self, parent, method_name, *args, meta=None, **kwargs):
-        self.has_dOnion = np.any([getattr(x, "is_dOnion", False) for x in (parent,) + args])
+        self.has_dOnion = any_dOnions(parent, *args)
         self.parent = parent
         self.method_name = method_name
         self.args = args
@@ -33,13 +36,8 @@ class GbDelayed:
         self._meta = meta
         # InfixExpression and Aggregator requirements:
         self.dtype = meta.dtype
-        self.output_type = meta.output_type
-        self.ndim = len(meta.shape)
-        if self.ndim == 1:
-            self._size = meta.size
-        elif self.ndim == 2:
-            self._nrows = meta.nrows
-            self._ncols = meta.ncols
+        # autocompute requirements:
+        self._value = None
 
     def _matmul(self, meta, mask=None):
         left_operand = self.parent
@@ -230,8 +228,7 @@ class GbDelayed:
         return output
 
     def new(self, dtype=None, *, mask=None, name=None):
-        if mask is not None:
-            _check_mask(mask)
+        _check_mask(mask, ignore_None=True)
 
         if any_dOnions(self, mask):
 
@@ -333,15 +330,29 @@ class GbDelayed:
                 )
                 for key in self.kwargs
             }
-            delayed = da.core.elemwise(
-                _expr_new,
-                self.method_name,
-                dtype,
-                grblas_mask_type,
-                self_kwargs,
-                self.parent._delayed,
-                delayed_mask,
-                *[x._delayed if isinstance(x, BaseType) else x for x in self.args],
+            pt = getattr(self.parent, '_is_transposed', False)
+            xts = [getattr(arg, '_is_transposed', False) for arg in self.args]
+            axes = 'ij' if self.parent.ndim == 2 else 'i'
+            delayed = da.core.blockwise(
+                *(partial(_expr_new, pt, xts), axes),
+                *(self.method_name, None),
+                *(dtype, None),
+                *(grblas_mask_type, None),
+                *(
+                    (self.parent._matrix._delayed, axes[::-1]) if pt
+                    else (self.parent._delayed, axes)
+                ),
+                *(delayed_mask, (None if mask is None else out_axes)),
+                *flatten(
+                    (
+                        (x._matrix._delayed, axes[::-1]) if xt
+                        else (x._delayed, (None if x._is_scalar else axes))
+                    )
+                    if isinstance(x, BaseType) or getattr(x, '_is_transposed', False)
+                    else (x, None)
+                    for x, xt in zip(self.args, xts)
+                ),
+                **self_kwargs,
                 dtype=np_dtype(meta.dtype),
             )
         elif self.method_name in {"vxm", "mxv", "mxm"}:
@@ -566,7 +577,7 @@ class IndexerResolver:
                 normalized = index.indices(size)
                 return AxisIndex(len(range(*normalized)), slice(*normalized))
             else:
-                return AxisIndex(None, index)
+                return AxisIndex(0, index)
 
         elif typ in {np.ndarray, da.Array}:
             if len(index.shape) != 1:
@@ -576,7 +587,7 @@ class IndexerResolver:
             return AxisIndex(index.shape[0], index)
 
         elif is_DOnion(index):
-            return AxisIndex(None, index)
+            return AxisIndex(0, index)
 
         else:
             from .scalar import Scalar
@@ -650,31 +661,37 @@ class IndexerResolver:
 
 
 class Updater:
+    __bool__ = gb.expr.Updater.__bool__
+    __eq__ = gb.expr.Updater.__eq__
+
     def __init__(self, parent, *, mask=None, accum=None, replace=False, input_mask=None):
-        if input_mask is not None and mask is not None:
+        if (
+            mask is not None
+            and input_mask is not None
+        ):
             raise TypeError("mask and input_mask arguments cannot both be given")
-        if input_mask is not None and not isinstance(input_mask, Mask):
-            raise TypeError(r"Mask must indicate values (M.V) or structure (M.S)")
+
+        _check_mask(mask, ignore_None=True)
+        _check_mask(input_mask, ignore_None=True)
 
         self.has_dOnion = any_dOnions(parent, mask, input_mask)
         self.parent = parent
-
         self.mask = mask
+        self.input_mask = input_mask
+        self.accum = accum
+        self.replace = replace if mask is not None else None
+        self._meta = parent._meta(mask=get_meta(mask), accum=accum, replace=replace)
+
+        # copy `mask` if `parent` is the source of `mask`
         if parent is getattr(mask, "mask", None):
             self.mask = type(mask)(mask.mask.dup())
 
-        self.input_mask = input_mask
+        # copy `input_mask` if `parent` is the source of `input_mask`
         if parent is getattr(input_mask, "mask", None):
             self.input_mask = type(input_mask)(input_mask.mask.dup())
 
-        self.accum = accum
-        if mask is None:
-            self.replace = None
-        else:
-            self.replace = replace
-        self._meta = parent._meta(mask=get_meta(mask), accum=accum, replace=replace)
         # Aggregator specific attribute requirements:
-        self.kwargs = {"mask": mask}
+        self.kwargs = {"mask": self.mask}
 
     def __delitem__(self, keys):
         # Occurs when user calls `del C(params)[index]`
@@ -708,8 +725,9 @@ class Updater:
             if type(delayed) is AmbiguousAssignOrExtract:
                 # w(input_mask) << v[index]
                 if self.parent is delayed.parent:
+                    # replace `v` with a copy of itself if `w` is `v`
                     delayed.parent = delayed.parent.__class__(
-                        delayed.parent._delayed, delayed.parent._meta
+                        delayed.parent._optional_dup(), delayed.parent._meta
                     )
                 self.parent._update(
                     delayed.new(mask=self.mask, input_mask=self.input_mask),
@@ -724,6 +742,7 @@ class Updater:
         if isinstance(delayed, Number) or (
             isinstance(delayed, BaseType) and get_meta(delayed)._is_scalar
         ):
+            # w(mask, accum, replace) << s
             ndim = self.parent.ndim
             if ndim > 0:
                 self.__setitem__(_squeeze((slice(None),) * ndim), delayed)
@@ -751,6 +770,11 @@ class Updater:
 
 
 def _csc_chunk(row_range, col_range, indices, red_columns, track_indices=False):
+    """
+    create chunk of Reduce_Assign Matrix in Compressed Sparse Column (CSC) format
+    
+    (Used in `reduce_assign()`)
+    """
     row_range = row_range[0]
     nrows = row_range.stop - row_range.start
     if type(indices[0]) is slice:
@@ -790,13 +814,14 @@ def _csc_chunk(row_range, col_range, indices, red_columns, track_indices=False):
 
 
 def _fill(inner_vector, rhs):
+    # used in reduce_assign()
     rhs = rhs.value if isinstance(rhs, InnerBaseType) else rhs
     inner_vector.value[:] << rhs
     return inner_vector
 
 
 def reduce_assign(lhs, indices, rhs, dup_op="last", mask=None, accum=None, replace=False):
-    # lhs(mask, accum, replace)[i] << rhs
+    # lhs(mask, accum, replace, dup_op)[i] << rhs
     rhs_is_scalar = not (isinstance(rhs, BaseType) and type(rhs._meta) is gb.Vector)
     if type(indices) is slice:
         chunksz = "auto" if rhs_is_scalar else rhs._delayed.chunks
@@ -907,6 +932,15 @@ def _get_type_with_ndims(n):
         return get_return_type(gb.Vector.new(int))
     else:
         return get_return_type(gb.Matrix.new(int))
+
+
+def _get_inner_type_with_ndims(n):
+    if n == 0:
+        return get_inner_type(gb.Scalar.new(int))
+    elif n == 1:
+        return get_inner_type(gb.Vector.new(int))
+    else:
+        return get_inner_type(gb.Matrix.new(int))
 
 
 def _get_grblas_type_with_ndims(n):
@@ -1370,45 +1404,83 @@ def _adjust_meta_to_index(meta, index):
 
 
 class AmbiguousAssignOrExtract:
+    __bool__ = gb.expr.AmbiguousAssignOrExtract.__bool__
+    __eq__ = gb.expr.AmbiguousAssignOrExtract.__eq__
+    __float__ = gb.expr.AmbiguousAssignOrExtract.__float__
+    __int__ = gb.expr.AmbiguousAssignOrExtract.__int__
+    __index__ = gb.expr.AmbiguousAssignOrExtract.__index__
+
     def __init__(self, parent, index, meta=None):
         self.parent = parent
         self.index = index
         input_ndim = parent.ndim
-        keys_0_is_dOnion = input_ndim == 1 and is_DOnion(index)
-        keys_1_is_dOnion = (
+        index_is_dOnion = input_ndim == 1 and is_DOnion(index)
+        index_is_dOnion = index_is_dOnion or (
             input_ndim == 2 and _is_pair(index) and (is_DOnion(index[0]) or is_DOnion(index[1]))
         )
-        if parent.is_dOnion or keys_0_is_dOnion or keys_1_is_dOnion:
+        if parent.is_dOnion or index_is_dOnion:
             self.has_dOnion = True
-            IndexerResolver(self.parent, index, check_shape=False)
+            self.resolved_indexes = IndexerResolver(self.parent, index, check_shape=False)
             self._meta = _adjust_meta_to_index(parent._meta, index)
         else:
             self.has_dOnion = False
-            self.resolved_indices = IndexerResolver(parent, index)
+            self.resolved_indexes = IndexerResolver(parent, index)
             self._meta = parent._meta[index] if meta is None else meta
-            # infix expression requirements:
-            shape = tuple(i.size for i in self.resolved_indices.indices if i.size)
-            self.ndim = len(shape)
-            self.output_type = _get_grblas_type_with_ndims(self.ndim)
-            if self.ndim == 1:
-                self._size = shape[0]
-            elif self.ndim == 2:
-                self._nrows = shape[0]
-                self._ncols = shape[1]
+
+        # infix expression requirements:
+        shape = tuple(i.size for i in self.resolved_indexes.indices if i.size)
+        self.ndim = len(shape)
+        self.output_type = _get_grblas_type_with_ndims(self.ndim)
+        if self.ndim == 1:
+            self._size = shape[0]
+        elif self.ndim == 2:
+            self._nrows = shape[0]
+            self._ncols = shape[1]
+
+    @staticmethod
+    def _extract_single_element(x, xt, T, dxn, indices, meta, dtype):
+
+        def getitem(inner, key, dtype):
+            return wrap_inner(inner.value[key].new(dtype=dtype))
+
+        name = "extract_single_element-" + tokenize(x, xt, indices)
+        
+        block = ()
+        element = ()
+        for axis, i in enumerate(indices):
+            stops_ = np.cumsum(x.chunks[T[axis]])
+            starts = np.roll(stops_, 1)
+            starts[0] = 0
+    
+            blockid = np.arange(x.numblocks[T[axis]])
+    
+            # locate chunk containing element:
+            filter = (starts <= i) & (i < stops_)
+            (R,) = blockid[filter]
+
+            block += (R,)
+            element += (i - starts[R],)
+
+        dsk = dict()
+        dsk[(name,)] = (
+            getitem, (x.name, *block[::dxn]), _squeeze(element[::dxn]), dtype
+        )
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[x])
+        out = da.core.Array(graph, name, (), meta=wrap_inner(meta))
+        return out
 
     def new(self, *, dtype=None, mask=None, input_mask=None, name=None):
-        def _recall_getitem(parent, keys_0, keys_1, dtype, mask, input_mask):
-            keys = keys_0 if keys_1 is None else (keys_0, keys_1)
-            return AmbiguousAssignOrExtract(parent, keys).new(
-                dtype=dtype, mask=mask, input_mask=input_mask
-            )
-
-        if mask is not None:
-            _check_mask(mask)
-        if input_mask is not None:
-            _check_mask(input_mask)
+        _check_mask(mask, ignore_None=True)
+        _check_mask(input_mask, ignore_None=True)
 
         if any_dOnions(self, mask, input_mask):
+
+            def _recall_getitem(parent, keys_0, keys_1, dtype, mask, input_mask):
+                keys = keys_0 if keys_1 is None else (keys_0, keys_1)
+                return AmbiguousAssignOrExtract(parent, keys).new(
+                    dtype=dtype, mask=mask, input_mask=input_mask
+                )
+
             meta = self._meta.new(dtype=dtype)
 
             if _is_pair(self.index):
@@ -1443,8 +1515,8 @@ class AmbiguousAssignOrExtract:
         input_ndim = len(input_shape)
         axes = tuple(range(input_ndim))
         x_axes = axes[::dxn]
-        indices = tuple(i.index for i in self.resolved_indices.indices)
-        out_shape = tuple(i.size for i in self.resolved_indices.indices if i.size is not None)
+        indices = tuple(i.index for i in self.resolved_indexes.indices)
+        out_shape = tuple(i.size for i in self.resolved_indexes.indices if i.size is not None)
         out_ndim = len(out_shape)
 
         if mask is not None:
@@ -1497,7 +1569,7 @@ class AmbiguousAssignOrExtract:
                 elif out_ndim < input_ndim:
                     (rem_axis,) = [
                         axis
-                        for axis, index in enumerate(self.resolved_indices.indices)
+                        for axis, index in enumerate(self.resolved_indexes.indices)
                         if index.size is not None
                     ]
                     if out_ndim == input_mask_ndim:
@@ -1521,6 +1593,12 @@ class AmbiguousAssignOrExtract:
 
         dtype = np_dtype(meta.dtype)
         if input_ndim in [1, 2]:
+            if out_ndim == 0:
+                delayed = self.__class__._extract_single_element(
+                    x, xt, T, dxn, indices, meta, meta.dtype
+                )
+                return get_return_type(meta)(delayed)
+
             # prepare arguments for blockwise:
             indices_args = []
             offset_args = []
@@ -1675,6 +1753,9 @@ def _identity_func(x, axis, keepdims):
 
 
 class Assigner:
+    __bool__ = gb.expr.Assigner.__bool__
+    __eq__ = gb.expr.Assigner.__eq__
+
     def __init__(self, updater, index, subassign=False):
         self.updater = updater
         self.parent = updater.parent
@@ -1682,27 +1763,45 @@ class Assigner:
         self.subassign = subassign
 
         input_ndim = self.parent.ndim
-        keys_0_is_dOnion = input_ndim == 1 and is_DOnion(index)
-        keys_1_is_dOnion = _is_pair(index) and (is_DOnion(index[0]) or is_DOnion(index[1]))
-        if self.updater.has_dOnion or keys_0_is_dOnion or keys_1_is_dOnion:
+        index_is_dOnion = input_ndim == 1 and is_DOnion(index)
+        index_is_dOnion = index_is_dOnion or (
+            input_ndim == 2 and _is_pair(index) and (is_DOnion(index[0]) or is_DOnion(index[1]))
+        )
+        if self.updater.has_dOnion or index_is_dOnion:
             self.has_dOnion = True
             IndexerResolver(self.parent, index, check_shape=False)
             self.index = index
         else:
             self.has_dOnion = False
-            self.resolved_indices = IndexerResolver(self.parent, index).indices
-            self.index = tuple(i.index for i in self.resolved_indices)
+            self.resolved_indexes = IndexerResolver(self.parent, index).indices
+            self.index = tuple(i.index for i in self.resolved_indexes)
 
     def update(self, obj):
-        def _recall_update(lhs, mask, accum, replace, keys_0, keys_1, obj, subassign):
-            keys = (keys_0,) if keys_1 is None else (keys_0, keys_1)
-            updater = Updater(lhs, mask=mask, accum=accum, replace=replace)
-            Assigner(updater, keys, subassign=subassign).update(obj)
-            return lhs
-
+        if not (
+            isinstance(obj, Number)
+            or isinstance(obj, BaseType)
+            or getattr(obj, '_is_transposed', False)
+        ):
+            obj = self.parent._expect_type(
+                obj,
+                (
+                    gb.Scalar,
+                    gb.Vector,
+                    gb.Matrix,
+                    gb.matrix.TransposedMatrix,
+                ),
+                within="Assign.update",
+            )
         if any_dOnions(self, obj):
+
+            def _recall_update(lhs, mask, accum, replace, keys_0, keys_1, obj, subassign):
+                keys = (keys_0,) if keys_1 is None else (keys_0, keys_1)
+                updater = Updater(lhs, mask=mask, accum=accum, replace=replace)
+                Assigner(updater, keys, subassign=subassign).update(obj)
+                return lhs
+    
             lhs = self.parent
-            lhs_copy = lhs.__class__(lhs._delayed, meta=lhs._meta)
+            lhs_copy = lhs.__class__(lhs._optional_dup(), meta=lhs._meta)
 
             updater = self.updater
 
@@ -1727,11 +1826,8 @@ class Assigner:
             return
 
         # no dOnions
-        if not (isinstance(obj, BaseType) or isinstance(obj, Number)):
-            try:
-                obj_transposed = obj._is_transposed
-            except AttributeError:
-                raise TypeError("Bad type for argument `obj`")
+        if getattr(obj, '_is_transposed', False):
+            obj_transposed = obj._is_transposed
             obj = obj._matrix
         else:
             obj_transposed = False
@@ -1784,7 +1880,7 @@ class Assigner:
                     else:
                         (rem_axis,) = [
                             axis
-                            for axis, index in enumerate(self.resolved_indices)
+                            for axis, index in enumerate(self.resolved_indexes)
                             if index.size is not None
                         ]
                         if parent.shape[rem_axis] != out_shape[0]:
@@ -1793,7 +1889,7 @@ class Assigner:
                     if ndim == 2 and out_dim == 1:
                         (int_axis,) = [
                             axis
-                            for axis, index in enumerate(self.resolved_indices)
+                            for axis, index in enumerate(self.resolved_indexes)
                             if index.size is None
                         ]
                         indices = list(indices)
@@ -2014,14 +2110,16 @@ class FakeInnerTensor(InnerBaseType):
         self.compress_axis = compress_axis
 
 
-def _expr_new(method_name, dtype, grblas_mask_type, kwargs, x, mask, *args):
+def _expr_new(xt, ats, method_name, dtype, grblas_mask_type, x, mask, *args, **kwargs):
     # expr.new(...)
-    args = [x.value if isinstance(x, InnerBaseType) else x for x in args]
+    args = [
+        _transpose_if(y, yt) if isinstance(y, InnerBaseType) else y for y, yt in zip(args, ats)
+    ]
     kwargs = {
         key: (kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key])
         for key in kwargs
     }
-    expr = getattr(x.value, method_name)(*args, **kwargs)
+    expr = getattr(_transpose_if(x, xt), method_name)(*args, **kwargs)
     if mask is not None:
         mask = grblas_mask_type(mask.value)
     return wrap_inner(expr.new(dtype=dtype, mask=mask))
