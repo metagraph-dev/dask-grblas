@@ -227,6 +227,38 @@ class GbDelayed:
         op._new(updater, self)
         return output
 
+    def _kronecker(self, a, b, op, meta):
+        a = a.rechunk(chunks=1)
+        frag = da.core.blockwise(
+            *(partial(_kronecker, a._is_transposed, b._is_transposed), "ijMN"),
+            *((a._matrix._delayed, "ji") if a._is_transposed else (a._delayed, "ij")),
+            *((b._matrix._delayed, "NM") if b._is_transposed else (b._delayed, "MN")),
+            *(op, None),
+            dtype=np_dtype(meta.dtype),
+            meta=wrap_inner(meta),
+        )
+
+        name = "kronecker-" + tokenize(a, b)
+        b_ = b._matrix._delayed if b._is_transposed else b._delayed
+
+        out_chunks = ()
+        for axis in range(2):
+            out_chunks += (b_.chunks[axis] * a.shape[axis],)
+
+        dsk = dict()
+        for i in range(a.shape[0]):
+            for j in range(a.shape[1]):
+                for M in range(b_.numblocks[0]):
+                    for N in range(b_.numblocks[1]):
+                        
+                        dsk[(name, i*b_.numblocks[0] + M, j*b_.numblocks[1] + N)] = (
+                            lambda x: x, (frag.name, i, j, M, N)
+                        )
+
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[frag])
+        out = da.core.Array(graph, name, out_chunks, meta=wrap_inner(meta))
+        return out
+
     def new(self, dtype=None, *, mask=None, name=None):
         _check_mask(mask, ignore_None=True)
 
@@ -357,6 +389,8 @@ class GbDelayed:
             )
         elif self.method_name in {"vxm", "mxv", "mxm"}:
             delayed = self._matmul2(meta, mask=mask)
+        elif self.method_name == "kronecker":
+            delayed = self._kronecker(self.parent, self.args[0], self.args[1], meta)
         else:
             raise ValueError(self.method_name)
         return get_return_type(meta)(delayed)
@@ -462,6 +496,9 @@ class GbDelayed:
         elif self.method_name in {"vxm", "mxv", "mxm"}:
             delayed = self._matmul2(meta, mask=mask)
             updating(mask=mask, accum=accum, replace=replace) << get_return_type(meta)(delayed)
+            return
+        elif self.method_name == "kronecker":
+            updating(mask=mask, accum=accum, replace=replace) << self.new()
             return
         else:
             raise ValueError(self.method_name)
@@ -2248,6 +2285,12 @@ def _transpose_if(inner_x, xt):
     if xt:
         return inner_x.value.T
     return inner_x.value
+
+
+def _kronecker(at, bt, a, b, op):
+    a = _transpose_if(a, at)
+    b = _transpose_if(b, bt)
+    return wrap_inner(a.kronecker(b, op=op).new())
 
 
 def _matmul(op, at, bt, dtype, no_mask, mask_type, *args, computing_meta=None):

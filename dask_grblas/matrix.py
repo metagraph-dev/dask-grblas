@@ -563,12 +563,18 @@ class Matrix(BaseType):
             else:
                 return Matrix(donion, meta=meta)
 
-        chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
+        delayed = self._delayed.rechunk(chunks=chunks)
         if inplace:
-            self.resize(*self.shape, chunks=chunks)
+            self._delayed = delayed
             return
         else:
-            return self.resize(*self.shape, chunks=chunks, inplace=False)
+            return Matrix(delayed, meta=self._meta, nvals=self._nvals)
+        # chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
+        # if inplace:
+        #     self.resize(*self.shape, chunks=chunks)
+        #     return
+        # else:
+        #     return self.resize(*self.shape, chunks=chunks, inplace=False)
 
     def _diag(self, k=0, dtype=None, chunks="auto"):
         kdiag_row_start = max(0, -k)
@@ -776,9 +782,12 @@ class Matrix(BaseType):
         return MatrixExpression(self, "mxm", other, op, meta=meta, nrows=self.nrows, ncols=other.ncols)
 
     def kronecker(self, other, op=binary.times):
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix) + gb_types, within="kronecker", argname="other"
+        )
         meta = self._meta.kronecker(other._meta, op=op)
-        return GbDelayed(self, "kronecker", other, op, meta=meta)
+        return MatrixExpression(self, "kronecker", other, op, meta=meta)
 
     def apply(self, op, right=None, *, left=None):
         from .scalar import Scalar
@@ -1094,6 +1103,7 @@ class MatrixExpression(GbDelayed):
     ewise_mult = gb.matrix.MatrixExpression.ewise_mult
     isclose = gb.matrix.MatrixExpression.isclose
     isequal = gb.matrix.MatrixExpression.isequal
+    kronecker = gb.matrix.MatrixExpression.kronecker
     mxm = gb.matrix.MatrixExpression.mxm
     mxv = gb.matrix.MatrixExpression.mxv
     ncols = gb.matrix.MatrixExpression.ncols
