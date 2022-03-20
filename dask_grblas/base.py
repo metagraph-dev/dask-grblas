@@ -106,10 +106,12 @@ class BaseType:
                 dtype=bool,
             )
         if ndim > 0:
-            delayed = da.core.elemwise(
-                _to_scalar,
-                delayed.all(),
-                bool,
+            delayed = da.core.blockwise(
+                *(_to_scalar, ()),
+                *(delayed.all(), None),
+                *(bool, None),
+                dtype=np.bool_,
+                meta=wrap_inner(gb.Scalar.new(bool)),
             )
         return PythonScalar(delayed)
 
@@ -164,10 +166,12 @@ class BaseType:
                 dtype=bool,
             )
         if ndim > 0:
-            delayed = da.core.elemwise(
-                _to_scalar,
-                delayed.all(),
-                bool,
+            delayed = da.core.blockwise(
+                *(_to_scalar, ()),
+                *(delayed.all(), None),
+                *(bool, None),
+                dtype=np.bool_,
+                meta=wrap_inner(gb.Scalar.new(bool)),
             )
         return PythonScalar(delayed)
 
@@ -333,10 +337,12 @@ class BaseType:
             dtype=int,
         )
         if self._delayed.ndim > 0:
-            delayed = da.core.elemwise(
-                _to_scalar,
-                delayed.sum(),
-                int,
+            delayed = da.core.blockwise(
+                *(_to_scalar, ()),
+                *(delayed.sum(), None),
+                *(int, None),
+                dtype=np.int_,
+                meta=wrap_inner(gb.Scalar.new(int)),
             )
         return PythonScalar(delayed)
 
@@ -371,12 +377,11 @@ class BaseType:
         if any_dOnions(self, expr):
             self_copy = self.__class__(self._optional_dup(), meta=self._meta)
             expr_ = expr
-            if typ is AmbiguousAssignOrExtract and expr.has_dOnion:
+            if isinstance(expr, AmbiguousAssignOrExtract) and expr.has_dOnion:
 
                 def update_by_aae(c, p, k_0, k_1):
                     keys = k_0 if k_1 is None else (k_0, k_1)
-                    aae = AmbiguousAssignOrExtract(p, keys)
-                    return c.update(aae, in_dOnion=True)
+                    return c.update(p[keys], in_dOnion=True)
 
                 if _is_pair(expr_.index):
                     keys_0, keys_1 = expr_.index[0], expr_.index[1]
@@ -436,7 +441,7 @@ class BaseType:
             return
 
         self._meta.clear()
-        if typ is AmbiguousAssignOrExtract:
+        if isinstance(expr, AmbiguousAssignOrExtract):
             # Extract (w << v[index])
             # Is it safe/reasonable to simply replace `_delayed`?
             # Should we try to preserve e.g. format or partitions?
@@ -453,7 +458,7 @@ class BaseType:
             # "C << A.T"
             C = expr.new(dtype=self.dtype)
             self.__init__(C._delayed)
-        elif typ is type(None):
+        elif typ is type(None):  # noqa
             raise TypeError("Assignment value must be a valid expression")
         else:
             # Anything else we need to handle?
@@ -467,12 +472,13 @@ class BaseType:
             self_copy = self.__class__(self._optional_dup(), meta=self._meta)
             mask_ = mask.dOnion_if if mask is not None else None
             expr_ = expr
-            if typ is AmbiguousAssignOrExtract and expr.has_dOnion:
+            if isinstance(expr, AmbiguousAssignOrExtract) and expr.has_dOnion:
 
                 def _update_by_aae(c, p, k_0, k_1, mask=None, accum=None, replace=None):
                     keys = k_0 if k_1 is None else (k_0, k_1)
-                    aae = AmbiguousAssignOrExtract(p, keys)
-                    return c.update(aae, mask=mask, accum=accum, replace=replace, in_dOnion=True)
+                    return c.update(
+                        p[keys], mask=mask, accum=accum, replace=replace, in_dOnion=True
+                    )
 
                 if _is_pair(expr_.index):
                     keys_0, keys_1 = expr_.index[0], expr_.index[1]
@@ -535,7 +541,7 @@ class BaseType:
             if in_dOnion:
                 return self
             return
-        if typ is AmbiguousAssignOrExtract:
+        if isinstance(expr, AmbiguousAssignOrExtract):
             # Extract (w(mask=mask, accum=accum) << v[index])
             expr_new = expr.new(dtype=self.dtype)
             expr_delayed = expr_new._delayed
@@ -686,7 +692,7 @@ class DOnion:
         self.kernel = kernel
         # Why have ._meta and .dtype attributes? B'cos Scalar, Vector & Matrix need them
         self._meta = meta
-        self.dtype = getattr(meta, 'dtype', type(meta))
+        self.dtype = getattr(meta, "dtype", type(meta))
 
     def __eq__(self, other):
         if like_dOnion(other):
@@ -722,8 +728,8 @@ class DOnion:
             return value.persist(*args, **kwargs)
         else:
             raise AttributeError(
-                f'Something went wrong: stripped dOnion {self} value {value} has'
-                ' no `persist()` attribute.'
+                f"Something went wrong: stripped dOnion {self} value {value} has"
+                " no `persist()` attribute."
             )
 
     def _persist(self, *args, **kwargs):
@@ -733,8 +739,8 @@ class DOnion:
             return value._delayed
         else:
             raise AttributeError(
-                f'Something went wrong: stripped dOnion {self} value {value} has'
-                ' no `_persist()` attribute.'
+                f"Something went wrong: stripped dOnion {self} value {value} has"
+                " no `_persist()` attribute."
             )
 
     @classmethod
@@ -851,7 +857,7 @@ class DOnion:
         try:
             meta = getattr(self._meta, item, getattr(self.kernel, item))
         except AttributeError:
-            raise AttributeError(f'Unable to compute meta corresponding to attribute {item}.')
+            raise AttributeError(f"Unable to compute meta corresponding to attribute {item}.")
         _getattr = flexible_partial(getattr, skip, item)
         return self.deep_extract(meta, _getattr)
 
@@ -869,9 +875,7 @@ is_DOnion = partial(is_type, DOnion)
 
 def like_dOnion(arg):
     return arg is not None and (
-        is_DOnion(arg)
-        or getattr(arg, "is_dOnion", False)
-        or getattr(arg, "has_dOnion", False)
+        is_DOnion(arg) or getattr(arg, "is_dOnion", False) or getattr(arg, "has_dOnion", False)
     )
 
 

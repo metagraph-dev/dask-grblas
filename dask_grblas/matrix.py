@@ -13,7 +13,7 @@ from grblas.exceptions import IndexOutOfBound, EmptyObject, DimensionMismatch
 from . import _automethods
 from .base import BaseType, InnerBaseType, DOnion, is_DOnion, any_dOnions, Box, skip
 from .base import _nvals as _nvals_in_chunk
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
+from .expr import AmbiguousAssignOrExtract, IndexerResolver, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
 from ._ss.matrix import ss
 from .utils import (
@@ -678,8 +678,19 @@ class Matrix(BaseType):
         nvals = 0 if self._nvals == 0 else None
         return get_return_type(meta)(delayed, nvals=nvals)
 
-    def __getitem__(self, index):
-        return AmbiguousAssignOrExtract(self, index)
+    def __getitem__(self, keys):
+        resolved_indexes = IndexerResolver(self, keys)
+        shape = resolved_indexes.shape
+        if not shape:
+            from .scalar import ScalarIndexExpr
+
+            return ScalarIndexExpr(self, resolved_indexes)
+        elif len(shape) == 1:
+            from .vector import VectorIndexExpr
+
+            return VectorIndexExpr(self, resolved_indexes, *shape)
+        else:
+            return MatrixIndexExpr(self, resolved_indexes, *shape)
 
     def __delitem__(self, keys, in_dOnion=False):
         if is_DOnion(self._delayed):
@@ -726,7 +737,9 @@ class Matrix(BaseType):
             else:
                 raise
 
-        return MatrixExpression(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
+        return MatrixExpression(
+            self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta
+        )
 
     def ewise_mult(self, other, op=binary.times):
         gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
@@ -747,9 +760,7 @@ class Matrix(BaseType):
     def mxv(self, other, op=semiring.plus_times):
         from .vector import Vector, VectorExpression
 
-        other = self._expect_type(
-            other, (Vector, gb.Vector), within="mxv", argname="other"
-        )
+        other = self._expect_type(other, (Vector, gb.Vector), within="mxv", argname="other")
 
         try:
             meta = self._meta.mxv(other._meta, op=op)
@@ -779,7 +790,9 @@ class Matrix(BaseType):
             else:
                 raise
 
-        return MatrixExpression(self, "mxm", other, op, meta=meta, nrows=self.nrows, ncols=other.ncols)
+        return MatrixExpression(
+            self, "mxm", other, op, meta=meta, nrows=self.nrows, ncols=other.ncols
+        )
 
     def kronecker(self, other, op=binary.times):
         gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
@@ -790,15 +803,17 @@ class Matrix(BaseType):
         return MatrixExpression(self, "kronecker", other, op, meta=meta)
 
     def apply(self, op, right=None, *, left=None):
-        from .scalar import Scalar
-
         left_meta = left
         right_meta = right
 
-        if type(left) is Scalar:
-            left_meta = left.dtype.np_type(0)
-        if type(right) is Scalar:
-            right_meta = right.dtype.np_type(0)
+        if isinstance(left, BaseType):
+            left_meta = left._meta
+            if left_meta._is_scalar and left_meta.is_empty:
+                left_meta = gb.Scalar.from_value(0, dtype=left_meta.dtype)
+        if isinstance(right, BaseType):
+            right_meta = right._meta
+            if right_meta._is_scalar and right_meta.is_empty:
+                right_meta = gb.Scalar.from_value(0, dtype=right_meta.dtype)
 
         if self._meta.shape == (0,) * self.ndim:
             self._meta.resize(*((1,) * self.ndim))
@@ -817,11 +832,11 @@ class Matrix(BaseType):
         meta = self._meta.reduce_columnwise(op)
         return VectorExpression(self, "reduce_columnwise", op, meta=meta, size=self.ncols)
 
-    def reduce_scalar(self, op=monoid.plus):
+    def reduce_scalar(self, op=monoid.plus, *, allow_empty=True):
         from .scalar import ScalarExpression
 
         meta = self._meta.reduce_scalar(op)
-        return ScalarExpression(self, "reduce_scalar", op, meta=meta)
+        return ScalarExpression(self, "reduce_scalar", op, meta=meta, allow_empty=allow_empty)
 
     def to_values(self, dtype=None, chunks="auto"):
         dtype = lookup_dtype(self.dtype if dtype is None else dtype)
@@ -1045,9 +1060,6 @@ class TransposedMatrix:
         return cols, rows, vals
 
     # Properties
-    def __getitem__(self, index):
-        return AmbiguousAssignOrExtract(self, index)
-
     def isequal(self, other, *, check_dtype=False):
         other = self._expect_type(
             other, (Matrix, TransposedMatrix), within="isequal", argname="other"
@@ -1064,6 +1076,7 @@ class TransposedMatrix:
 
     # Delayed methods
     __contains__ = Matrix.__contains__
+    __getitem__ = Matrix.__getitem__
     ewise_add = Matrix.ewise_add
     ewise_mult = Matrix.ewise_mult
     mxv = Matrix.mxv
@@ -1190,6 +1203,94 @@ class MatrixExpression(GbDelayed):
     #     nrows = 0 if self._nrows.is_dOnion else self._nrows
     #     ncols = 0 if self._ncols.is_dOnion else self._ncols
     #     return Matrix.new(dtype, nrows, ncols, name=name)
+
+
+class MatrixIndexExpr(AmbiguousAssignOrExtract):
+    __slots__ = "_ncols", "_nrows"
+    ndim = 2
+    output_type = gb.Matrix
+    _is_transposed = False
+
+    def __init__(self, parent, resolved_indexes, nrows, ncols):
+        super().__init__(parent, resolved_indexes)
+        self._nrows = nrows
+        self._ncols = ncols
+
+    @property
+    def ncols(self):
+        return self._ncols
+
+    @property
+    def nrows(self):
+        return self._nrows
+
+    @property
+    def shape(self):
+        return (self._nrows, self._ncols)
+
+    # Begin auto-generated code: Matrix
+    __and__ = gb.matrix.MatrixIndexExpr.__and__
+    __bool__ = gb.matrix.MatrixIndexExpr.__bool__
+    __or__ = gb.matrix.MatrixIndexExpr.__or__
+    _get_value = _automethods._get_value
+    S = gb.matrix.MatrixIndexExpr.S
+    T = gb.matrix.MatrixIndexExpr.T
+    V = gb.matrix.MatrixIndexExpr.V
+    apply = gb.matrix.MatrixIndexExpr.apply
+    ewise_add = gb.matrix.MatrixIndexExpr.ewise_add
+    ewise_mult = gb.matrix.MatrixIndexExpr.ewise_mult
+    isclose = gb.matrix.MatrixIndexExpr.isclose
+    isequal = gb.matrix.MatrixIndexExpr.isequal
+    kronecker = gb.matrix.MatrixIndexExpr.kronecker
+    mxm = gb.matrix.MatrixIndexExpr.mxm
+    mxv = gb.matrix.MatrixIndexExpr.mxv
+    nvals = gb.matrix.MatrixIndexExpr.nvals
+    reduce_rowwise = gb.matrix.MatrixIndexExpr.reduce_rowwise
+    reduce_columnwise = gb.matrix.MatrixIndexExpr.reduce_columnwise
+    reduce_scalar = gb.matrix.MatrixIndexExpr.reduce_scalar
+    nvals = gb.matrix.MatrixIndexExpr.nvals
+
+    # infix sugar:
+    __abs__ = gb.matrix.MatrixIndexExpr.__abs__
+    __add__ = gb.matrix.MatrixIndexExpr.__add__
+    __divmod__ = gb.matrix.MatrixIndexExpr.__divmod__
+    __eq__ = gb.matrix.MatrixIndexExpr.__eq__
+    __floordiv__ = gb.matrix.MatrixIndexExpr.__floordiv__
+    __ge__ = gb.matrix.MatrixIndexExpr.__ge__
+    __gt__ = gb.matrix.MatrixIndexExpr.__gt__
+    __invert__ = gb.matrix.MatrixIndexExpr.__invert__
+    __le__ = gb.matrix.MatrixIndexExpr.__le__
+    __lt__ = gb.matrix.MatrixIndexExpr.__lt__
+    __mod__ = gb.matrix.MatrixIndexExpr.__mod__
+    __mul__ = gb.matrix.MatrixIndexExpr.__mul__
+    __ne__ = gb.matrix.MatrixIndexExpr.__ne__
+    __neg__ = gb.matrix.MatrixIndexExpr.__neg__
+    __pow__ = gb.matrix.MatrixIndexExpr.__pow__
+    __radd__ = gb.matrix.MatrixIndexExpr.__radd__
+    __rdivmod__ = gb.matrix.MatrixIndexExpr.__rdivmod__
+    __rfloordiv__ = gb.matrix.MatrixIndexExpr.__rfloordiv__
+    __rmod__ = gb.matrix.MatrixIndexExpr.__rmod__
+    __rmul__ = gb.matrix.MatrixIndexExpr.__rmul__
+    __rpow__ = gb.matrix.MatrixIndexExpr.__rpow__
+    __rsub__ = gb.matrix.MatrixIndexExpr.__rsub__
+    __rtruediv__ = gb.matrix.MatrixIndexExpr.__rtruediv__
+    __rxor__ = gb.matrix.MatrixIndexExpr.__rxor__
+    __sub__ = gb.matrix.MatrixIndexExpr.__sub__
+    __truediv__ = gb.matrix.MatrixIndexExpr.__truediv__
+    __xor__ = gb.matrix.MatrixIndexExpr.__xor__
+
+    # bad sugar:
+    __itruediv__ = gb.matrix.MatrixIndexExpr.__itruediv__
+    __imul__ = gb.matrix.MatrixIndexExpr.__imul__
+    __imatmul__ = gb.matrix.MatrixIndexExpr.__imatmul__
+    __iadd__ = gb.matrix.MatrixIndexExpr.__iadd__
+    __iand__ = gb.matrix.MatrixIndexExpr.__iand__
+    __ipow__ = gb.matrix.MatrixIndexExpr.__ipow__
+    __imod__ = gb.matrix.MatrixIndexExpr.__imod__
+    __isub__ = gb.matrix.MatrixIndexExpr.__isub__
+    __ixor__ = gb.matrix.MatrixIndexExpr.__ixor__
+    __ifloordiv__ = gb.matrix.MatrixIndexExpr.__ifloordiv__
+    __ior__ = gb.matrix.MatrixIndexExpr.__ior__
 
 
 def _chunk_diag_v2(inner_matrix, k):
@@ -1633,3 +1734,4 @@ def _concat_matrix(seq, axis=0):
 gb.utils._output_types[Matrix] = gb.Matrix
 gb.utils._output_types[TransposedMatrix] = gb.matrix.TransposedMatrix
 gb.utils._output_types[MatrixExpression] = gb.Matrix
+gb.utils._output_types[MatrixIndexExpr] = gb.Matrix

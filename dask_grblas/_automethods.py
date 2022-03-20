@@ -5,7 +5,7 @@ def _get_value(self, attr=None, default=None):
     if config.get("autocompute"):
         if self._value is None:
             self._value = self.new()
-            if getattr(self, 'is_dOnion', False):
+            if getattr(self, "is_dOnion", False):
                 self._value = self._value.strip()
         if attr is None:
             return self._value

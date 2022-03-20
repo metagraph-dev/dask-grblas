@@ -11,7 +11,7 @@ from grblas.exceptions import IndexOutOfBound, DimensionMismatch
 
 from . import _automethods
 from .base import BaseType, InnerBaseType, _nvals, DOnion, Box, any_dOnions
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
+from .expr import AmbiguousAssignOrExtract, IndexerResolver, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
 from .utils import (
@@ -367,6 +367,9 @@ class Vector(BaseType):
         else:
             return Vector(x, nvals=nvals)
 
+    def diag(self, k=0, dtype=None, chunks="auto"):
+        return self._diag(k=k, dtype=dtype, chunks=chunks)
+
     def _diag(self, k=0, dtype=None, chunks="auto"):
         nrows = self.size + abs(k)
         kdiag_col_start = max(0, k)
@@ -415,8 +418,15 @@ class Vector(BaseType):
         else:
             return self.resize(*self.shape, chunks=chunks, inplace=False)
 
-    def __getitem__(self, index):
-        return AmbiguousAssignOrExtract(self, index)
+    def __getitem__(self, keys):
+        resolved_indexes = IndexerResolver(self, keys)
+        shape = resolved_indexes.shape
+        if not shape:
+            from .scalar import ScalarIndexExpr
+
+            return ScalarIndexExpr(self, resolved_indexes)
+        else:
+            return VectorIndexExpr(self, resolved_indexes, *shape)
 
     def __delitem__(self, keys):
         del Updater(self)[keys]
@@ -439,13 +449,32 @@ class Vector(BaseType):
         return indices.flat
 
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
-        assert type(other) is Vector
+        gb_types = (gb.Vector,)
+        other = self._expect_type(other, (Vector,) + gb_types, within="ewise_add", argname="other")
 
-        meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
-        return VectorExpression(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
+        try:
+            meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                meta = self._meta.ewise_add(self._meta, op=op, require_monoid=require_monoid)
+            else:
+                raise
+
+        return VectorExpression(
+            self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta
+        )
 
     def ewise_mult(self, other, op=binary.times):
-        assert type(other) is Vector
+        gb_types = (gb.Vector,)
+        other = self._expect_type(other, (Vector,) + gb_types, within="ewise_mult", argname="other")
+
+        try:
+            meta = self._meta.ewise_mult(other._meta, op=op)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                meta = self._meta.ewise_add(self._meta, op=op)
+            else:
+                raise
 
         meta = self._meta.ewise_mult(other._meta, op=op)
         return VectorExpression(self, "ewise_mult", other, op, meta=meta)
@@ -536,9 +565,11 @@ class Vector(BaseType):
         meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
         return VectorExpression(self, "apply", op, right, meta=meta, left=left)
 
-    def reduce(self, op=monoid.plus):
+    def reduce(self, op=monoid.plus, *, allow_empty=True):
+        from .scalar import ScalarExpression
+
         meta = self._meta.reduce(op)
-        return ScalarExpression(self, "reduce", op, meta=meta)
+        return ScalarExpression(self, "reduce", op, meta=meta, allow_empty=allow_empty)
 
     def build(self, indices, values, *, size=None, chunks=None, dup_op=None, clear=False):
         if clear:
@@ -667,15 +698,11 @@ class Vector(BaseType):
         return indices, values
 
     def isequal(self, other, *, check_dtype=False):
-        other = self._expect_type(
-            other, (Vector, gb.Vector), within="isequal", argname="other"
-        )
+        other = self._expect_type(other, (Vector, gb.Vector), within="isequal", argname="other")
         return super().isequal(other, check_dtype=check_dtype)
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
-        other = self._expect_type(
-            other, (Vector, gb.Vector), within="isclose", argname="other"
-        )
+        other = self._expect_type(other, (Vector, gb.Vector), within="isclose", argname="other")
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
     def _delete_element(self, resolved_indexes):
@@ -797,6 +824,84 @@ class VectorExpression(GbDelayed):
     #         dtype = self.dtype
     #     size = 0 if self._size.is_dOnion else self._size
     #     return Vector.new(dtype, size, name=name)
+
+
+class VectorIndexExpr(AmbiguousAssignOrExtract):
+    __slots__ = "_size"
+    ndim = 1
+    output_type = gb.Vector
+
+    def __init__(self, parent, resolved_indexes, size):
+        super().__init__(parent, resolved_indexes)
+        self._size = size
+
+    @property
+    def size(self):
+        return self._size
+
+    @property
+    def shape(self):
+        return (self._size,)
+
+    # Begin auto-generated code: Vector
+    _get_value = _automethods._get_value
+    S = gb.vector.VectorIndexExpr.S
+    V = gb.vector.VectorIndexExpr.V
+    __and__ = gb.vector.VectorIndexExpr.__and__
+    __contains__ = gb.vector.VectorIndexExpr.__contains__
+    __or__ = gb.vector.VectorIndexExpr.__or__
+    apply = gb.vector.VectorIndexExpr.apply
+    ewise_add = gb.vector.VectorIndexExpr.ewise_add
+    ewise_mult = gb.vector.VectorIndexExpr.ewise_mult
+    isclose = gb.vector.VectorIndexExpr.isclose
+    isequal = gb.vector.VectorIndexExpr.isequal
+    nvals = gb.vector.VectorIndexExpr.nvals
+    reduce = gb.vector.VectorIndexExpr.reduce
+    vxm = gb.vector.VectorIndexExpr.vxm
+
+    # infix sugar:
+    __abs__ = gb.vector.VectorIndexExpr.__abs__
+    __add__ = gb.vector.VectorIndexExpr.__add__
+    __divmod__ = gb.vector.VectorIndexExpr.__divmod__
+    __eq__ = gb.vector.VectorIndexExpr.__eq__
+    __floordiv__ = gb.vector.VectorIndexExpr.__floordiv__
+    __ge__ = gb.vector.VectorIndexExpr.__ge__
+    __gt__ = gb.vector.VectorIndexExpr.__gt__
+    __invert__ = gb.vector.VectorIndexExpr.__invert__
+    __le__ = gb.vector.VectorIndexExpr.__le__
+    __lt__ = gb.vector.VectorIndexExpr.__lt__
+    __mod__ = gb.vector.VectorIndexExpr.__mod__
+    __mul__ = gb.vector.VectorIndexExpr.__mul__
+    __ne__ = gb.vector.VectorIndexExpr.__ne__
+    __neg__ = gb.vector.VectorIndexExpr.__neg__
+    __pow__ = gb.vector.VectorIndexExpr.__pow__
+    __radd__ = gb.vector.VectorIndexExpr.__radd__
+    __rdivmod__ = gb.vector.VectorIndexExpr.__rdivmod__
+    __rfloordiv__ = gb.vector.VectorIndexExpr.__rfloordiv__
+    __rmod__ = gb.vector.VectorIndexExpr.__rmod__
+    __rmul__ = gb.vector.VectorIndexExpr.__rmul__
+    __rpow__ = gb.vector.VectorIndexExpr.__rpow__
+    __rsub__ = gb.vector.VectorIndexExpr.__rsub__
+    __rtruediv__ = gb.vector.VectorIndexExpr.__rtruediv__
+    __rxor__ = gb.vector.VectorIndexExpr.__rxor__
+    __sub__ = gb.vector.VectorIndexExpr.__sub__
+    __truediv__ = gb.vector.VectorIndexExpr.__truediv__
+    __xor__ = gb.vector.VectorIndexExpr.__xor__
+
+    # bad sugar:
+    __array__ = gb.vector.VectorIndexExpr.__array__
+    __bool__ = gb.vector.VectorIndexExpr.__bool__
+    __iadd__ = gb.vector.VectorIndexExpr.__iadd__
+    __iand__ = gb.vector.VectorIndexExpr.__iand__
+    __ifloordiv__ = gb.vector.VectorIndexExpr.__ifloordiv__
+    __imatmul__ = gb.vector.VectorIndexExpr.__imatmul__
+    __imod__ = gb.vector.VectorIndexExpr.__imod__
+    __imul__ = gb.vector.VectorIndexExpr.__imul__
+    __ior__ = gb.vector.VectorIndexExpr.__ior__
+    __ipow__ = gb.vector.VectorIndexExpr.__ipow__
+    __isub__ = gb.vector.VectorIndexExpr.__isub__
+    __itruediv__ = gb.vector.VectorIndexExpr.__itruediv__
+    __ixor__ = gb.vector.VectorIndexExpr.__ixor__
 
 
 def _chunk_diag(
@@ -1037,4 +1142,5 @@ def _concat_vector(seq, axis=0):
 
 gb.utils._output_types[Vector] = gb.Vector
 gb.utils._output_types[VectorExpression] = gb.Vector
+gb.utils._output_types[VectorIndexExpr] = gb.Vector
 from .matrix import InnerMatrix  # noqa isort:skip

@@ -124,39 +124,94 @@ class GbDelayed:
 
         op = self.args[1]
         sum_meta = wrap_inner(meta)
-        if mask is None:
-            out = da.core.blockwise(
-                partial(_matmul2, op, meta.dtype, at, bt),
-                out_ind,
-                a,
-                lhs_ind,
-                b,
-                rhs_ind,
-                adjust_chunks={compress_axis: 1},
-                dtype=np.result_type(a, b),
-                concatenate=False,
-                meta=FakeInnerTensor(meta, compress_axis),
-            )
+        if op.is_positional:
+            _, (a, b) = da.core.unify_chunks(a, lhs_ind, b, rhs_ind)
+            x = build_chunk_ranges_dask_array(a, 0, "row-ranges-" + tokenize(a, 0))
+            a_ranges = (x, (lhs_ind[0],))
+            if a.ndim == 2:
+                x = build_chunk_ranges_dask_array(a, 1, "col-ranges-" + tokenize(a, 1))
+                a_ranges += (x, (lhs_ind[1],))
+
+            x = build_chunk_ranges_dask_array(b, 0, "row-ranges-" + tokenize(b, 0))
+            b_ranges = (x, (rhs_ind[0],))
+            if b.ndim == 2:
+                x = build_chunk_ranges_dask_array(b, 1, "col-ranges-" + tokenize(b, 1))
+                b_ranges += (x, (rhs_ind[1],))
+
+            if mask is None:
+                matmul_pos = partial(
+                    _matmul2_positional,
+                    op,
+                    meta.dtype,
+                    at,
+                    bt,
+                    a.shape,
+                    b.shape,
+                )
+                out = da.core.blockwise(
+                    *(matmul_pos, out_ind),
+                    *(a, lhs_ind),
+                    *(b, rhs_ind),
+                    *(a_ranges + b_ranges),
+                    adjust_chunks={compress_axis: 1},
+                    dtype=np.result_type(a, b),
+                    concatenate=False,
+                    meta=FakeInnerTensor(meta, compress_axis),
+                )
+            else:
+                m = mask.mask._delayed
+                grblas_mask_type = get_grblas_type(mask)
+                mask_ind = list(out_ind)
+                mask_ind.remove(compress_axis)
+                mask_ind = tuple(mask_ind)
+                out = da.core.blockwise(
+                    partial(_matmul2_masked, op, meta.dtype, at, bt, grblas_mask_type),
+                    out_ind,
+                    m,
+                    mask_ind,
+                    a,
+                    lhs_ind,
+                    b,
+                    rhs_ind,
+                    adjust_chunks={compress_axis: 1},
+                    dtype=np.result_type(a, b),
+                    concatenate=False,
+                    meta=FakeInnerTensor(meta, compress_axis),
+                )
         else:
-            m = mask.mask._delayed
-            grblas_mask_type = get_grblas_type(mask)
-            mask_ind = list(out_ind)
-            mask_ind.remove(compress_axis)
-            mask_ind = tuple(mask_ind)
-            out = da.core.blockwise(
-                partial(_matmul2_masked, op, meta.dtype, at, bt, grblas_mask_type),
-                out_ind,
-                m,
-                mask_ind,
-                a,
-                lhs_ind,
-                b,
-                rhs_ind,
-                adjust_chunks={compress_axis: 1},
-                dtype=np.result_type(a, b),
-                concatenate=False,
-                meta=FakeInnerTensor(meta, compress_axis),
-            )
+            if mask is None:
+                out = da.core.blockwise(
+                    partial(_matmul2, op, meta.dtype, at, bt),
+                    out_ind,
+                    a,
+                    lhs_ind,
+                    b,
+                    rhs_ind,
+                    adjust_chunks={compress_axis: 1},
+                    dtype=np.result_type(a, b),
+                    concatenate=False,
+                    meta=FakeInnerTensor(meta, compress_axis),
+                )
+            else:
+                m = mask.mask._delayed
+                grblas_mask_type = get_grblas_type(mask)
+                mask_ind = list(out_ind)
+                mask_ind.remove(compress_axis)
+                mask_ind = tuple(mask_ind)
+                out = da.core.blockwise(
+                    partial(_matmul2_masked, op, meta.dtype, at, bt, grblas_mask_type),
+                    out_ind,
+                    m,
+                    mask_ind,
+                    a,
+                    lhs_ind,
+                    b,
+                    rhs_ind,
+                    adjust_chunks={compress_axis: 1},
+                    dtype=np.result_type(a, b),
+                    concatenate=False,
+                    meta=FakeInnerTensor(meta, compress_axis),
+                )
 
         # out has an extra dimension (a slab or a bar), and now reduce along it
         out = sum_by_monoid(op.monoid, out, axis=compress_axis, meta=sum_meta)
@@ -179,26 +234,24 @@ class GbDelayed:
         return delayed
 
     def _reduce_scalar(self, dtype):
-        assert not self.kwargs
         op = self.args[0]
         at = self.parent._is_transposed
         delayed = self.parent._matrix._delayed if at else self.parent._delayed
         delayed = da.reduction(
             delayed,
-            partial(_reduce_scalar, op, dtype),
-            partial(_reduce_combine, op),
+            partial(_reduce_scalar, op, dtype, **self.kwargs),
+            partial(_reduce_combine, op, **self.kwargs),
             concatenate=False,
             dtype=np_dtype(dtype),
         )
         return delayed
 
     def _reduce(self, dtype):
-        assert not self.kwargs
         op = self.args[0]
         delayed = da.reduction(
             self.parent._delayed,
-            partial(_reduce, op, dtype),
-            partial(_reduce_combine, op),
+            partial(_reduce, op, dtype, **self.kwargs),
+            partial(_reduce_combine, op, **self.kwargs),
             concatenate=False,
             dtype=np_dtype(dtype),
         )
@@ -250,9 +303,10 @@ class GbDelayed:
             for j in range(a.shape[1]):
                 for M in range(b_.numblocks[0]):
                     for N in range(b_.numblocks[1]):
-                        
-                        dsk[(name, i*b_.numblocks[0] + M, j*b_.numblocks[1] + N)] = (
-                            lambda x: x, (frag.name, i, j, M, N)
+
+                        dsk[(name, i * b_.numblocks[0] + M, j * b_.numblocks[1] + N)] = (
+                            lambda x: x,
+                            (frag.name, i, j, M, N),
                         )
 
         graph = HighLevelGraph.from_collections(name, dsk, dependencies=[frag])
@@ -268,14 +322,18 @@ class GbDelayed:
                 gbd = getattr(p, m)(*args, **kwargs)
                 return gbd.new(dtype=dtype, mask=mask)
 
+            meta_args = list(getattr(v, "_meta", v) for v in self.args)
             meta_kwargs = {k: getattr(v, "_meta", v) for k, v in self.kwargs.items()}
             if self.method_name.startswith(("reduce", "apply")):
                 # unary operations
                 a = self.parent
                 op = self.args[0]
-                args = self.args[1:]
                 if self.method_name == "apply":
-                    # grblas does not like empty Scalars!
+                    # grblas `apply()` does not like empty Scalars!
+                    if len(meta_args) > 1 and type(meta_args[1]) is gb.Scalar:
+                        meta_args[1] = gb.Scalar.from_value(1, dtype=meta_args[1].dtype)
+                    if len(meta_args) > 2 and type(meta_args[2]) is gb.Scalar:
+                        meta_args[2] = gb.Scalar.from_value(1, dtype=meta_args[2].dtype)
                     if "left" in meta_kwargs and type(meta_kwargs["left"]) is gb.Scalar:
                         meta_kwargs["left"] = gb.Scalar.from_value(
                             1, dtype=meta_kwargs["left"].dtype
@@ -288,7 +346,9 @@ class GbDelayed:
                     # grblas bug occurs when shape is (0, 0)
                     if a._meta.shape == (0,) * a.ndim:
                         a._meta.resize(*((1,) * a.ndim))
-                meta = getattr(a._meta, self.method_name)(op, *args, **meta_kwargs).new(dtype=dtype)
+                meta = getattr(a._meta, self.method_name)(*meta_args, **meta_kwargs).new(
+                    dtype=dtype
+                )
                 meta.clear()
             else:
                 # binary operations
@@ -331,6 +391,7 @@ class GbDelayed:
             )
             return get_return_type(meta)(donion, meta=meta)
 
+        # no dOnions
         if mask is not None:
             meta = self._meta.new(dtype=dtype, mask=mask._meta)
             delayed_mask = mask.mask._delayed
@@ -339,6 +400,8 @@ class GbDelayed:
             meta = self._meta.new(dtype=dtype)
             delayed_mask = None
             grblas_mask_type = None
+
+        meta.clear()
 
         if self.method_name.startswith("reduce"):
             op = self._meta.op
@@ -362,25 +425,27 @@ class GbDelayed:
                 )
                 for key in self.kwargs
             }
-            pt = getattr(self.parent, '_is_transposed', False)
-            xts = [getattr(arg, '_is_transposed', False) for arg in self.args]
-            axes = 'ij' if self.parent.ndim == 2 else 'i'
+            pt = getattr(self.parent, "_is_transposed", False)
+            xts = [getattr(arg, "_is_transposed", False) for arg in self.args]
+            axes = "ij" if self.parent.ndim == 2 else "i"
             delayed = da.core.blockwise(
                 *(partial(_expr_new, pt, xts), axes),
                 *(self.method_name, None),
                 *(dtype, None),
                 *(grblas_mask_type, None),
                 *(
-                    (self.parent._matrix._delayed, axes[::-1]) if pt
+                    (self.parent._matrix._delayed, axes[::-1])
+                    if pt
                     else (self.parent._delayed, axes)
                 ),
-                *(delayed_mask, (None if mask is None else out_axes)),
+                *(delayed_mask, (None if mask is None else axes)),
                 *flatten(
                     (
-                        (x._matrix._delayed, axes[::-1]) if xt
+                        (x._matrix._delayed, axes[::-1])
+                        if xt
                         else (x._delayed, (None if x._is_scalar else axes))
                     )
-                    if isinstance(x, BaseType) or getattr(x, '_is_transposed', False)
+                    if isinstance(x, BaseType) or getattr(x, "_is_transposed", False)
                     else (x, None)
                     for x, xt in zip(self.args, xts)
                 ),
@@ -539,7 +604,16 @@ AxisIndex = namedtuple("AxisIndex", ["size", "index"])
 
 
 class IndexerResolver:
+    __slots__ = "obj", "indices", "is_dOnion", "shape"
+
     def __init__(self, obj, indices, check_shape=True):
+        index_is_dOnion = obj.ndim == 1 and is_DOnion(indices)
+        index_is_dOnion = index_is_dOnion or (
+            obj.ndim == 2 and _is_pair(indices) and (is_DOnion(indices[0]) or is_DOnion(indices[1]))
+        )
+        self.is_dOnion = index_is_dOnion
+        check_shape = not (index_is_dOnion or obj.is_dOnion)
+
         self.obj = obj
         if indices is Ellipsis:
             from .vector import Vector
@@ -547,6 +621,7 @@ class IndexerResolver:
             if type(obj) in {Vector, gb.Vector}:
                 normalized = slice(None).indices(obj._size)
                 self.indices = [AxisIndex(obj._size, slice(*normalized))]
+                self.shape = (obj._size,)
             else:
                 normalized0 = slice(None).indices(obj._nrows)
                 normalized1 = slice(None).indices(obj._ncols)
@@ -554,12 +629,14 @@ class IndexerResolver:
                     AxisIndex(obj._nrows, slice(*normalized0)),
                     AxisIndex(obj._ncols, slice(*normalized1)),
                 ]
+                self.shape = (obj._nrows, obj._ncols)
         else:
             if not check_shape and hasattr(obj, "_meta"):
                 shape = obj._meta.shape
             else:
                 shape = obj.shape
             self.indices = self.parse_indices(indices, shape, check_shape)
+            self.shape = tuple(index.size for index in self.indices if index.size is not None)
 
     @property
     def is_single_element(self):
@@ -702,10 +779,7 @@ class Updater:
     __eq__ = gb.expr.Updater.__eq__
 
     def __init__(self, parent, *, mask=None, accum=None, replace=False, input_mask=None):
-        if (
-            mask is not None
-            and input_mask is not None
-        ):
+        if mask is not None and input_mask is not None:
             raise TypeError("mask and input_mask arguments cannot both be given")
 
         _check_mask(mask, ignore_None=True)
@@ -759,7 +833,7 @@ class Updater:
     def update(self, delayed):
         # Occurs when user calls C(params) << delayed
         if self.input_mask is not None:
-            if type(delayed) is AmbiguousAssignOrExtract:
+            if isinstance(delayed, AmbiguousAssignOrExtract):
                 # w(input_mask) << v[index]
                 if self.parent is delayed.parent:
                     # replace `v` with a copy of itself if `w` is `v`
@@ -809,7 +883,7 @@ class Updater:
 def _csc_chunk(row_range, col_range, indices, red_columns, track_indices=False):
     """
     create chunk of Reduce_Assign Matrix in Compressed Sparse Column (CSC) format
-    
+
     (Used in `reduce_assign()`)
     """
     row_range = row_range[0]
@@ -1441,56 +1515,45 @@ def _adjust_meta_to_index(meta, index):
 
 
 class AmbiguousAssignOrExtract:
-    __bool__ = gb.expr.AmbiguousAssignOrExtract.__bool__
-    __eq__ = gb.expr.AmbiguousAssignOrExtract.__eq__
-    __float__ = gb.expr.AmbiguousAssignOrExtract.__float__
-    __int__ = gb.expr.AmbiguousAssignOrExtract.__int__
-    __index__ = gb.expr.AmbiguousAssignOrExtract.__index__
+    __slots__ = (
+        "has_dOnion",
+        "index",
+        "parent",
+        "resolved_indexes",
+        "_meta",
+        "_value",
+        "__weakref__",
+    )
+    _is_scalar = False
 
     def __init__(self, parent, index, meta=None):
         self.parent = parent
-        self.index = index
-        input_ndim = parent.ndim
-        index_is_dOnion = input_ndim == 1 and is_DOnion(index)
-        index_is_dOnion = index_is_dOnion or (
-            input_ndim == 2 and _is_pair(index) and (is_DOnion(index[0]) or is_DOnion(index[1]))
-        )
-        if parent.is_dOnion or index_is_dOnion:
+        self.resolved_indexes = index
+        self.index = _squeeze(tuple(i.index for i in index.indices))
+        self._value = None
+        if parent.is_dOnion or index.is_dOnion:
             self.has_dOnion = True
-            self.resolved_indexes = IndexerResolver(self.parent, index, check_shape=False)
-            self._meta = _adjust_meta_to_index(parent._meta, index)
+            self._meta = _adjust_meta_to_index(parent._meta, self.index)
         else:
             self.has_dOnion = False
-            self.resolved_indexes = IndexerResolver(parent, index)
-            self._meta = parent._meta[index] if meta is None else meta
-
-        # infix expression requirements:
-        shape = tuple(i.size for i in self.resolved_indexes.indices if i.size)
-        self.ndim = len(shape)
-        self.output_type = _get_grblas_type_with_ndims(self.ndim)
-        if self.ndim == 1:
-            self._size = shape[0]
-        elif self.ndim == 2:
-            self._nrows = shape[0]
-            self._ncols = shape[1]
+            self._meta = parent._meta[self.index] if meta is None else meta
 
     @staticmethod
     def _extract_single_element(x, xt, T, dxn, indices, meta, dtype):
-
         def getitem(inner, key, dtype):
             return wrap_inner(inner.value[key].new(dtype=dtype))
 
         name = "extract_single_element-" + tokenize(x, xt, indices)
-        
+
         block = ()
         element = ()
         for axis, i in enumerate(indices):
             stops_ = np.cumsum(x.chunks[T[axis]])
             starts = np.roll(stops_, 1)
             starts[0] = 0
-    
+
             blockid = np.arange(x.numblocks[T[axis]])
-    
+
             # locate chunk containing element:
             filter = (starts <= i) & (i < stops_)
             (R,) = blockid[filter]
@@ -1499,9 +1562,7 @@ class AmbiguousAssignOrExtract:
             element += (i - starts[R],)
 
         dsk = dict()
-        dsk[(name,)] = (
-            getitem, (x.name, *block[::dxn]), _squeeze(element[::dxn]), dtype
-        )
+        dsk[(name,)] = (getitem, (x.name, *block[::dxn]), _squeeze(element[::dxn]), dtype)
         graph = HighLevelGraph.from_collections(name, dsk, dependencies=[x])
         out = da.core.Array(graph, name, (), meta=wrap_inner(meta))
         return out
@@ -1514,9 +1575,7 @@ class AmbiguousAssignOrExtract:
 
             def _recall_getitem(parent, keys_0, keys_1, dtype, mask, input_mask):
                 keys = keys_0 if keys_1 is None else (keys_0, keys_1)
-                return AmbiguousAssignOrExtract(parent, keys).new(
-                    dtype=dtype, mask=mask, input_mask=input_mask
-                )
+                return parent[keys].new(dtype=dtype, mask=mask, input_mask=input_mask)
 
             meta = self._meta.new(dtype=dtype)
 
@@ -1740,10 +1799,16 @@ class AmbiguousAssignOrExtract:
         self.update(rhs)
 
     @property
+    def dtype(self):
+        return self.parent.dtype
+
+    @property
     def value(self):
-        self._meta.value
+        self._meta.new().value
         scalar = self.new()
         return scalar.value
+
+    dup = new
 
 
 def _uniquify(ndim, index, obj, mask=None, ot=False):
@@ -1817,7 +1882,7 @@ class Assigner:
         if not (
             isinstance(obj, Number)
             or isinstance(obj, BaseType)
-            or getattr(obj, '_is_transposed', False)
+            or getattr(obj, "_is_transposed", False)
         ):
             obj = self.parent._expect_type(
                 obj,
@@ -1836,7 +1901,7 @@ class Assigner:
                 updater = Updater(lhs, mask=mask, accum=accum, replace=replace)
                 Assigner(updater, keys, subassign=subassign).update(obj)
                 return lhs
-    
+
             lhs = self.parent
             lhs_copy = lhs.__class__(lhs._optional_dup(), meta=lhs._meta)
 
@@ -1863,7 +1928,7 @@ class Assigner:
             return
 
         # no dOnions
-        if getattr(obj, '_is_transposed', False):
+        if getattr(obj, "_is_transposed", False):
             obj_transposed = obj._is_transposed
             obj = obj._matrix
         else:
@@ -2149,9 +2214,7 @@ class FakeInnerTensor(InnerBaseType):
 
 def _expr_new(xt, ats, method_name, dtype, grblas_mask_type, x, mask, *args, **kwargs):
     # expr.new(...)
-    args = [
-        _transpose_if(y, yt) if isinstance(y, InnerBaseType) else y for y, yt in zip(args, ats)
-    ]
+    args = [_transpose_if(y, yt) if isinstance(y, InnerBaseType) else y for y, yt in zip(args, ats)]
     kwargs = {
         key: (kwargs[key].value if isinstance(kwargs[key], InnerBaseType) else kwargs[key])
         for key in kwargs
@@ -2218,32 +2281,34 @@ def _reduce_axis_combine(op, x, axis=None, keepdims=None, computing_meta=None, d
     return x
 
 
-def _reduce_scalar(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
+def _reduce_scalar(
+    op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None, **kwargs
+):
     """Call reduce_scalar on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
-    return wrap_inner(x.value.reduce_scalar(op).new(dtype=gb_dtype))
+    return wrap_inner(x.value.reduce_scalar(op, **kwargs).new(dtype=gb_dtype))
 
 
-def _reduce(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
+def _reduce(op, gb_dtype, x, axis=None, keepdims=None, computing_meta=None, dtype=None, **kwargs):
     """Call reduce on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
-    return wrap_inner(x.value.reduce(op).new(dtype=gb_dtype))
+    return wrap_inner(x.value.reduce(op, **kwargs).new(dtype=gb_dtype))
 
 
-def _reduce_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=None):
+def _reduce_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=None, **kwargs):
     """Combine results from reduce or reduce_scalar on each chunk"""
     if computing_meta:
         return np.empty(0, dtype=dtype)
     if type(x) is list:
         # do we need `gb_dtype` instead of `np_dtype` below?
         if type(x[0]) is list:
-            vals = [val.value.value for sublist in x for val in sublist]
+            vals = [val.value.value for sublist in x for val in sublist if val.value.value]
         else:
-            vals = [val.value.value for val in x]
+            vals = [val.value.value for val in x if val.value.value]
         values = gb.Vector.from_values(list(range(len(vals))), vals, size=len(vals), dtype=dtype)
-        return wrap_inner(values.reduce(op).new())
+        return wrap_inner(values.reduce(op, **kwargs).new())
     return x
 
 
@@ -2311,6 +2376,46 @@ def _matmul(op, at, bt, dtype, no_mask, mask_type, *args, computing_meta=None):
     gb_obj = reduce(lambda x, y: x.ewise_add(y, op.monoid).new(), vals)
 
     return wrap_inner(gb_obj)
+
+
+def _expand(inner, fullshape, *index_ranges):
+    a = inner
+    if a.ndim == 1:
+        (a_index_range,) = index_ranges
+        balloon = gb.Vector.new(a.value.dtype, *fullshape)
+        balloon[a_index_range.start : a_index_range.stop] << a.value
+    else:
+        (a_row_range, a_col_range) = index_ranges
+        balloon = gb.Matrix.new(a.value.dtype, *fullshape)
+        (
+            balloon[
+                a_row_range.start : a_row_range.stop,
+                a_col_range.start : a_col_range.stop,
+            ]
+            << a.value
+        )
+
+    return wrap_inner(balloon)
+
+
+def _matmul2_positional(
+    op, dtype, at, bt, a_fullshape, b_fullshape, a, b, *args, computing_meta=None
+):
+    a_ranges = (args[0][0],) if a.ndim == 1 else (args[0][0], args[1][0])
+    b_ranges = (args[a.ndim][0],) if b.ndim == 1 else (args[a.ndim][0], args[a.ndim + 1][0])
+
+    a_expanded = _expand(a, a_fullshape, *a_ranges)
+    b_expanded = _expand(b, b_fullshape, *b_ranges)
+
+    res = _matmul2(op, dtype, at, bt, a_expanded, b_expanded, computing_meta=computing_meta)
+
+    # shrink expanded result to original size:
+    indices = slice(a_ranges[0].start, a_ranges[0].stop)
+    if b.ndim == 2:
+        cols = slice(b_ranges[1].start, b_ranges[1].stop)
+        indices = cols if a.ndim == 1 else (indices, cols)
+
+    return res[indices].new()
 
 
 def _matmul2(op, dtype, at, bt, a, b, computing_meta=None):

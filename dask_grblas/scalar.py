@@ -74,6 +74,7 @@ class Scalar(BaseType):
             assert delayed.ndim == 0
         if meta is None:
             meta = gb.Scalar.new(delayed.dtype)
+            # meta = gb.Scalar.from_value(1, dtype=delayed.dtype)
         self._meta = meta
         self.dtype = meta.dtype
 
@@ -82,12 +83,11 @@ class Scalar(BaseType):
         if any_dOnions(self, expr):
             self_copy = self.__class__(self._optional_dup(), meta=self._meta)
             expr_ = expr
-            if typ is AmbiguousAssignOrExtract and expr.has_dOnion:
+            if isinstance(expr, AmbiguousAssignOrExtract) and expr.has_dOnion:
 
                 def update_by_aae(c, p, k_0, k_1):
                     keys = k_0 if k_1 is None else (k_0, k_1)
-                    aae = AmbiguousAssignOrExtract(p, keys)
-                    return c.update(aae, in_dOnion=True)
+                    return c.update(p[keys], in_dOnion=True)
 
                 if _is_pair(expr_.index):
                     keys_0, keys_1 = expr_.index[0], expr_.index[1]
@@ -134,7 +134,7 @@ class Scalar(BaseType):
 
         self._meta.update(get_meta(expr))
         self._meta.clear()
-        if typ is AmbiguousAssignOrExtract:
+        if isinstance(expr, AmbiguousAssignOrExtract):
             # Extract (s << v[index])
             expr_new = expr.new(dtype=self.dtype)
             self.value = expr_new.value
@@ -254,10 +254,25 @@ class Scalar(BaseType):
         if type(other) is Box:
             other = other.content
         if type(other) is not Scalar:
+            if other is None:
+                return self.is_empty
             self._meta.isequal(get_meta(other))
-            other = Scalar.from_value(other)
+            try:
+                other = Scalar.from_value(other)
+            except TypeError:
+                other = self._expect_type(
+                    other,
+                    (Scalar, gb.Scalar),
+                    within="isequal",
+                    argname="other",
+                    extra_message="Literal scalars also accepted.",
+                )
+            # Don't check dtype if we had to infer dtype of `other`
             check_dtype = False
-        return super().isequal(other, check_dtype=check_dtype)
+        if check_dtype and self.dtype != other.dtype:
+            return False
+        else:
+            return super().isequal(other, check_dtype=check_dtype)
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         if other is None:
@@ -271,7 +286,7 @@ class Scalar(BaseType):
     @property
     def is_empty(self):
         if self.is_dOnion:
-            donion = DOnion.multi_access(gb.Scalar.new(bool), getattr, self, 'is_empty')
+            donion = DOnion.multi_access(gb.Scalar.new(bool), getattr, self, "is_empty")
             return PythonScalar(donion)
 
         delayed = da.core.elemwise(
@@ -349,6 +364,7 @@ class ScalarExpression(GbDelayed):
     ndim = 0
     shape = ()
     _is_scalar = True
+    _is_cscalar = False
     __and__ = gb.scalar.ScalarExpression.__and__
     __bool__ = gb.scalar.ScalarExpression.__bool__
     __eq__ = gb.scalar.ScalarExpression.__eq__
@@ -363,6 +379,38 @@ class ScalarExpression(GbDelayed):
 
     # def __getattr__(self, item):
     #     return getattr(gb.scalar.ScalarExpression, item)
+
+
+class ScalarIndexExpr(AmbiguousAssignOrExtract):
+    output_type = gb.Scalar
+    ndim = 0
+    shape = ()
+    _is_scalar = True
+    _is_cscalar = False
+
+    dup = new
+
+    @property
+    def is_cscalar(self):
+        return self._is_cscalar
+
+    @property
+    def is_grbscalar(self):
+        return not self._is_cscalar
+
+    # Begin auto-generated code: Scalar
+    __and__ = gb.scalar.ScalarIndexExpr.__and__
+    __bool__ = gb.scalar.ScalarIndexExpr.__bool__
+    __eq__ = gb.scalar.ScalarIndexExpr.__eq__
+    __float__ = gb.scalar.ScalarIndexExpr.__float__
+    __index__ = gb.scalar.ScalarIndexExpr.__index__
+    __int__ = gb.scalar.ScalarIndexExpr.__int__
+    __or__ = gb.scalar.ScalarIndexExpr.__or__
+    _get_value = _automethods._get_value
+    isclose = gb.scalar.ScalarIndexExpr.isclose
+    isequal = gb.scalar.ScalarIndexExpr.isequal
+    value = gb.scalar.ScalarIndexExpr.value
+    # End auto-generated code: Scalar
 
 
 # Dask task functions
@@ -385,3 +433,4 @@ def _invert(x):
 gb.utils._output_types[Scalar] = gb.Scalar
 gb.utils._output_types[PythonScalar] = gb.Scalar
 gb.utils._output_types[ScalarExpression] = gb.Scalar
+gb.utils._output_types[ScalarIndexExpr] = gb.Scalar

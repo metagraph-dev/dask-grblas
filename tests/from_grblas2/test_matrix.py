@@ -112,8 +112,8 @@ def test_dup(As, A_chunks):
             assert C.ncols == A.ncols
             # Ensure they are not the same backend object
             A[0, 0] = 1000
-            assert A[0, 0].value == 1000
-            assert C[0, 0].value != 1000
+            assert A[0, 0].new() == 1000
+            assert C[0, 0].new() != 1000
 
     # extended functionality
     Ds = [Matrix.from_values([0, 1], [0, 1], [0, 2.5], dtype=dtypes.FP64)]
@@ -156,7 +156,7 @@ def test_from_values():
     assert C3.ncols == 3
     assert C3.nvals == 2  # duplicates were combined
     assert C3.dtype == int
-    assert C3[1, 1].value == 6  # 2*3
+    assert C3[1, 1].new() == 6  # 2*3
     C3monoid = Matrix.from_values([0, 1, 1], [2, 1, 1], [1, 2, 3], nrows=10, dup_op=monoid.times)
     assert C3.isequal(C3monoid)
 
@@ -217,7 +217,7 @@ def test_from_values_dask():
     assert C3.ncols == 3
     assert C3.nvals == 2  # duplicates were combined
     assert C3.dtype == int
-    assert C3[1, 1].value == 6  # 2*3
+    assert C3[1, 1].new() == 6  # 2*3
     C3monoid = Matrix.from_values(rows, cols, vals, nrows=10, dup_op=monoid.times)
     assert C3.isequal(C3monoid)
 
@@ -323,21 +323,21 @@ def test_resize(As, A_chunks):
             A.resize(10, 11)
             assert A.nrows == 10
             assert A.ncols == 11
-            assert A.nvals.compute() == 12
-            assert compute(A[9, 9].value) is None
+            assert A.nvals == 12
+            assert compute(A[9, 9].new().value) is None
             A.resize(4, 1)
             assert A.nrows == 4
             assert A.ncols == 1
-            assert A.nvals.compute() == 1
+            assert A.nvals == 1
 
             A = A_.dup()
             assert A.nrows == 7
             assert A.ncols == 7
-            assert A.nvals.compute() == 12
+            assert A.nvals == 12
             A.resize(6, 11, chunks=4)
             assert A.nrows == 6
             assert A.ncols == 11
-            assert A.nvals.compute() == 9
+            assert A.nvals == 9
             if not A.is_dOnion:
                 assert A._delayed.chunks == ((4, 2), (4, 4, 3))
             else:
@@ -345,14 +345,14 @@ def test_resize(As, A_chunks):
                     (4, 2),
                     (4, 4, 3),
                 )
-            assert compute(A[3, 2].value) == 3
-            assert compute(A[5, 7].value) is None
+            assert compute(A[3, 2].new().value) == 3
+            assert compute(A[5, 7].new().value) is None
 
             A = A_.dup()
             A.resize(11, 3, chunks=4)
             assert A.nrows == 11
             assert A.ncols == 3
-            assert A.nvals.compute() == 5
+            assert A.nvals == 5
             if type(A._delayed) is da.Array:
                 assert A._delayed.chunks == ((4, 4, 3), (3,))
             else:
@@ -360,8 +360,8 @@ def test_resize(As, A_chunks):
                     (4, 4, 3),
                     (3,),
                 )
-            assert compute(A[3, 2].value) == 3
-            assert compute(A[7, 2].value) is None
+            assert compute(A[3, 2].new().value) == 3
+            assert compute(A[7, 2].new().value) is None
 
 
 def test_rechunk(As, A_chunks):
@@ -489,8 +489,9 @@ def test_extract_element(As, A_chunks):
             A.rechunk(chunks=chunks, inplace=True)
             assert A[3, 0].new() == 3
             assert A[1, 6].new() == 4
-            assert A[1, 6].value == 4
-            assert A.T[6, 1].value == 4
+            with pytest.raises(TypeError, match="enable automatic"):
+                A[1, 6].value
+            assert A.T[6, 1].new() == 4
             s = A[0, 0].new()
             assert compute(s.value) is None
             assert s.dtype == "INT64"
@@ -504,11 +505,11 @@ def test_set_element(As, A_chunks):
         for chunks in A_chunks:
             A = A_.dup()
             A.rechunk(chunks=chunks, inplace=True)
-            assert compute(A[1, 1].value) is None
-            assert A[3, 0].value == 3
+            assert compute(A[1, 1].new().value) is None
+            assert A[3, 0].new() == 3
             A[1, 1].update(21)
             A[3, 0] << -5
-            assert A[1, 1].value == 21
+            assert A[1, 1].new() == 21
             assert A[3, 0].new() == -5
 
 
@@ -517,10 +518,10 @@ def test_remove_element(As, A_chunks):
         for chunks in A_chunks:
             A = A_.dup()
             A.rechunk(chunks=chunks, inplace=True)
-            assert A[3, 0].value == 3
+            assert A[3, 0].new() == 3
             del A[3, 0]
-            assert compute(A[3, 0].value) is None
-            assert A[6, 3].value == 7
+            assert compute(A[3, 0].new().value) is None
+            assert A[6, 3].new() == 7
             with pytest.raises(TypeError, match="Remove Element only supports"):
                 del A[3:5, 3]
 
@@ -566,7 +567,7 @@ def test_mxm_nonsquare():
     B = Matrix.from_values([0, 2, 4], [0, 0, 0], [10, 20, 30], nrows=5, ncols=1)
     C = Matrix.new(A.dtype, nrows=1, ncols=1)
     C << A.mxm(B, semiring.max_plus)
-    assert C[0, 0].value == 33
+    assert C[0, 0].new() == 33
     C1 = A.mxm(B, semiring.max_plus).new()
     assert C1.isequal(C)
     C2 = A.T.mxm(B.T, semiring.max_plus).new()
@@ -583,7 +584,7 @@ def test_mxm_nonsquare():
     B = Matrix.from_values([0, 2, 4], [0, 0, 0], [10, 20, 30], nrows=5, ncols=1)
     C = Matrix.new(A.dtype, nrows=1, ncols=1)
     C << A.mxm(B, semiring.max_plus)
-    assert C[0, 0].value == 33
+    assert C[0, 0].new() == 33
     C1 = A.mxm(B, semiring.max_plus).new()
     assert C1.isequal(C)
     C2 = A.T.mxm(B.T, semiring.max_plus).new()
@@ -1791,60 +1792,59 @@ def test_reduce_agg(As, A_chunks):
             assert s3.isclose(s1.value.compute() * s2.value.compute())
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_reduce_agg_argminmax(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        # reduce_rowwise
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [1, 6, 5, 0, 5, 2, 4])
-        w1b = A.reduce_rowwise(agg.argmin).new()
-        assert w1b.isequal(expected)
-        w1c = A.T.reduce_columnwise(agg.argmin).new()
-        assert w1c.isequal(expected)
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 4, 5, 0, 5, 2, 3])
-        w2b = A.reduce_rowwise(agg.argmax).new()
-        assert w2b.isequal(expected)
-        w2c = A.T.reduce_columnwise(agg.argmax).new()
-        assert w2c.isequal(expected)
+def test_reduce_agg_argminmax(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            # reduce_rowwise
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [1, 6, 5, 0, 5, 2, 4])
+            w1b = A.reduce_rowwise(agg.argmin).new()
+            assert w1b.isequal(expected)
+            w1c = A.T.reduce_columnwise(agg.argmin).new()
+            assert w1c.isequal(expected)
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 4, 5, 0, 5, 2, 3])
+            w2b = A.reduce_rowwise(agg.argmax).new()
+            assert w2b.isequal(expected)
+            w2c = A.T.reduce_columnwise(agg.argmax).new()
+            assert w2c.isequal(expected)
 
-        # reduce_cols
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 5, 0, 6, 2, 1])
-        w7b = A.reduce_columnwise(agg.argmin).new()
-        assert w7b.isequal(expected)
-        w7c = A.T.reduce_rowwise(agg.argmin).new()
-        assert w7c.isequal(expected)
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 6, 6, 1, 4, 1])
-        w8b = A.reduce_columnwise(agg.argmax).new()
-        assert w8b.isequal(expected)
-        w8c = A.T.reduce_rowwise(agg.argmax).new()
-        assert w8c.isequal(expected)
+            # reduce_cols
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 5, 0, 6, 2, 1])
+            w7b = A.reduce_columnwise(agg.argmin).new()
+            assert w7b.isequal(expected)
+            w7c = A.T.reduce_rowwise(agg.argmin).new()
+            assert w7c.isequal(expected)
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 6, 6, 1, 4, 1])
+            w8b = A.reduce_columnwise(agg.argmax).new()
+            assert w8b.isequal(expected)
+            w8c = A.T.reduce_rowwise(agg.argmax).new()
+            assert w8c.isequal(expected)
 
-        # reduce_scalar
-        with pytest.raises(
-            ValueError, match="Aggregator argmin may not be used with Matrix.reduce_scalar"
-        ):
-            A.reduce_scalar(agg.argmin)
+            # reduce_scalar
+            with pytest.raises(
+                ValueError, match="Aggregator argmin may not be used with Matrix.reduce_scalar"
+            ):
+                A.reduce_scalar(agg.argmin)
 
-        silly = agg.Aggregator(
-            "silly",
-            composite=[agg.argmin, agg.argmax],
-            finalize=lambda x, y: binary.plus(x & y),
-            types=[agg.argmin],
-        )
-        v1 = A.reduce_rowwise(agg.argmin).new()
-        v2 = A.reduce_rowwise(agg.argmax).new()
-        v3 = A.reduce_rowwise(silly).new()
-        assert v3.isequal(binary.plus(v1 & v2).new())
+            silly = agg.Aggregator(
+                "silly",
+                composite=[agg.argmin, agg.argmax],
+                finalize=lambda x, y: binary.plus(x & y),
+                types=[agg.argmin],
+            )
+            v1 = A.reduce_rowwise(agg.argmin).new()
+            v2 = A.reduce_rowwise(agg.argmax).new()
+            v3 = A.reduce_rowwise(silly).new()
+            assert v3.isequal(binary.plus(v1 & v2).new())
 
-        v1 = A.reduce_columnwise(agg.argmin).new()
-        v2 = A.reduce_columnwise(agg.argmax).new()
-        v3 = A.reduce_columnwise(silly).new()
-        assert v3.isequal(binary.plus(v1 & v2).new())
+            v1 = A.reduce_columnwise(agg.argmin).new()
+            v2 = A.reduce_columnwise(agg.argmax).new()
+            v3 = A.reduce_columnwise(silly).new()
+            assert v3.isequal(binary.plus(v1 & v2).new())
 
-        with pytest.raises(ValueError, match="Aggregator"):
-            A.reduce_scalar(silly).new()
+            with pytest.raises(ValueError, match="Aggregator"):
+                A.reduce_scalar(silly).new()
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)
@@ -2059,7 +2059,6 @@ def test_transpose(As, A_chunks):
             assert C3.isequal(result)
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
 def test_kronecker():
     # A  0 1     B  0 1 2
     # 0 [1 -]    0 [- 2 3]
@@ -2070,15 +2069,29 @@ def test_kronecker():
     # 1 [8  -  4  -  -  - ]
     # 2 [-  4  6  -  6  9 ]
     # 3 [16 -  8  24 -  12]
-    A = Matrix.from_values([0, 1, 1], [0, 0, 1], [1, 2, 3])
-    B = Matrix.from_values([0, 0, 1, 1], [1, 2, 0, 2], [2, 3, 8, 4])
+    A0 = Matrix.from_values([0, 1, 1], [0, 0, 1], [1, 2, 3])
+    A1 = Matrix.from_values(
+        da.from_array([0, 1, 1]),
+        da.from_array([0, 0, 1]),
+        da.from_array([1, 2, 3]),
+    )
+    As = [A0, A1]
+    B0 = Matrix.from_values([0, 0, 1, 1], [1, 2, 0, 2], [2, 3, 8, 4])
+    B1 = Matrix.from_values(
+        da.from_array([0, 0, 1, 1]),
+        da.from_array([1, 2, 0, 2]),
+        da.from_array([2, 3, 8, 4]),
+    )
+    Bs = [B0, B1]
     result = Matrix.from_values(
         [0, 0, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3],
         [1, 2, 0, 2, 1, 2, 4, 5, 0, 2, 3, 5],
         [2, 3, 8, 4, 4, 6, 6, 9, 16, 8, 24, 12],
     )
-    C = A.kronecker(B, binary.times).new()
-    assert C.isequal(result)
+    for A in As:
+        for B in Bs:
+            C = A.kronecker(B, binary.times).new()
+            assert C.isequal(result)
 
 
 def test_simple_assignment(As, A_chunks):
@@ -2105,7 +2118,7 @@ def test_assign_transpose(As, A_chunks):
                 C.T << A
             with pytest.raises(TypeError, match="does not support item assignment"):
                 C.T[:, :] << A
-            with pytest.raises(AttributeError):
+            with pytest.raises(TypeError, match="autocompute"):
                 C[:, :].T << A
 
             nrows, ncols = A.nrows, A.ncols
@@ -2938,15 +2951,15 @@ def test_bool_eq_on_scalar_expressions(As, A_chunks):
             assert range(expr) == range(2)
 
             expr = A[0, [1, 1]]
-            with pytest.raises(TypeError, match="not defined"):
-                expr == expr
+            # with pytest.raises(TypeError, match="not defined"):
+            expr == expr  # Now okay
             with pytest.raises(TypeError, match="not defined"):
                 bool(expr)
-            with pytest.raises(TypeError, match="not defined"):
+            with pytest.raises(TypeError):
                 int(expr)
-            with pytest.raises(TypeError, match="not defined"):
+            with pytest.raises(TypeError):
                 float(expr)
-            with pytest.raises(TypeError, match="not defined"):
+            with pytest.raises(TypeError):
                 range(expr)
 
 
@@ -2971,10 +2984,10 @@ def test_contains(As, A_chunks):
             A.rechunk(chunks=chunks, inplace=True)
             assert (0, 1) in A
             assert (1, 0) in A.T
-    
+
             assert (0, 1) not in A.T
             assert (1, 0) not in A
-    
+
             with pytest.raises(TypeError):
                 1 in A
             with pytest.raises(TypeError):
@@ -3245,7 +3258,7 @@ def test_auto(As, A_chunks, v):
                     # "__matmul__",
                     "__and__",
                     "__or__",
-                    # "kronecker",
+                    "kronecker",
                 ]:
                     val1 = getattr(expected, method)(expected).new()
                     val2 = getattr(expected, method)(expr)
@@ -3259,7 +3272,7 @@ def test_auto(As, A_chunks, v):
                     s2 = getattr(expr, method)(monoid.lor)
                     assert s1.isequal(s2.new())
                     assert s1.isequal(s2)
-    
+
             expected = binary.times(A & A).new()
             for expr in [binary.times(A & A)]:
                 assert expr.dtype == expected.dtype
@@ -3294,7 +3307,7 @@ def test_auto(As, A_chunks, v):
                     s2 = getattr(expr, method)()
                     assert s1.isequal(s2.new())
                     assert s1.isequal(s2)
-    
+
             expected = semiring.plus_times(A @ v).new()
             for expr in [(A @ v), (v @ A.T), semiring.plus_times(A @ v)]:
                 assert expr.vxm(A).isequal(expected.vxm(A))
@@ -3314,14 +3327,14 @@ def test_auto_assign(As, A_chunks):
             expected[:3, :3] = expr.new()
             A[:3, :3] = expr
             assert expected.isequal(A)
-            with pytest.raises(TypeError):
-                # Not yet supported, but we could!
-                A[:3, :3] = A[1:4, 1:4]
             v = A[2:5, 5].new(dtype=bool)
             expr = v & v
             A[:3, 4] << expr
             expected[:3, 4] << expr.new()
             assert expected.isequal(A)
+            C = A[1:4, 1:4].new()
+            A[:3, :3] = A[1:4, 1:4]
+            assert A[:3, :3].isequal(C)
 
 
 @autocompute
@@ -3505,12 +3518,12 @@ def test_infix_sugar(As, A_chunks):
             assert binary.numpy.mod(-3, A).isequal(y)
             # assert binary.fmod(-3, A).isequal(y)  # The reason we use numpy.mod
             assert binary.plus(binary.times(A & x) & y).isequal(-3 * unary.one(A))
-    
+
             assert binary.eq(A & A).isequal(A == A)
             assert binary.ne(A.T & A.T).isequal(A.T != A.T)
             assert binary.lt(A & A.T).isequal(A < A.T)
             assert binary.ge(A.T & A).isequal(A.T >= A)
-    
+
             B = A.dup()
             B += 1
             assert type(B) is Matrix
@@ -3547,7 +3560,7 @@ def test_infix_sugar(As, A_chunks):
             B ^= B
             assert type(B) is Matrix
             assert not B.reduce_scalar(agg.any).new()
-    
+
             expr = binary.plus(A & A)
             assert unary.abs(expr).isequal(abs(expr))
             assert unary.ainv(expr).isequal(-expr)
