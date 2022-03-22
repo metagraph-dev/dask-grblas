@@ -2409,10 +2409,19 @@ def _matmul2_positional(
 
     res = _matmul2(op, dtype, at, bt, a_expanded, b_expanded, computing_meta=computing_meta)
 
+    if a.ndim == 1 and b.ndim == 1:
+        return res
+
     # shrink expanded result to original size:
-    indices = slice(a_ranges[0].start, a_ranges[0].stop)
+    indices = (
+        slice(a_ranges[1].start, a_ranges[1].stop) if at
+        else slice(a_ranges[0].start, a_ranges[0].stop)
+    )
     if b.ndim == 2:
-        cols = slice(b_ranges[1].start, b_ranges[1].stop)
+        cols = (
+            slice(b_ranges[0].start, b_ranges[0].stop) if bt
+            else slice(b_ranges[1].start, b_ranges[1].stop)
+        )
         indices = cols if a.ndim == 1 else (indices, cols)
 
     return res[indices].new()
