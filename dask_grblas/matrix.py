@@ -576,7 +576,17 @@ class Matrix(BaseType):
         # else:
         #     return self.resize(*self.shape, chunks=chunks, inplace=False)
 
+    def diag(self, k=0, dtype=None, chunks="auto"):
+        return self._diag(k=k, dtype=dtype, chunks=chunks)
+
     def _diag(self, k=0, dtype=None, chunks="auto"):
+        if self.is_dOnion:
+            meta = self._meta.diag(k=k, dtype=dtype)
+            donion = DOnion.multi_access(
+                meta, self.__class__._diag, self, k=k, dtype=dtype, chunks=chunks
+            )
+            return get_return_type(meta)(donion, meta=meta)
+
         kdiag_row_start = max(0, -k)
         kdiag_col_start = max(0, k)
         kdiag_row_stop = min(self.nrows, self.ncols - k)

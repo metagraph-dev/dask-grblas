@@ -1847,118 +1847,115 @@ def test_reduce_agg_argminmax(As, A_chunks):
                 A.reduce_scalar(silly).new()
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_reduce_agg_firstlast(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        # reduce_rowwise
-        w1 = A.reduce_rowwise(agg.first).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [2, 8, 1, 3, 7, 1, 5])
-        assert w1.isequal(expected)
-        w1b = A.T.reduce_columnwise(agg.first).new()
-        assert w1b.isequal(expected)
-        w2 = A.reduce_rowwise(agg.last).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 4, 1, 3, 7, 1, 3])
-        assert w2.isequal(expected)
-        w2b = A.T.reduce_columnwise(agg.last).new()
-        assert w2b.isequal(expected)
+def test_reduce_agg_firstlast(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            # reduce_rowwise
+            w1 = A.reduce_rowwise(agg.first).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [2, 8, 1, 3, 7, 1, 5])
+            assert w1.isequal(expected)
+            w1b = A.T.reduce_columnwise(agg.first).new()
+            assert w1b.isequal(expected)
+            w2 = A.reduce_rowwise(agg.last).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 4, 1, 3, 7, 1, 3])
+            assert w2.isequal(expected)
+            w2b = A.T.reduce_columnwise(agg.last).new()
+            assert w2b.isequal(expected)
 
-        # reduce_columnwise
-        w3 = A.reduce_columnwise(agg.first).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 3, 3, 8, 1, 4])
-        assert w3.isequal(expected)
-        w3b = A.T.reduce_rowwise(agg.first).new()
-        assert w3b.isequal(expected)
-        w4 = A.reduce_columnwise(agg.last).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 5, 7, 3, 7, 4])
-        assert w4.isequal(expected)
-        w4b = A.T.reduce_rowwise(agg.last).new()
-        assert w4b.isequal(expected)
+            # reduce_columnwise
+            w3 = A.reduce_columnwise(agg.first).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 3, 3, 8, 1, 4])
+            assert w3.isequal(expected)
+            w3b = A.T.reduce_rowwise(agg.first).new()
+            assert w3b.isequal(expected)
+            w4 = A.reduce_columnwise(agg.last).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 2, 5, 7, 3, 7, 4])
+            assert w4.isequal(expected)
+            w4b = A.T.reduce_rowwise(agg.last).new()
+            assert w4b.isequal(expected)
 
-        # reduce_scalar
-        w5 = A.reduce_scalar(agg.first).new()
-        assert w5 == 2
-        w6 = A.reduce_scalar(agg.last).new()
-        assert w6 == 3
-        B = Matrix.new(float, nrows=2, ncols=3)
-        assert B.reduce_scalar(agg.first).new().is_empty
-        assert B.reduce_scalar(agg.last).new().is_empty
-        w7 = B.reduce_rowwise(agg.first).new()
-        assert w7.isequal(Vector.new(float, size=B.nrows))
-        w8 = B.reduce_columnwise(agg.last).new()
-        assert w8.isequal(Vector.new(float, size=B.ncols))
+            # reduce_scalar
+            w5 = A.reduce_scalar(agg.first).new()
+            assert w5 == 2
+            w6 = A.reduce_scalar(agg.last).new()
+            assert w6 == 3
+            B = Matrix.new(float, nrows=2, ncols=3)
+            assert B.reduce_scalar(agg.first).new().is_empty
+            assert B.reduce_scalar(agg.last).new().is_empty
+            w7 = B.reduce_rowwise(agg.first).new()
+            assert w7.isequal(Vector.new(float, size=B.nrows))
+            w8 = B.reduce_columnwise(agg.last).new()
+            assert w8.isequal(Vector.new(float, size=B.ncols))
 
-        silly = agg.Aggregator(
-            "silly",
-            composite=[agg.first, agg.last],
-            finalize=lambda x, y: binary.plus(x & y),
-            types=[agg.first],
-        )
-        v1 = A.reduce_rowwise(agg.first).new()
-        v2 = A.reduce_rowwise(agg.last).new()
-        v3 = A.reduce_rowwise(silly).new()
-        assert v3.isequal(binary.plus(v1 & v2).new())
+            silly = agg.Aggregator(
+                "silly",
+                composite=[agg.first, agg.last],
+                finalize=lambda x, y: binary.plus(x & y),
+                types=[agg.first],
+            )
+            v1 = A.reduce_rowwise(agg.first).new()
+            v2 = A.reduce_rowwise(agg.last).new()
+            v3 = A.reduce_rowwise(silly).new()
+            assert v3.isequal(binary.plus(v1 & v2).new())
 
-        s1 = A.reduce_scalar(agg.first).new()
-        s2 = A.reduce_scalar(agg.last).new()
-        s3 = A.reduce_scalar(silly).new()
-        assert s3.isequal(s1.value.compute() + s2.value.compute())
-
-
-@pytest.mark.xfail("'Needs investigation'", strict=True)
-def test_reduce_agg_firstlast_index(A, A_chunks):
-    A_ = A
-    for chunks in A_chunks:
-        A = A_.dup()
-        A.rechunk(chunks=chunks, inplace=True)
-        # reduce_rowwise
-        w1 = A.reduce_rowwise(agg.first_index).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [1, 4, 5, 0, 5, 2, 2])
-        assert w1.isequal(expected)
-        w1b = A.T.reduce_columnwise(agg.first_index).new()
-        assert w1b.isequal(expected)
-        w2 = A.reduce_rowwise(agg.last_index).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 6, 5, 2, 5, 2, 4])
-        assert w2.isequal(expected)
-        w2b = A.T.reduce_columnwise(agg.last_index).new()
-        assert w2b.isequal(expected)
-
-        # reduce_columnwise
-        w3 = A.reduce_columnwise(agg.first_index).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 3, 0, 1, 2, 1])
-        assert w3.isequal(expected)
-        w3b = A.T.reduce_rowwise(agg.first_index).new()
-        assert w3b.isequal(expected)
-        w4 = A.reduce_columnwise(agg.last_index).new()
-        expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 6, 6, 6, 4, 1])
-        assert w4.isequal(expected)
-        w4b = A.T.reduce_rowwise(agg.last_index).new()
-        assert w4b.isequal(expected)
-
-        # reduce_scalar
-        with pytest.raises(ValueError, match="Aggregator first_index may not"):
-            A.reduce_scalar(agg.first_index).new()
-        with pytest.raises(ValueError, match="Aggregator last_index may not"):
-            A.reduce_scalar(agg.last_index).new()
-
-        silly = agg.Aggregator(
-            "silly",
-            composite=[agg.first_index, agg.last_index],
-            finalize=lambda x, y: binary.plus(x & y),
-            types=[agg.first_index],
-        )
-        v1 = A.reduce_rowwise(agg.first_index).new()
-        v2 = A.reduce_rowwise(agg.last_index).new()
-        v3 = A.reduce_rowwise(silly).new()
-        assert v3.isequal(binary.plus(v1 & v2).new())
-
-        with pytest.raises(ValueError, match="Aggregator"):
-            A.reduce_scalar(silly).new()
+            s1 = A.reduce_scalar(agg.first).new()
+            s2 = A.reduce_scalar(agg.last).new()
+            s3 = A.reduce_scalar(silly).new()
+            assert s3.isequal(s1.value.compute() + s2.value.compute())
 
 
-@pytest.mark.xfail("'Needs investigation'", strict=True)
+def test_reduce_agg_firstlast_index(As, A_chunks):
+    for A_ in As:
+        for chunks in A_chunks:
+            A = A_.dup()
+            A.rechunk(chunks=chunks, inplace=True)
+            # reduce_rowwise
+            w1 = A.reduce_rowwise(agg.first_index).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [1, 4, 5, 0, 5, 2, 2])
+            assert w1.isequal(expected)
+            w1b = A.T.reduce_columnwise(agg.first_index).new()
+            assert w1b.isequal(expected)
+            w2 = A.reduce_rowwise(agg.last_index).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 6, 5, 2, 5, 2, 4])
+            assert w2.isequal(expected)
+            w2b = A.T.reduce_columnwise(agg.last_index).new()
+            assert w2b.isequal(expected)
+
+            # reduce_columnwise
+            w3 = A.reduce_columnwise(agg.first_index).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 3, 0, 1, 2, 1])
+            assert w3.isequal(expected)
+            w3b = A.T.reduce_rowwise(agg.first_index).new()
+            assert w3b.isequal(expected)
+            w4 = A.reduce_columnwise(agg.last_index).new()
+            expected = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [3, 0, 6, 6, 6, 4, 1])
+            assert w4.isequal(expected)
+            w4b = A.T.reduce_rowwise(agg.last_index).new()
+            assert w4b.isequal(expected)
+
+            # reduce_scalar
+            with pytest.raises(ValueError, match="Aggregator first_index may not"):
+                A.reduce_scalar(agg.first_index).new()
+            with pytest.raises(ValueError, match="Aggregator last_index may not"):
+                A.reduce_scalar(agg.last_index).new()
+
+            silly = agg.Aggregator(
+                "silly",
+                composite=[agg.first_index, agg.last_index],
+                finalize=lambda x, y: binary.plus(x & y),
+                types=[agg.first_index],
+            )
+            v1 = A.reduce_rowwise(agg.first_index).new()
+            v2 = A.reduce_rowwise(agg.last_index).new()
+            v3 = A.reduce_rowwise(silly).new()
+            assert v3.isequal(binary.plus(v1 & v2).new())
+
+            with pytest.raises(ValueError, match="Aggregator"):
+                A.reduce_scalar(silly).new()
+
+
 def test_reduce_agg_empty(A_chunks):
     A = Matrix.new("UINT8", nrows=3, ncols=4)
     A_ = A

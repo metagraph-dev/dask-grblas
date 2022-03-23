@@ -392,12 +392,11 @@ class GbDelayed:
             return get_return_type(meta)(donion, meta=meta)
 
         # no dOnions
+        meta = self._meta.new(dtype=dtype)
         if mask is not None:
-            meta = self._meta.new(dtype=dtype, mask=mask._meta)
             delayed_mask = mask.mask._delayed
             grblas_mask_type = get_grblas_type(mask)
         else:
-            meta = self._meta.new(dtype=dtype)
             delayed_mask = None
             grblas_mask_type = None
 
@@ -683,8 +682,20 @@ class IndexerResolver:
                     if check_shape:
                         raise IndexError(f"Index out of range: index={index - size}, size={size}")
             return AxisIndex(None, IndexerResolver.normalize_index(index, size, check_shape))
+
+        def compute_scalar(index):
+            from .scalar import Scalar, PythonScalar
+
+            if type(index) is Scalar:
+                return index.value.compute()
+            if type(index) is PythonScalar:
+                return index.compute()
+            return index
+
         if typ is list:
-            index = [IndexerResolver.normalize_index(i, size, check_shape) for i in index]
+            index = [
+                IndexerResolver.normalize_index(compute_scalar(i), size, check_shape) for i in index
+            ]
             return AxisIndex(len(index), index)
         elif typ is slice:
             if check_shape:
@@ -704,12 +715,12 @@ class IndexerResolver:
             return AxisIndex(0, index)
 
         else:
-            from .scalar import Scalar
+            from .scalar import Scalar, PythonScalar
 
-            if typ is Scalar:
+            if typ in {Scalar, PythonScalar}:
                 if index.dtype.name.startswith("F"):
                     raise TypeError(f"An integer is required for indexing.  Got: {index.dtype}")
-                index = index.value.compute()
+                index = index.value.compute() if typ is Scalar else index.compute()
                 return AxisIndex(None, IndexerResolver.normalize_index(index, size))
 
             from .matrix import Matrix, TransposedMatrix
@@ -2414,12 +2425,14 @@ def _matmul2_positional(
 
     # shrink expanded result to original size:
     indices = (
-        slice(a_ranges[1].start, a_ranges[1].stop) if at
+        slice(a_ranges[1].start, a_ranges[1].stop)
+        if at
         else slice(a_ranges[0].start, a_ranges[0].stop)
     )
     if b.ndim == 2:
         cols = (
-            slice(b_ranges[0].start, b_ranges[0].stop) if bt
+            slice(b_ranges[0].start, b_ranges[0].stop)
+            if bt
             else slice(b_ranges[1].start, b_ranges[1].stop)
         )
         indices = cols if a.ndim == 1 else (indices, cols)
