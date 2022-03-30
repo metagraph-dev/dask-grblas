@@ -3,7 +3,10 @@ import numpy as np
 import grblas as gb
 
 from numbers import Integral
+from tlz import compose
+
 from dask.base import tokenize
+from dask.highlevelgraph import HighLevelGraph
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
@@ -11,6 +14,7 @@ from grblas.exceptions import IndexOutOfBound, DimensionMismatch
 
 from . import _automethods
 from .base import BaseType, InnerBaseType, _nvals, DOnion, Box, any_dOnions
+from .base import _dup as chunk_dup
 from .expr import AmbiguousAssignOrExtract, IndexerResolver, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
@@ -331,7 +335,94 @@ class Vector(BaseType):
             return (self.size,)
         return self._meta.shape
 
+    def _head(self, delayed, shape):
+        """
+        Take the leading portion of shape `shape` from `delayed`
+        """
+        def _slice(inner, slc_x):
+            return InnerVector(inner.value[slc_x].new())
+
+        x = delayed
+
+        stops_ = np.cumsum(x.chunks[0])
+        starts = np.roll(stops_, 1)
+        starts[0] = 0
+
+        M = x.numblocks[0]
+        blockid = np.arange(M)
+
+        # locate chunk containing last element:
+        i = min(self.shape[0], shape[0]) - 1
+        filter = (starts <= i) & (i < stops_)
+        (last_block,) = blockid[filter]
+        tail_sz = i - starts[last_block] + 1
+
+        numblocks = (last_block + 1,)
+        heads = (tail_sz,)
+        new_chunks = (x.chunks[0][:last_block] + (tail_sz,),)
+
+        name = "Vector.resize-" + tokenize(x)
+        dtype = self.dtype
+        dsk = dict()
+        for i in range(numblocks[0]):
+            x_cut = (i == numblocks[0] - 1)
+            if x_cut:
+                dsk[(name, i)] = (
+                    _slice,
+                    (x.name, i),
+                    slice(heads[0]) if x_cut else slice(None),
+                )
+            else:
+                dsk[(name, i)] = (chunk_dup, (x.name, i), None, dtype, None)
+
+        return name, dsk, new_chunks, numblocks
+
+    def _add_tail(self, axis, size, name, dsk, chunks, numblocks):
+        """
+        Append dask graph `dsk` with empty chunks on axis `axis` up to size `size`
+        """
+        rem = size - self.shape[axis]
+        if rem > 0:
+            j = numblocks[axis]
+            new_chunks = chunks[axis] + (rem,)
+            new_chunks = (new_chunks,)
+
+            dsk[(name, j)] = (compose(InnerVector, gb.Vector.new), self.dtype, rem)
+
+            return name, dsk, new_chunks, (len(new_chunks[0]),)
+
+        else:
+            return name, dsk, chunks, numblocks
+
     def resize(self, size, inplace=True, chunks="auto"):
+        if any_dOnions(self, size):
+            donion = DOnion.multi_access(
+                self._meta, Vector.resize, self, size, inplace=False, chunks=chunks
+            )
+            if inplace:
+                self.__init__(donion, meta=self._meta)
+                return
+            else:
+                return Vector(donion, meta=self._meta)
+
+        name, dsk, new_chunks, num_blocks = self._head(self._delayed, (size,))
+        name, dsk, new_chunks, num_blocks = self._add_tail(0, size, name, dsk, new_chunks, num_blocks)
+
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[self._delayed])
+        x = da.core.Array(graph, name, new_chunks, meta=wrap_inner(self._meta))
+        x = x.rechunk(chunks=chunks)
+
+        if size >= self.size:
+            nvals = self.nvals
+        else:
+            nvals = None
+
+        if inplace:
+            self.__init__(x, nvals=nvals)
+        else:
+            return Vector(x, nvals=nvals)
+
+    def _resize_old(self, size, inplace=True, chunks="auto"):
         chunks = da.core.normalize_chunks(chunks, (size,), dtype=np.int64)
         output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 

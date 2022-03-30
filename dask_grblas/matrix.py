@@ -3,6 +3,8 @@ import numpy as np
 import grblas as gb
 
 from numbers import Integral, Number
+from tlz import compose
+
 from dask.base import tokenize, is_dask_collection
 from dask.delayed import Delayed, delayed
 from dask.highlevelgraph import HighLevelGraph
@@ -13,6 +15,7 @@ from grblas.exceptions import IndexOutOfBound, EmptyObject, DimensionMismatch
 from . import _automethods
 from .base import BaseType, InnerBaseType, DOnion, is_DOnion, any_dOnions, Box, skip
 from .base import _nvals as _nvals_in_chunk
+from .base import _dup as chunk_dup
 from .expr import AmbiguousAssignOrExtract, IndexerResolver, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
 from ._ss.matrix import ss
@@ -503,7 +506,138 @@ class Matrix(BaseType):
             # return DOnion.multi_access(self._meta.shape, getattr, self, "shape")
         return self._meta.shape
 
+    def _head(self, delayed, shape):
+        """
+        Take the leading portion of shape `shape` from `delayed`
+        """
+        def _slice(inner, slc_x, slc_y):
+            return InnerMatrix(inner.value[slc_x, slc_y].new())
+
+        x = delayed
+        numblocks = ()
+        heads = ()
+        new_chunks = ()
+        for axis in range(2):
+            stops_ = np.cumsum(x.chunks[axis])
+            starts = np.roll(stops_, 1)
+            starts[0] = 0
+
+            M = x.numblocks[axis]
+            blockid = np.arange(M)
+
+            # locate chunk containing last element on axis:
+            i = min(self.shape[axis], shape[axis]) - 1
+            filter = (starts <= i) & (i < stops_)
+            (last_block,) = blockid[filter]
+            tail_sz = i - starts[last_block] + 1
+
+            numblocks += (last_block + 1,)
+            heads += (tail_sz,)
+            new_chunks += (x.chunks[axis][:last_block] + (tail_sz,), )
+
+        name = "Matrix.resize-" + tokenize(x)
+        dtype = self.dtype
+        dsk = dict()
+        for i in range(numblocks[0]):
+            x_cut = (i == numblocks[0] - 1)
+            for j in range(numblocks[1]):
+                y_cut = (j == numblocks[1] - 1)
+                if x_cut or y_cut:
+                    dsk[(name, i, j)] = (
+                        _slice,
+                        (x.name, i, j),
+                        slice(heads[0]) if x_cut else slice(None),
+                        slice(heads[1]) if y_cut else slice(None),
+                    )
+                else:
+                    dsk[(name, i, j)] = (chunk_dup, (x.name, i, j), None, dtype, None)
+
+        return name, dsk, new_chunks, numblocks
+
+    def _add_tail(self, axis, size, name, dsk, chunks, numblocks):
+        """
+        Append dask graph `dsk` with empty chunks on axis `axis` up to size `size`
+        """
+        rem = size - self.shape[axis]
+        if rem > 0:
+            j = numblocks[axis]
+            other = 0 if axis else 1
+            new_chunks = chunks[axis] + (rem,)
+            new_chunks = (chunks[0], new_chunks) if axis else (new_chunks, chunks[1])
+
+            for i, sz_i in enumerate(chunks[other]):
+                if axis:
+                    dsk[(name, i, j)] = (compose(InnerMatrix, gb.Matrix.new), self.dtype, sz_i, rem)
+                else:
+                    dsk[(name, j, i)] = (compose(InnerMatrix, gb.Matrix.new), self.dtype, rem, sz_i)
+
+            return name, dsk, new_chunks, (len(new_chunks[0]), len(new_chunks[1]))
+
+        else:
+            return name, dsk, chunks, numblocks
+
     def resize(self, nrows, ncols, inplace=True, chunks="auto"):
+        if any_dOnions(self, nrows, ncols):
+            donion = DOnion.multi_access(
+                self._meta, Matrix.resize, self, nrows, ncols, inplace=False, chunks=chunks
+            )
+            if inplace:
+                self.__init__(donion, meta=self._meta)
+                return
+            else:
+                return Matrix(donion, meta=self._meta)
+
+        name, dsk, new_chunks, num_blocks = self._head(self._delayed, (nrows, ncols))
+        name, dsk, new_chunks, num_blocks = self._add_tail(0, nrows, name, dsk, new_chunks, num_blocks)
+        name, dsk, new_chunks, num_blocks = self._add_tail(1, ncols, name, dsk, new_chunks, num_blocks)
+
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[self._delayed])
+        x = da.core.Array(graph, name, new_chunks, meta=wrap_inner(self._meta))
+        x = x.rechunk(chunks=chunks)
+
+        if nrows >= self.nrows and ncols >= self.ncols:
+            nvals = self.nvals
+        else:
+            nvals = None
+
+        if inplace:
+            self.__init__(x, nvals=nvals)
+        else:
+            return Matrix(x, nvals=nvals)
+
+    def _resize_old(self, nrows, ncols, inplace=True, chunks="auto"):
+        if self.is_dOnion:
+            donion = self._delayed.getattr(
+                self._meta, "resize", nrows, ncols, inplace=False, chunks=chunks
+            )
+            if inplace:
+                self.__init__(donion, meta=self._meta)
+                return
+            else:
+                return Matrix(donion, meta=self._meta)
+
+        if nrows >= self.nrows and ncols >= self.ncols:
+            new_matrix = Matrix.new(self.dtype, nrows, ncols, chunks=chunks)
+            rows, cols = slice(0, self.nrows), slice(0, self.ncols)
+            new_matrix[rows, cols] << self
+            nvals = self._nvals
+        elif nrows < self.nrows and ncols < self.ncols:
+            rows, cols = slice(0, nrows), slice(0, ncols)
+            new_matrix = self[rows, cols].new()
+            new_matrix.rechunk(chunks=chunks)
+            nvals = None
+        else:
+            new_matrix = Matrix.new(self.dtype, nrows, ncols, chunks=chunks)
+            rows, cols = slice(0, min(nrows, self.nrows)), slice(0, min(ncols, self.ncols))
+            new_matrix[rows, cols] << self[rows, cols].new()
+            nvals = None
+
+        if inplace:
+            self.__init__(new_matrix._delayed, nvals=nvals)
+        else:
+            return new_matrix
+
+    def _resize_old2(self, nrows, ncols, inplace=True, chunks="auto"):
         if self.is_dOnion:
             donion = self._delayed.getattr(
                 self._meta, "resize", nrows, ncols, inplace=False, chunks=chunks

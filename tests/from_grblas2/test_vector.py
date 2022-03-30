@@ -290,10 +290,10 @@ def test_resize(v):
     v.resize(20)
     assert v.size == 20
     assert v.nvals == 4
-    assert compute(v[19].value) is None
+    assert v[19].new().value == None
     v.resize(4)
     assert v.size == 4
-    assert v.nvals.compute() == 2
+    assert v.nvals == 2
 
     v = v_.dup()
     v.rechunk(chunks=2, inplace=True)
@@ -303,11 +303,11 @@ def test_resize(v):
     v.resize(20, chunks=5)
     assert v.size == 20
     assert v.nvals == 4
-    assert compute(v[19].value) is None
+    assert v[19].new().value == None
     assert v._delayed.chunks == ((5, 5, 5, 5),)
     v.resize(4, chunks=3)
     assert v.size == 4
-    assert v.nvals.compute() == 2
+    assert v.nvals == 2
     assert v._delayed.chunks == ((3, 1),)
 
 
