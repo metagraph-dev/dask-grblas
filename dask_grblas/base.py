@@ -1,4 +1,7 @@
 from numbers import Number
+from collections.abc import Iterable
+from tlz import compose
+from functools import partial
 import dask.array as da
 import grblas as gb
 import numpy as np
@@ -6,16 +9,23 @@ from grblas.operator import UNKNOWN_OPCLASS, find_opclass, get_typed_op
 
 from . import replace as replace_singleton
 from .mask import Mask
+from .functools import flexible_partial, skip
 from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
+from dask.base import is_dask_collection
 
 _expect_type = gb.base._expect_type
 
 
-def _check_mask(mask, output=None):
+def is_type(arg_type, a):
+    return type(a) is arg_type
+
+
+def _check_mask(mask, output=None, ignore_None=False):
     if not isinstance(mask, Mask):
         if isinstance(mask, BaseType):
             raise TypeError("Mask must indicate values (M.V) or structure (M.S)")
-        raise TypeError(f"Invalid mask: {type(mask)}")
+        elif mask is None and not ignore_None:
+            raise TypeError(f"Invalid mask: {type(mask)}")
     if output is not None:
         from .vector import Vector
 
@@ -32,8 +42,26 @@ class BaseType:
     _expect_type = _expect_type
     _is_scalar = False
 
+    @property
+    def is_dOnion(self):
+        return is_DOnion(self._delayed)
+
+    @property
+    def dOnion_if(self):
+        return self._delayed if self.is_dOnion else self
+
+    def strip(self, *args, **kwargs):
+        return self._delayed.strip(*args, **kwargs) if self.is_dOnion else self
+
     def isequal(self, other, *, check_dtype=False):
         from .scalar import PythonScalar
+
+        if any_dOnions(self, other):
+            meta = gb.Scalar.new(bool)
+            delayed = DOnion.multi_access(
+                meta, self.__class__.isequal, self, other, check_dtype=check_dtype
+            )
+            return PythonScalar(delayed, meta=meta)
 
         # if type(other) is not type(self):
         #     raise TypeError(f'Argument of isequal must be of type {type(self).__name__}')
@@ -52,46 +80,125 @@ class BaseType:
             adjust_chunks={i: 1 for i in range(self._delayed.ndim)},
         )
         """
-        delayed = da.core.elemwise(
-            _isequal,
-            self._delayed,
-            other._delayed,
-            check_dtype,
-            dtype=bool,
+        ndim = (
+            self._matrix._delayed.ndim
+            if getattr(self, "_is_transposed", False)
+            else self._delayed.ndim
         )
-        if self._delayed.ndim > 0:
+        if ndim < 2:
             delayed = da.core.elemwise(
-                _to_scalar,
-                delayed.all(),
-                bool,
+                partial(_isequal, False, False),
+                self._delayed,
+                other._delayed,
+                check_dtype,
+                dtype=bool,
+            )
+        else:
+            xt = getattr(self, "_is_transposed", False)
+            yt = getattr(other, "_is_transposed", False)
+            self_ = (self._matrix._delayed, "ji") if xt else (self._delayed, "ij")
+            other_ = (other._matrix._delayed, "ji") if yt else (other._delayed, "ij")
+            delayed = da.core.blockwise(
+                *(partial(_isequal, xt, yt), "ij"),
+                *self_,
+                *other_,
+                *(check_dtype, None),
+                dtype=bool,
+            )
+        if ndim > 0:
+            delayed = da.core.blockwise(
+                *(_to_scalar, ()),
+                *(delayed.all(), None),
+                *(bool, None),
+                dtype=np.bool_,
+                meta=wrap_inner(gb.Scalar.new(bool)),
             )
         return PythonScalar(delayed)
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         from .scalar import PythonScalar
 
+        if any_dOnions(self, other):
+            meta = gb.Scalar.new(bool)
+            delayed = DOnion.multi_access(
+                meta,
+                self.__class__.isclose,
+                self,
+                other,
+                rel_tol=rel_tol,
+                abs_tol=abs_tol,
+                check_dtype=check_dtype,
+            )
+            return PythonScalar(delayed, meta=meta)
+
         # if type(other) is not type(self):
         #     raise TypeError(f'Argument of isclose must be of type {type(self).__name__}')
         if not self._meta.isequal(other._meta):
             return PythonScalar.from_value(False)
-        delayed = da.core.elemwise(
-            _isclose,
-            self._delayed,
-            other._delayed,
-            rel_tol,
-            abs_tol,
-            check_dtype,
-            dtype=bool,
+
+        ndim = (
+            self._matrix._delayed.ndim
+            if getattr(self, "_is_transposed", False)
+            else self._delayed.ndim
         )
-        if self._delayed.ndim > 0:
+        if ndim < 2:
             delayed = da.core.elemwise(
-                _to_scalar,
-                delayed.all(),
-                bool,
+                partial(_isclose, False, False),
+                self._delayed,
+                other._delayed,
+                rel_tol,
+                abs_tol,
+                check_dtype,
+                dtype=bool,
+            )
+        else:
+            xt = getattr(self, "_is_transposed", False)
+            yt = getattr(other, "_is_transposed", False)
+            self_ = (self._matrix._delayed, "ji") if xt else (self._delayed, "ij")
+            other_ = (other._matrix._delayed, "ji") if yt else (other._delayed, "ij")
+            delayed = da.core.blockwise(
+                *(partial(_isclose, xt, yt), "ij"),
+                *self_,
+                *other_,
+                *(rel_tol, None),
+                *(abs_tol, None),
+                *(check_dtype, None),
+                dtype=bool,
+            )
+        if ndim > 0:
+            delayed = da.core.blockwise(
+                *(_to_scalar, ()),
+                *(delayed.all(), None),
+                *(bool, None),
+                dtype=np.bool_,
+                meta=wrap_inner(gb.Scalar.new(bool)),
             )
         return PythonScalar(delayed)
 
+    def _clear(self):
+        delayed = self._optional_dup()
+        # for a function like this, what's the difference between `map_blocks` and `elemwise`?
+        if self.ndim == 0:
+            return self.__class__(
+                delayed.map_blocks(
+                    _clear,
+                    dtype=np_dtype(self.dtype),
+                )
+            )
+        else:
+            return self.__class__(
+                delayed.map_blocks(
+                    _clear,
+                    dtype=np_dtype(self.dtype),
+                ),
+                nvals=0,
+            )
+
     def clear(self):
+        if is_DOnion(self._delayed):
+            self.__init__(self._delayed.getattr(self._meta, "_clear"), meta=self._meta, nvals=0)
+            return
+
         # Should we copy and mutate or simply create new chunks?
         delayed = self._optional_dup()
         # for a function like this, what's the difference between `map_blocks` and `elemwise`?
@@ -110,6 +217,13 @@ class BaseType:
             )
 
     def dup(self, dtype=None, *, mask=None, name=None):
+        if any_dOnions(self, mask):
+            meta = self._meta.dup(dtype=dtype)
+            donion = DOnion.multi_access(
+                meta, self.__class__.dup, self, dtype=dtype, mask=mask, name=name
+            )
+            return self.__class__(donion, meta=meta)
+
         if mask is not None:
             if not isinstance(mask, Mask):
                 self._meta.dup(dtype=dtype, mask=mask, name=name)  # should raise
@@ -188,6 +302,9 @@ class BaseType:
     __imatmul__ = gb.base.BaseType.__imatmul__
 
     def _optional_dup(self):
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta, _dOnion_dup, self)
+
         # TODO: maybe try to create an optimization pass that remove these if they are unnecessary
         return da.core.elemwise(
             _optional_dup,
@@ -210,16 +327,22 @@ class BaseType:
     def nvals(self):
         from .scalar import PythonScalar
 
+        if self.is_dOnion:
+            donion = DOnion.multi_access(self._meta.nvals, getattr, self, "nvals")
+            return PythonScalar(donion)
+
         delayed = da.core.elemwise(
             _nvals,
             self._delayed,
             dtype=int,
         )
         if self._delayed.ndim > 0:
-            delayed = da.core.elemwise(
-                _to_scalar,
-                delayed.sum(),
-                int,
+            delayed = da.core.blockwise(
+                *(_to_scalar, ()),
+                *(delayed.sum(), None),
+                *(int, None),
+                dtype=np.int_,
+                meta=wrap_inner(gb.Scalar.new(int)),
             )
         return PythonScalar(delayed)
 
@@ -239,7 +362,7 @@ class BaseType:
             return self.name
         return f"{split[0]}<sub>{split[1]}</sub>"
 
-    def update(self, expr):
+    def update(self, expr, in_dOnion=False):
         if isinstance(expr, Number):
             if self.ndim == 2:
                 raise TypeError(
@@ -250,12 +373,75 @@ class BaseType:
                     "If you do wish to make a dense matrix, then please be explicit:"
                     "\n\n    M[:, :] = s"
                 )
-            Updater(self)[...] << expr
-            return
-        self._meta.update(expr._meta)
-        self._meta.clear()
         typ = type(expr)
-        if typ is AmbiguousAssignOrExtract:
+        if any_dOnions(self, expr):
+            self_copy = self.__class__(self._optional_dup(), meta=self._meta)
+            expr_ = expr
+            if isinstance(expr, AmbiguousAssignOrExtract) and expr.has_dOnion:
+
+                def update_by_aae(c, p, k_0, k_1):
+                    keys = k_0 if k_1 is None else (k_0, k_1)
+                    return c.update(p[keys], in_dOnion=True)
+
+                if _is_pair(expr_.index):
+                    keys_0, keys_1 = expr_.index[0], expr_.index[1]
+                else:
+                    keys_0, keys_1 = expr_.index, None
+
+                donion = DOnion.multi_access(
+                    self._meta,
+                    update_by_aae,
+                    self_copy,
+                    expr_.parent,
+                    *(keys_0, keys_1),
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            if isinstance(expr, GbDelayed) and expr.has_dOnion:
+
+                def update_by_gbd(c, *args, **kwargs):
+                    gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
+                    return c.update(gbd, in_dOnion=True)
+
+                donion = DOnion.multi_access(
+                    self._meta,
+                    update_by_gbd,
+                    self_copy,
+                    expr_.parent,
+                    expr_.method_name,
+                    *expr_.args,
+                    **expr_.kwargs,
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            elif typ is TransposedMatrix and expr.is_dOnion:
+
+                donion = DOnion.multi_access(
+                    self._meta, BaseType.update, self_copy, expr_, in_dOnion=True
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            donion = DOnion.multi_access(
+                self._meta, BaseType.update, self_copy, expr_, in_dOnion=True
+            )
+            self.__init__(donion, self._meta)
+            return
+
+        if typ is Box:
+            expr = expr.content
+            typ = type(expr)
+
+        if isinstance(expr, Number):
+            Updater(self)[...] << expr
+            if in_dOnion:
+                return self.__class__(self._delayed, meta=self._meta)
+            return
+
+        self._meta.clear()
+        if isinstance(expr, AmbiguousAssignOrExtract):
             # Extract (w << v[index])
             # Is it safe/reasonable to simply replace `_delayed`?
             # Should we try to preserve e.g. format or partitions?
@@ -266,25 +452,100 @@ class BaseType:
                 self.__init__(expr._optional_dup())
             else:
                 self.__init__(expr.dup(dtype=self.dtype)._delayed)
-        elif typ is GbDelayed:
+        elif isinstance(expr, GbDelayed):
             expr._update(self)
         elif typ is TransposedMatrix:
             # "C << A.T"
-            C = expr.new()
+            C = expr.new(dtype=self.dtype)
             self.__init__(C._delayed)
+        elif typ is type(None):  # noqa
+            raise TypeError("Assignment value must be a valid expression")
         else:
             # Anything else we need to handle?
-            raise TypeError()
+            raise NotImplementedError()
+        if in_dOnion:
+            return self.__class__(self._delayed, meta=self._meta)
 
-    def _update(self, expr, *, mask=None, accum=None, replace=None):
+    def _update(self, expr, *, mask=None, accum=None, replace=None, in_dOnion=False):
+        typ = type(expr)
+        if any_dOnions(self, expr, mask):
+            self_copy = self.__class__(self._optional_dup(), meta=self._meta)
+            mask_ = mask.dOnion_if if mask is not None else None
+            expr_ = expr
+            if isinstance(expr, AmbiguousAssignOrExtract) and expr.has_dOnion:
+
+                def _update_by_aae(c, p, k_0, k_1, mask=None, accum=None, replace=None):
+                    keys = k_0 if k_1 is None else (k_0, k_1)
+                    return c.update(
+                        p[keys], mask=mask, accum=accum, replace=replace, in_dOnion=True
+                    )
+
+                if _is_pair(expr_.index):
+                    keys_0, keys_1 = expr_.index[0], expr_.index[1]
+                else:
+                    keys_0, keys_1 = expr_.index, None
+
+                donion = DOnion.multi_access(
+                    self._meta,
+                    _update_by_aae,
+                    self_copy,
+                    expr_.parent,
+                    *(keys_0, keys_1),
+                    mask=mask_,
+                    accum=accum,
+                    replace=replace,
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            if isinstance(expr, GbDelayed) and expr.has_dOnion:
+
+                def _update_by_gbd(c, *args, mask=None, accum=None, replace=None, **kwargs):
+                    gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
+                    return c._update(gbd, mask=mask, accum=accum, replace=replace, in_dOnion=True)
+
+                donion = DOnion.multi_access(
+                    self._meta,
+                    _update_by_gbd,
+                    self_copy,
+                    expr_.parent,
+                    expr_.method_name,
+                    *expr_.args,
+                    mask=mask_,
+                    accum=accum,
+                    replace=replace,
+                    **expr_.kwargs,
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            donion = DOnion.multi_access(
+                self._meta,
+                BaseType._update,
+                self_copy,
+                expr_,
+                mask=mask_,
+                accum=accum,
+                replace=replace,
+                in_dOnion=True,
+            )
+            self.__init__(donion, meta=self._meta)
+            return
+
+        if typ is Box:
+            expr = expr.content
+            typ = type(expr)
+
         if mask is None and accum is None:
             self.update(expr)
+            if in_dOnion:
+                return self
             return
-        typ = type(expr)
-        if typ is AmbiguousAssignOrExtract:
+        if isinstance(expr, AmbiguousAssignOrExtract):
             # Extract (w(mask=mask, accum=accum) << v[index])
+            expr_new = expr.new(dtype=self.dtype)
+            expr_delayed = expr_new._delayed
             delayed = self._optional_dup()
-            expr_delayed = expr.new(dtype=self.dtype)._delayed
             self._meta(mask=get_meta(mask), accum=accum, replace=replace)
             if mask is not None:
                 delayed_mask = mask.mask._delayed
@@ -304,7 +565,7 @@ class BaseType:
                     dtype=np_dtype(self._meta.dtype),
                 )
             )
-        elif typ is GbDelayed:
+        elif isinstance(expr, GbDelayed):
             # v(mask=mask) << left.ewise_mult(right)
             # Meta check handled in Updater
             expr._update(self, mask=mask, accum=accum, replace=replace)
@@ -333,6 +594,9 @@ class BaseType:
         else:
             raise NotImplementedError(f"{typ}")
 
+        if in_dOnion:
+            return self.__class__(self._delayed, meta=self._meta)
+
     def wait(self):
         # TODO: What should this do?
         self._meta.wait()
@@ -340,6 +604,8 @@ class BaseType:
     def compute(self, *args, **kwargs):
         # kwargs['scheduler'] = 'synchronous'
         val = self._delayed.compute(*args, **kwargs)
+        if self.is_dOnion:
+            return val
         return val.value
 
     def persist(self, *args, **kwargs):
@@ -347,6 +613,276 @@ class BaseType:
 
     def visualize(self, *args, **kwargs):
         return self._delayed.visualize(*args, **kwargs)
+
+
+class Box:
+    """
+    An arbitrary wrapper to wrap around the inner values of
+    an Array object to prevent dask from post-processing the
+    Array at the end of compute()
+    """
+
+    def __init__(self, content):
+        self.content = content
+
+    def __getattr__(self, item):
+        return getattr(self.content, item)
+
+
+const_obj = object()
+_const0_DOnion = {"dtype": np.object_, "meta": np.array(const_obj, dtype=np.object_)}
+
+
+class DOnion:
+    """
+    Dask (or Delayed) Onion (DOnion):
+
+    Encapsulates a dask array whose inner value is also a dask array.
+    Intended to be used in cases where the size of the inner dask
+    array (the seed) depends on the inner value of another dask array
+    (the shroud)
+    """
+
+    is_dOnion = True
+
+    @classmethod
+    def sprout(cls, shroud, seed_meta, seed_func, *args, **kwargs):
+        """
+        Develop a DOnion from dask arrays listed in `shroud` and using function `seed_func`
+
+        Return dask.array.map_blocks(seed_func, shroud) as a DOnion.
+
+        :shroud: a dask array; or an iterable of multiple such dask arrays; or a tuple (x, y)
+            where x and y are respectively a list of dask arrays and a dict of named dask arrays.
+            The inner values of these arrays determine the (size of) seed dask array
+        :seed_meta: empty instance of the inner value type of the seed
+        :seed_func: the function that takes as input the inner value of `shroud` and returns
+            another dask array (the seed)
+        :args: tuple of arguments to `seed_func`.  May contain one or more `skip` sentinels
+            denoting a vacant positions to be taken up by the inner values of dask arrays in
+            shroud.
+        :kwargs: dict of keyword arguments to `seed_func`
+        """
+        named_shrouds = {}
+        if is_dask_collection(shroud):
+            shroud = [shroud]
+        else:
+            if isinstance(shroud, Iterable):
+                if len(shroud) > 0:
+                    if (
+                        len(shroud) == 2
+                        and isinstance(shroud[0], Iterable)
+                        and isinstance(shroud[1], dict)
+                    ):
+                        shroud = shroud[0]
+                        named_shrouds = shroud[1]
+                else:
+                    raise ValueError("`shroud` must contain at least one dask array!")
+            else:
+                raise ValueError(
+                    "`shroud` must be a dask array; a list x of dask arrays or"
+                    "a dict y of named dask arrays; or a tuple of both: (x, y)"
+                )
+
+        seed_func = flexible_partial(seed_func, *args, **kwargs)
+        kernel = da.map_blocks(seed_func, *shroud, **named_shrouds, **_const0_DOnion)
+        return DOnion(kernel, meta=seed_meta)
+
+    def __init__(self, kernel, meta=None):
+        self.kernel = kernel
+        # Why have ._meta and .dtype attributes? B'cos Scalar, Vector & Matrix need them
+        self._meta = meta
+        self.dtype = getattr(meta, "dtype", type(meta))
+
+    def __eq__(self, other):
+        if like_dOnion(other):
+            other = other.compute()
+        return self.compute() == other
+
+    def compute(self, *args, **kwargs):
+        value = self.kernel.compute(*args, **kwargs)
+        while hasattr(value, "compute"):
+            value = value.compute(*args, **kwargs)
+        if type(value) is Box:
+            value = value.content
+        return value
+
+    def compute_once(self, *args, **kwargs):
+        value = self.kernel.compute(*args, **kwargs)
+        if type(value) is Box:
+            value = value.content
+        return value
+
+    def strip(self, *args, **kwargs):
+        value = self.compute_once(*args, **kwargs)
+        while like_dOnion(value):
+            if type(value) is DOnion:
+                value = value.compute_once(*args, **kwargs)
+            else:
+                value = value._delayed.compute_once(*args, **kwargs)
+        return value
+
+    def persist(self, *args, **kwargs):
+        value = self.strip(*args, **kwargs)
+        if hasattr(value, "persist"):
+            return value.persist(*args, **kwargs)
+        else:
+            raise AttributeError(
+                f"Something went wrong: stripped dOnion {self} value {value} has"
+                " no `persist()` attribute."
+            )
+
+    def _persist(self, *args, **kwargs):
+        value = self.strip(*args, **kwargs)
+        if hasattr(value, "_persist"):
+            value._persist(*args, **kwargs)
+            return value._delayed
+        else:
+            raise AttributeError(
+                f"Something went wrong: stripped dOnion {self} value {value} has"
+                " no `_persist()` attribute."
+            )
+
+    @classmethod
+    def multi_access(cls, out_meta, func, *args, **kwargs):
+        def adaptor(func, ts, cs, ss, vs, kwargs_desc, *args, **kwargs):
+            args_ = ()
+            for arg, t, c, s, v in zip(args, ts, cs, ss, vs):
+                if type(arg) is Box:
+                    arg = arg.content
+                if t:
+                    arg = arg.T
+                if s:
+                    arg = arg.S
+                if v:
+                    arg = arg.V
+                if c:
+                    arg = arg.__invert__()
+                args_ += (arg,)
+
+            kwargs_ = kwargs.copy()
+            for k in kwargs:
+                t, c, s, v = kwargs_desc[k]
+                if t:
+                    kwargs_[k] = kwargs_[k].T
+                if s:
+                    kwargs_[k] = kwargs_[k].S
+                if v:
+                    kwargs_[k] = kwargs_[k].V
+                if c:
+                    kwargs_[k] = kwargs_[k].__invert__()
+
+            return func(*args_, **kwargs_)
+
+        _args = [getattr(arg, "dOnion_if", arg) for arg in args]
+        ts = [
+            getattr(arg, "is_dOnion", False) and getattr(arg, "_is_transposed", False)
+            for arg in args
+        ]
+        cs = [
+            getattr(arg, "is_dOnion", False)
+            and isinstance(arg, Mask)
+            and getattr(arg, "complement", False)
+            for arg in args
+        ]
+        ss = [
+            getattr(arg, "is_dOnion", False)
+            and isinstance(arg, Mask)
+            and getattr(arg, "structure", False)
+            for arg in args
+        ]
+        vs = [
+            getattr(arg, "is_dOnion", False)
+            and isinstance(arg, Mask)
+            and getattr(arg, "value", False)
+            for arg in args
+        ]
+
+        _kwargs = {k: getattr(arg, "dOnion_if", arg) for k, arg in kwargs.items()}
+
+        kwargs_desc = {
+            k: (
+                getattr(arg, "is_dOnion", False) and getattr(arg, "_is_transposed", False),
+                getattr(arg, "is_dOnion", False)
+                and isinstance(arg, Mask)
+                and getattr(arg, "complement", False),
+                getattr(arg, "is_dOnion", False)
+                and isinstance(arg, Mask)
+                and getattr(arg, "structure", False),
+                getattr(arg, "is_dOnion", False)
+                and isinstance(arg, Mask)
+                and getattr(arg, "value", False),
+            )
+            for k, arg in kwargs.items()
+        }
+        return DOnion.multiple_access(
+            out_meta, adaptor, func, ts, cs, ss, vs, kwargs_desc, *_args, **_kwargs
+        )
+
+    @classmethod
+    def multiple_access(cls, out_meta, func, *args, **kwargs):
+        """
+        Pass inner values of any DOnions in `args` and/or `kwargs` into `func`.
+
+        :func: Callable that can accept the contents of `args` and/or `kwargs`
+            as parameters
+        :args: a list of positional arguments to `func`
+        :kwargs: a dict of named arguments to `func`
+        """
+        # First, pass non-DOnion args and kwargs to func:
+        skip_Donions = [arg if not is_DOnion(arg) else skip for arg in args]
+        non_DOnion_kwargs = {k: v for (k, v) in kwargs.items() if not is_DOnion(v)}
+        func = flexible_partial(func, *skip_Donions, **non_DOnion_kwargs)
+
+        # Next, pass func and DOnion args and kwargs to map_blocks:
+        donion_args = tuple(arg.kernel for arg in args if is_DOnion(arg))
+        donion_kwargs = {k: v.kernel for (k, v) in kwargs.items() if is_DOnion(v)}
+        kernel = da.map_blocks(func, *donion_args, **donion_kwargs, **_const0_DOnion)
+        return DOnion(kernel, meta=out_meta)
+
+    def deep_extract(self, out_meta, func, *args, **kwargs):
+        func = flexible_partial(func, *args, **kwargs)
+        if not isinstance(
+            out_meta, (np.ndarray, gb.base.BaseType, gb.mask.Mask, gb.matrix.TransposedMatrix)
+        ):
+            func = compose(Box, func)
+        kernel = self.kernel.map_blocks(func, **_const0_DOnion)
+        return DOnion(kernel, meta=out_meta)
+
+    def __call__(self, *args, **kwargs):
+        meta = self._meta(*args, **kwargs)
+        return self.getattr(meta, "__call__", *args, **kwargs)
+
+    def __getattr__(self, item):
+        try:
+            meta = getattr(self._meta, item, getattr(self.kernel, item))
+        except AttributeError:
+            raise AttributeError(f"Unable to compute meta corresponding to attribute {item}.")
+        _getattr = flexible_partial(getattr, skip, item)
+        return self.deep_extract(meta, _getattr)
+
+    def getattr(self, meta, attr_name, *args, **kwargs):
+        _getattr = flexible_partial(DOnion._getattr, skip, attr_name, *args, **kwargs)
+        return self.deep_extract(meta, _getattr)
+
+    @classmethod
+    def _getattr(cls, x, attr_name, *args, **kwargs):
+        return getattr(x, attr_name)(*args, **kwargs)
+
+
+is_DOnion = partial(is_type, DOnion)
+
+
+def like_dOnion(arg):
+    return arg is not None and (
+        is_DOnion(arg) or getattr(arg, "is_dOnion", False) or getattr(arg, "has_dOnion", False)
+    )
+
+
+def any_dOnions(*args, **kwargs):
+    return np.any([like_dOnion(arg) for arg in args]) or np.any(
+        [like_dOnion(v) for _, v in kwargs.items()]
+    )
 
 
 # Dask task functions
@@ -361,13 +897,17 @@ def _dup(x, mask, dtype, mask_type):
     return wrap_inner(x.value.dup(dtype=dtype, mask=mask))
 
 
-def _isclose(x, y, rel_tol, abs_tol, check_dtype):
-    val = x.value.isclose(y.value, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
+def _isclose(xt, yt, x, y, rel_tol, abs_tol, check_dtype):
+    x_ = x.value.T if xt else x.value
+    y_ = y.value.T if yt else y.value
+    val = x_.isclose(y_, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
     return _reduction_value(x, val)
 
 
-def _isequal(x, y, check_dtype):
-    val = x.value.isequal(y.value, check_dtype=check_dtype)
+def _isequal(xt, yt, x, y, check_dtype):
+    x_ = x.value.T if xt else x.value
+    y_ = y.value.T if yt else y.value
+    val = x_.isequal(y_, check_dtype=check_dtype)
     return _reduction_value(x, val)
 
 
@@ -378,6 +918,10 @@ def _nvals(x):
 
 def _optional_dup(x):
     return wrap_inner(x.value.dup())
+
+
+def _dOnion_dup(x):
+    return x.dup()
 
 
 def _reduction_value(x, val):
@@ -402,5 +946,5 @@ def _update_assign(updating, accum, mask, mask_type, replace, x):
     return updating
 
 
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater  # noqa isort: skip
+from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, _is_pair  # noqa isort: skip
 from .matrix import TransposedMatrix  # noqa isort: skip

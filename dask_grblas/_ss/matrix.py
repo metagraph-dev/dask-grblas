@@ -30,3 +30,27 @@ class ss:
         vector = self._parent._expect_type(vector, dgb.Vector, within="ss.diag", argname="vector")
         rv = vector._diag(k, chunks=chunks, dtype=dtype)
         self._parent.__init__(rv._delayed, nvals=rv._nvals)
+
+    def build_scalar(
+        self,
+        rows,
+        columns,
+        values,
+        *,
+        dup_op=None,
+        clear=False,
+        nrows=None,
+        ncols=None,
+        chunks=None,
+        in_dOnion=False,  # not part of the API
+    ):
+        self._parent.build(
+            rows,
+            columns,
+            values,
+            dup_op=dup_op,
+            clear=clear,
+            nrows=nrows,
+            ncols=ncols,
+            chunks=chunks,
+        )

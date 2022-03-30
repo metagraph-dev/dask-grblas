@@ -1,16 +1,26 @@
 import dask.array as da
 import numpy as np
 import grblas as gb
+
+from numbers import Integral
+from tlz import compose
+
 from dask.base import tokenize
+from dask.highlevelgraph import HighLevelGraph
 from dask.delayed import Delayed, delayed
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
+from grblas.exceptions import IndexOutOfBound, DimensionMismatch
 
-from .base import BaseType, InnerBaseType, _nvals
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
+from . import _automethods
+from .base import BaseType, InnerBaseType, _nvals, DOnion, Box, any_dOnions
+from .base import _dup as chunk_dup
+from .expr import AmbiguousAssignOrExtract, IndexerResolver, GbDelayed, Updater, Assigner
 from .mask import StructuralMask, ValueMask
 from ._ss.vector import ss
 from .utils import (
+    pack_args,
+    pack_kwargs,
     np_dtype,
     get_return_type,
     wrap_inner,
@@ -77,6 +87,43 @@ class InnerVector(InnerBaseType):
 class Vector(BaseType):
     __slots__ = ("ss",)
     ndim = 1
+    __abs__ = gb.Vector.__abs__
+    __add__ = gb.Vector.__add__
+    __divmod__ = gb.Vector.__divmod__
+    __eq__ = gb.Vector.__eq__
+    __floordiv__ = gb.Vector.__floordiv__
+    __ge__ = gb.Vector.__ge__
+    __gt__ = gb.Vector.__gt__
+    __iadd__ = gb.Vector.__iadd__
+    __iand__ = gb.Vector.__iand__
+    __ifloordiv__ = gb.Vector.__ifloordiv__
+    __imod__ = gb.Vector.__imod__
+    __imul__ = gb.Vector.__imul__
+    __invert__ = gb.Vector.__invert__
+    __ior__ = gb.Vector.__ior__
+    __ipow__ = gb.Vector.__ipow__
+    __isub__ = gb.Vector.__isub__
+    __itruediv__ = gb.Vector.__itruediv__
+    __ixor__ = gb.Vector.__ixor__
+    __le__ = gb.Vector.__le__
+    __lt__ = gb.Vector.__lt__
+    __mod__ = gb.Vector.__mod__
+    __mul__ = gb.Vector.__mul__
+    __ne__ = gb.Vector.__ne__
+    __neg__ = gb.Vector.__neg__
+    __pow__ = gb.Vector.__pow__
+    __radd__ = gb.Vector.__radd__
+    __rdivmod__ = gb.Vector.__rdivmod__
+    __rfloordiv__ = gb.Vector.__rfloordiv__
+    __rmod__ = gb.Vector.__rmod__
+    __rmul__ = gb.Vector.__rmul__
+    __rpow__ = gb.Vector.__rpow__
+    __rsub__ = gb.Vector.__rsub__
+    __rtruediv__ = gb.Vector.__rtruediv__
+    __rxor__ = gb.Vector.__rxor__
+    __sub__ = gb.Vector.__sub__
+    __truediv__ = gb.Vector.__truediv__
+    __xor__ = gb.Vector.__xor__
 
     @classmethod
     def from_delayed(cls, vector, dtype, size, *, nvals=None, name=None):
@@ -105,31 +152,68 @@ class Vector(BaseType):
         /,
         size=None,
         *,
-        trust_size=False,
         dup_op=None,
         dtype=None,
         chunks="auto",
         name=None,
     ):
-        # Note: `trust_size` is a bool parameter that, when True,
-        # can be used to avoid expensive computation of max(indices)
-        # which is used to verify that `size` is indeed large enough
-        # to hold all the given tuples.
-        # TODO:
-        # dup_op support for dask_array indices/values (use reduce_assign?)
-        if dup_op is None and type(indices) is da.Array and type(values) is da.Array:
-            if not trust_size or size is None:
-                # this branch is an expensive operation:
-                implied_size = 1 + da.max(indices).compute()
-                if size is not None and implied_size > size:
-                    raise Exception()
-                size = implied_size if size is None else size
+        if hasattr(values, "dtype"):
+            dtype = lookup_dtype(values.dtype if dtype is None else dtype)
 
-            idtype = gb.Vector.new(indices.dtype).dtype
-            np_idtype_ = np_dtype(idtype)
-            vdtype = gb.Vector.new(values.dtype).dtype
+        meta = gb.Vector.new(dtype, size=size if isinstance(size, Integral) else 0)
+
+        # check for any DOnions:
+        args = pack_args(indices, values, size)
+        kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+        if any_dOnions(*args, **kwargs):
+            # dive into DOnion(s):
+            out_donion = DOnion.multi_access(meta, Vector.from_values, *args, **kwargs)
+            return Vector(out_donion, meta=meta)
+
+        # no DOnions
+        if type(indices) is da.Array or type(values) is da.Array:
+            size_ = size
+            if type(indices) in {tuple, list, np.ndarray}:
+                size_ = size or (np.max(indices) + 1)
+                indices = da.asarray(indices)
+            if type(values) in {tuple, list, np.ndarray}:
+                values = da.asarray(values)
+
+            np_idtype_ = np_dtype(lookup_dtype(indices.dtype))
+            if isinstance(size_, Integral):
+                size = size_
+                chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
+            else:
+                if indices.size == 0:
+                    raise ValueError("No indices provided. Unable to infer size.")
+
+                if indices.dtype.kind not in "ui":
+                    raise ValueError(f"indices must be integers, not {indices.dtype}")
+
+                # Note: uint + int = float which numpy cannot cast to uint.  So we
+                # ensure the same dtype for each summand here:
+                size = size_
+                if size is None:
+                    size = da.max(indices) + np.asarray(1, dtype=indices.dtype)
+                # Here `size` is a dask 0d-array whose computed value is
+                # used to determine the size of the Vector to be returned.
+                # But since we do not want to compute anything just now,
+                # we instead create a "dOnion" (dask Onion) object.  This
+                # effectively means that we will use the inner value of
+                # `size` to create the new Vector:
+                args = pack_args(indices, values)
+                kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+                donion = DOnion.sprout(size, meta, Vector.from_values, *args, **kwargs)
+                return Vector(donion, meta=meta)
+
+            # output shape `(size,)` is completely determined
+            if indices.size > 0:
+                if indices.size != values.size:
+                    raise ValueError("`indices` and `values` lengths must match")
+
+            vdtype = dtype
             np_vdtype_ = np_dtype(vdtype)
-            chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
+
             name_ = name
             name = str(name) if name else ""
             name = name + "-index-ranges" + tokenize(cls, chunks[0])
@@ -139,15 +223,17 @@ class Vector(BaseType):
                 *(indices, "j"),
                 *(values, "j"),
                 *(index_ranges, "i"),
+                size=size,
                 dtype=np_vdtype_,
                 meta=np.array([]),
             )
-            meta = InnerVector(gb.Vector.new(vdtype))
+            meta = InnerVector(gb.Vector.new(vdtype, size=size))
             delayed = da.core.blockwise(
                 *(_from_values1D, "i"),
                 *(fragments, "ij"),
                 *(index_ranges, "i"),
                 concatenate=False,
+                dup_op=dup_op,
                 gb_dtype=dtype,
                 dtype=np_vdtype_,
                 meta=meta,
@@ -161,6 +247,14 @@ class Vector(BaseType):
 
     @classmethod
     def new(cls, dtype, size=0, *, chunks="auto", name=None):
+        if any_dOnions(size):
+            meta = gb.Vector.new(dtype)
+            donion = DOnion.multi_access(meta, cls.new, dtype, size=size, chunks=chunks, name=name)
+            return Vector(donion, meta=meta)
+
+        if type(size) is Box:
+            size = size.content
+
         if size > 0:
             chunks = da.core.normalize_chunks(chunks, (size,), dtype=int)
             meta = gb.Vector.new(dtype)
@@ -187,14 +281,18 @@ class Vector(BaseType):
         # if it is already known  at the time of initialization of
         # this Vector,  otherwise its value should be left as None
         # (the default)
-        assert type(delayed) is da.Array
-        assert delayed.ndim == 1
+        assert type(delayed) in {da.Array, DOnion}
         self._delayed = delayed
-        if meta is None:
-            meta = gb.Vector.new(delayed.dtype, delayed.shape[0])
+        if type(delayed) is da.Array:
+            assert delayed.ndim == 1
+            if meta is None:
+                meta = gb.Vector.new(delayed.dtype, delayed.shape[0])
+        else:
+            if meta is None:
+                meta = gb.Vector.new(delayed.dtype)
         self._meta = meta
-        self._size = meta.size
         self.dtype = meta.dtype
+        self._size = self.size
         self._nvals = nvals
         # Add ss extension methods
         self.ss = ss(self)
@@ -227,13 +325,104 @@ class Vector(BaseType):
 
     @property
     def size(self):
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta.size, getattr, self, "size")
         return self._meta.size
 
     @property
     def shape(self):
+        if self.is_dOnion:
+            return (self.size,)
         return self._meta.shape
 
+    def _head(self, delayed, shape):
+        """
+        Take the leading portion of shape `shape` from `delayed`
+        """
+        def _slice(inner, slc_x):
+            return InnerVector(inner.value[slc_x].new())
+
+        x = delayed
+
+        stops_ = np.cumsum(x.chunks[0])
+        starts = np.roll(stops_, 1)
+        starts[0] = 0
+
+        M = x.numblocks[0]
+        blockid = np.arange(M)
+
+        # locate chunk containing last element:
+        i = min(self.shape[0], shape[0]) - 1
+        filter = (starts <= i) & (i < stops_)
+        (last_block,) = blockid[filter]
+        tail_sz = i - starts[last_block] + 1
+
+        numblocks = (last_block + 1,)
+        heads = (tail_sz,)
+        new_chunks = (x.chunks[0][:last_block] + (tail_sz,),)
+
+        name = "Vector.resize-" + tokenize(x)
+        dtype = self.dtype
+        dsk = dict()
+        for i in range(numblocks[0]):
+            x_cut = (i == numblocks[0] - 1)
+            if x_cut:
+                dsk[(name, i)] = (
+                    _slice,
+                    (x.name, i),
+                    slice(heads[0]) if x_cut else slice(None),
+                )
+            else:
+                dsk[(name, i)] = (chunk_dup, (x.name, i), None, dtype, None)
+
+        return name, dsk, new_chunks, numblocks
+
+    def _add_tail(self, axis, size, name, dsk, chunks, numblocks):
+        """
+        Append dask graph `dsk` with empty chunks on axis `axis` up to size `size`
+        """
+        rem = size - self.shape[axis]
+        if rem > 0:
+            j = numblocks[axis]
+            new_chunks = chunks[axis] + (rem,)
+            new_chunks = (new_chunks,)
+
+            dsk[(name, j)] = (compose(InnerVector, gb.Vector.new), self.dtype, rem)
+
+            return name, dsk, new_chunks, (len(new_chunks[0]),)
+
+        else:
+            return name, dsk, chunks, numblocks
+
     def resize(self, size, inplace=True, chunks="auto"):
+        if any_dOnions(self, size):
+            donion = DOnion.multi_access(
+                self._meta, Vector.resize, self, size, inplace=False, chunks=chunks
+            )
+            if inplace:
+                self.__init__(donion, meta=self._meta)
+                return
+            else:
+                return Vector(donion, meta=self._meta)
+
+        name, dsk, new_chunks, num_blocks = self._head(self._delayed, (size,))
+        name, dsk, new_chunks, num_blocks = self._add_tail(0, size, name, dsk, new_chunks, num_blocks)
+
+        graph = HighLevelGraph.from_collections(name, dsk, dependencies=[self._delayed])
+        x = da.core.Array(graph, name, new_chunks, meta=wrap_inner(self._meta))
+        x = x.rechunk(chunks=chunks)
+
+        if size >= self.size:
+            nvals = self.nvals
+        else:
+            nvals = None
+
+        if inplace:
+            self.__init__(x, nvals=nvals)
+        else:
+            return Vector(x, nvals=nvals)
+
+    def _resize_old(self, size, inplace=True, chunks="auto"):
         chunks = da.core.normalize_chunks(chunks, (size,), dtype=np.int64)
         output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 
@@ -268,6 +457,9 @@ class Vector(BaseType):
             self.__init__(x, nvals=nvals)
         else:
             return Vector(x, nvals=nvals)
+
+    def diag(self, k=0, dtype=None, chunks="auto"):
+        return self._diag(k=k, dtype=dtype, chunks=chunks)
 
     def _diag(self, k=0, dtype=None, chunks="auto"):
         nrows = self.size + abs(k)
@@ -316,29 +508,19 @@ class Vector(BaseType):
             self.resize(*self.shape, chunks=chunks)
         else:
             return self.resize(*self.shape, chunks=chunks, inplace=False)
-        # chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
-        # id = self.to_values()
-        # new = Vector.from_values(*id, *self.shape, trust_size=True, chunks=chunks)
-        # if inplace:
-        #     self.__init__(new._delayed)
-        # else:
-        #     return new
 
-    def __getitem__(self, index):
-        return AmbiguousAssignOrExtract(self, index)
+    def __getitem__(self, keys):
+        resolved_indexes = IndexerResolver(self, keys)
+        shape = resolved_indexes.shape
+        if not shape:
+            from .scalar import ScalarIndexExpr
+
+            return ScalarIndexExpr(self, resolved_indexes)
+        else:
+            return VectorIndexExpr(self, resolved_indexes, *shape)
 
     def __delitem__(self, keys):
         del Updater(self)[keys]
-
-        # del self._meta[index]
-        # delayed = self._optional_dup()
-        # TODO: normalize index
-        # delayed = delayed.map_blocks(
-        #     _delitem,
-        #     index,
-        #     dtype=np_dtype(self.dtype),
-        # )
-        # raise NotImplementedError()
 
     def __setitem__(self, index, delayed):
         Assigner(Updater(self), index).update(delayed)
@@ -358,14 +540,35 @@ class Vector(BaseType):
         return indices.flat
 
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
-        assert type(other) is Vector
-        meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
-        return GbDelayed(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
+        gb_types = (gb.Vector,)
+        other = self._expect_type(other, (Vector,) + gb_types, within="ewise_add", argname="other")
+
+        try:
+            meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                meta = self._meta.ewise_add(self._meta, op=op, require_monoid=require_monoid)
+            else:
+                raise
+
+        return VectorExpression(
+            self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta
+        )
 
     def ewise_mult(self, other, op=binary.times):
-        assert type(other) is Vector
+        gb_types = (gb.Vector,)
+        other = self._expect_type(other, (Vector,) + gb_types, within="ewise_mult", argname="other")
+
+        try:
+            meta = self._meta.ewise_mult(other._meta, op=op)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                meta = self._meta.ewise_add(self._meta, op=op)
+            else:
+                raise
+
         meta = self._meta.ewise_mult(other._meta, op=op)
-        return GbDelayed(self, "ewise_mult", other, op, meta=meta)
+        return VectorExpression(self, "ewise_mult", other, op, meta=meta)
 
     # Unofficial methods
     def inner(self, other, op=semiring.plus_times):
@@ -423,9 +626,21 @@ class Vector(BaseType):
     def vxm(self, other, op=semiring.plus_times):
         from .matrix import Matrix, TransposedMatrix
 
-        assert type(other) in (Matrix, TransposedMatrix)
-        meta = self._meta.vxm(other._meta, op=op)
-        return GbDelayed(self, "vxm", other, op, meta=meta)
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix) + gb_types, within="vxm", argname="other"
+        )
+        try:
+            meta = self._meta.vxm(other._meta, op=op)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                other_meta = gb.Matrix.new(
+                    dtype=other._meta.dtype, nrows=self._meta.size, ncols=other._meta.ncols
+                )
+                meta = self._meta.vxm(other_meta, op=op)
+            else:
+                raise
+        return VectorExpression(self, "vxm", other, op, meta=meta, size=other.ncols)
 
     def apply(self, op, right=None, *, left=None):
         from .scalar import Scalar
@@ -439,11 +654,13 @@ class Vector(BaseType):
             right_meta = right.dtype.np_type(0)
 
         meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
-        return GbDelayed(self, "apply", op, right, meta=meta, left=left)
+        return VectorExpression(self, "apply", op, right, meta=meta, left=left)
 
-    def reduce(self, op=monoid.plus):
+    def reduce(self, op=monoid.plus, *, allow_empty=True):
+        from .scalar import ScalarExpression
+
         meta = self._meta.reduce(op)
-        return GbDelayed(self, "reduce", op, meta=meta)
+        return ScalarExpression(self, "reduce", op, meta=meta, allow_empty=allow_empty)
 
     def build(self, indices, values, *, size=None, chunks=None, dup_op=None, clear=False):
         if clear:
@@ -461,11 +678,11 @@ class Vector(BaseType):
         x = self._optional_dup()
         if type(indices) is list:
             if np.max(indices) >= self._size:
-                raise gb.exceptions.IndexOutOfBound
+                raise IndexOutOfBound
             indices = da.core.from_array(np.array(indices), name="indices-" + tokenize(indices))
         else:
             if da.max(indices).compute() >= self._size:
-                raise gb.exceptions.IndexOutOfBound
+                raise IndexOutOfBound
         if type(values) is list:
             values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
 
@@ -504,67 +721,79 @@ class Vector(BaseType):
         # self.__init__(Vector.from_vector(vector)._delayed)
 
     def to_values(self, dtype=None, chunks="auto"):
+        dtype = lookup_dtype(self.dtype if dtype is None else dtype)
+        meta_i, meta_v = self._meta.to_values(dtype)
+
         x = self._delayed
+        if type(x) is DOnion:
+            meta = np.array([])
+            result = x.getattr(meta, "to_values", dtype=dtype, chunks=chunks)
+            indices = result.getattr(meta_i, "__getitem__", 0)
+            values = result.getattr(meta_v, "__getitem__", 1)
+            return indices, values
+
+        # get dask array of nvals for each chunk:
         nvals_array = da.core.blockwise(
             *(_nvals, "i"), *(x, "i"), adjust_chunks={"i": 1}, dtype=np.int64, meta=np.array([])
-        ).compute()
+        )
 
-        stops = np.cumsum(nvals_array)
-        starts = np.roll(stops, 1)
+        # accumulate dask array to get index-ranges of the output (indices, values)
+        stops_ = da.cumsum(nvals_array)  # BEWARE: this function rechunks!
+        starts = da.roll(stops_, 1)
+        starts = starts.copy() if starts.size == 1 else starts  # bug!!
         starts[0] = 0
-        nnz = stops[-1]
+        nnz = stops_[-1]
+        starts = starts.rechunk(1)
+        stops_ = stops_.rechunk(1)
 
-        starts = starts.reshape(nvals_array.shape)
-        starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
-        starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+        def _to_values(x, starts, stops_, dtype, chunks, nnz):
+            # the following changes the `.chunks` attribute of `starts` and `stops_` so that
+            # `blockwise()` can align them with `x`
+            starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+            stops_ = da.core.Array(stops_.dask, stops_.name, x.chunks, stops_.dtype, meta=x._meta)
 
-        stops = stops.reshape(nvals_array.shape)
-        stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
-        stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
+            chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
+            output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 
-        chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
-        output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
+            gb_dtype = lookup_dtype(dtype)
+            dtype_ = np_dtype(gb_dtype)
+            index_offsets = build_chunk_offsets_dask_array(x, 0, "index_offset-")
+            x = da.core.blockwise(
+                *(VectorTupleExtractor, "ij"),
+                *(output_ranges, "j"),
+                *(x, "i"),
+                *(index_offsets, "i"),
+                *(starts, "i"),
+                *(stops_, "i"),
+                gb_dtype=gb_dtype,
+                dtype=dtype_,
+                meta=np.array([[]]),
+            )
+            return da.reduction(
+                x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
+            )
 
-        dtype_ = np_dtype(self.dtype)
-        index_offsets = build_chunk_offsets_dask_array(x, 0, "index_offset-")
-        x = da.core.blockwise(
-            *(VectorTupleExtractor, "ij"),
-            *(output_ranges, "j"),
-            *(x, "i"),
-            *(index_offsets, "i"),
-            *(starts, "i"),
-            *(stops, "i"),
-            gb_dtype=dtype,
-            dtype=dtype_,
-            meta=np.array([[]]),
+        # since the size of the output (indices, values) depends on nnz, a delayed quantity,
+        # we need to return (indices, values) as DOnions (twice-delayed dask-arrays)
+        meta = np.array([])
+        iv_donion = DOnion.sprout(nnz, meta, _to_values, x, starts, stops_, dtype, chunks)
+
+        dtype_i = np_dtype(lookup_dtype(meta_i.dtype))
+        indices = iv_donion.deep_extract(
+            meta_i, da.map_blocks, _get_indices, dtype=dtype_i, meta=meta_i
         )
-        x = da.reduction(
-            x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
+        dtype_v = np_dtype(lookup_dtype(meta_v.dtype))
+        values = iv_donion.deep_extract(
+            meta_v, da.map_blocks, _get_values, dtype=dtype_v, meta=meta_v
         )
-
-        meta_i, meta_v = self._meta.to_values(dtype)
-        indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta_i)
-        values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta_v)
         return indices, values
 
-        # delayed = self._delayed
-        # dtype_ = np_dtype(self.dtype)
-        # meta_i, meta_v = self._meta.to_values(dtype)
-        # meta = np.array([])
-        # offsets = build_chunk_offsets_dask_array(delayed, 0, "index_offset-")
-        # x = da.map_blocks(
-        #    TupleExtractor, delayed, offsets, gb_dtype=dtype, dtype=dtype_, meta=meta
-        # )
-        # indices = da.map_blocks(_get_indices, x, dtype=meta_i.dtype, meta=meta)
-        # values = da.map_blocks(_get_values, x, dtype=meta_v.dtype, meta=meta)
-        # return indices, values
-
     def isequal(self, other, *, check_dtype=False):
-        other = self._expect_type(other, Vector, within="isequal", argname="other")
+        other = self._expect_type(other, (Vector, gb.Vector), within="isequal", argname="other")
         return super().isequal(other, check_dtype=check_dtype)
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
-        other = self._expect_type(other, Vector, within="isclose", argname="other")
+        other = self._expect_type(other, (Vector, gb.Vector), within="isclose", argname="other")
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
     def _delete_element(self, resolved_indexes):
@@ -592,6 +821,180 @@ class Vector(BaseType):
 Vector.ss = gb.utils.class_property(Vector.ss, ss)
 
 
+class VectorExpression(GbDelayed):
+    __slots__ = ()
+    output_type = gb.Vector
+    ndim = 1
+    _is_scalar = False
+
+    # automethods:
+    __and__ = gb.vector.VectorExpression.__and__
+    __bool__ = gb.vector.VectorExpression.__bool__
+    __or__ = gb.vector.VectorExpression.__or__
+    _get_value = _automethods._get_value
+    S = gb.vector.VectorExpression.S
+    V = gb.vector.VectorExpression.V
+    apply = gb.vector.VectorExpression.apply
+    ewise_add = gb.vector.VectorExpression.ewise_add
+    ewise_mult = gb.vector.VectorExpression.ewise_mult
+    isclose = gb.vector.VectorExpression.isclose
+    isequal = gb.vector.VectorExpression.isequal
+    nvals = gb.vector.VectorExpression.nvals
+    reduce = gb.vector.VectorExpression.reduce
+    shape = gb.vector.VectorExpression.shape
+    size = gb.vector.VectorExpression.size
+    vxm = gb.vector.VectorExpression.vxm
+
+    # infix sugar:
+    __abs__ = gb.vector.VectorExpression.__abs__
+    __add__ = gb.vector.VectorExpression.__add__
+    __divmod__ = gb.vector.VectorExpression.__divmod__
+    __eq__ = gb.vector.VectorExpression.__eq__
+    __floordiv__ = gb.vector.VectorExpression.__floordiv__
+    __ge__ = gb.vector.VectorExpression.__ge__
+    __gt__ = gb.vector.VectorExpression.__gt__
+    __invert__ = gb.vector.VectorExpression.__invert__
+    __le__ = gb.vector.VectorExpression.__le__
+    __lt__ = gb.vector.VectorExpression.__lt__
+    __mod__ = gb.vector.VectorExpression.__mod__
+    __mul__ = gb.vector.VectorExpression.__mul__
+    __ne__ = gb.vector.VectorExpression.__ne__
+    __neg__ = gb.vector.VectorExpression.__neg__
+    __pow__ = gb.vector.VectorExpression.__pow__
+    __radd__ = gb.vector.VectorExpression.__radd__
+    __rdivmod__ = gb.vector.VectorExpression.__rdivmod__
+    __rfloordiv__ = gb.vector.VectorExpression.__rfloordiv__
+    __rmod__ = gb.vector.VectorExpression.__rmod__
+    __rmul__ = gb.vector.VectorExpression.__rmul__
+    __rpow__ = gb.vector.VectorExpression.__rpow__
+    __rsub__ = gb.vector.VectorExpression.__rsub__
+    __rtruediv__ = gb.vector.VectorExpression.__rtruediv__
+    __rxor__ = gb.vector.VectorExpression.__rxor__
+    __sub__ = gb.vector.VectorExpression.__sub__
+    __truediv__ = gb.vector.VectorExpression.__truediv__
+    __xor__ = gb.vector.VectorExpression.__xor__
+
+    # bad sugar:
+    __itruediv__ = gb.vector.VectorExpression.__itruediv__
+    __imul__ = gb.vector.VectorExpression.__imul__
+    __imatmul__ = gb.vector.VectorExpression.__imatmul__
+    __iadd__ = gb.vector.VectorExpression.__iadd__
+    __iand__ = gb.vector.VectorExpression.__iand__
+    __ipow__ = gb.vector.VectorExpression.__ipow__
+    __imod__ = gb.vector.VectorExpression.__imod__
+    __isub__ = gb.vector.VectorExpression.__isub__
+    __ixor__ = gb.vector.VectorExpression.__ixor__
+    __ifloordiv__ = gb.vector.VectorExpression.__ifloordiv__
+    __ior__ = gb.vector.VectorExpression.__ior__
+
+    def __init__(
+        self,
+        parent,
+        method_name,
+        *args,
+        meta=None,
+        size=None,
+        **kwargs,
+    ):
+        super().__init__(
+            parent,
+            method_name,
+            *args,
+            meta=meta,
+            **kwargs,
+        )
+        if size is None:
+            size = self.parent._size
+        self._size = size
+
+    # def __getattr__(self, item):
+    #     return getattr(gb.vector.VectorExpression, item)
+
+    # def construct_output(self, dtype=None, *, name=None):
+    #     if dtype is None:
+    #         dtype = self.dtype
+    #     size = 0 if self._size.is_dOnion else self._size
+    #     return Vector.new(dtype, size, name=name)
+
+
+class VectorIndexExpr(AmbiguousAssignOrExtract):
+    __slots__ = "_size"
+    ndim = 1
+    output_type = gb.Vector
+
+    def __init__(self, parent, resolved_indexes, size):
+        super().__init__(parent, resolved_indexes)
+        self._size = size
+
+    @property
+    def size(self):
+        return self._size
+
+    @property
+    def shape(self):
+        return (self._size,)
+
+    # Begin auto-generated code: Vector
+    _get_value = _automethods._get_value
+    S = gb.vector.VectorIndexExpr.S
+    V = gb.vector.VectorIndexExpr.V
+    __and__ = gb.vector.VectorIndexExpr.__and__
+    __contains__ = gb.vector.VectorIndexExpr.__contains__
+    __or__ = gb.vector.VectorIndexExpr.__or__
+    apply = gb.vector.VectorIndexExpr.apply
+    ewise_add = gb.vector.VectorIndexExpr.ewise_add
+    ewise_mult = gb.vector.VectorIndexExpr.ewise_mult
+    isclose = gb.vector.VectorIndexExpr.isclose
+    isequal = gb.vector.VectorIndexExpr.isequal
+    nvals = gb.vector.VectorIndexExpr.nvals
+    reduce = gb.vector.VectorIndexExpr.reduce
+    vxm = gb.vector.VectorIndexExpr.vxm
+
+    # infix sugar:
+    __abs__ = gb.vector.VectorIndexExpr.__abs__
+    __add__ = gb.vector.VectorIndexExpr.__add__
+    __divmod__ = gb.vector.VectorIndexExpr.__divmod__
+    __eq__ = gb.vector.VectorIndexExpr.__eq__
+    __floordiv__ = gb.vector.VectorIndexExpr.__floordiv__
+    __ge__ = gb.vector.VectorIndexExpr.__ge__
+    __gt__ = gb.vector.VectorIndexExpr.__gt__
+    __invert__ = gb.vector.VectorIndexExpr.__invert__
+    __le__ = gb.vector.VectorIndexExpr.__le__
+    __lt__ = gb.vector.VectorIndexExpr.__lt__
+    __mod__ = gb.vector.VectorIndexExpr.__mod__
+    __mul__ = gb.vector.VectorIndexExpr.__mul__
+    __ne__ = gb.vector.VectorIndexExpr.__ne__
+    __neg__ = gb.vector.VectorIndexExpr.__neg__
+    __pow__ = gb.vector.VectorIndexExpr.__pow__
+    __radd__ = gb.vector.VectorIndexExpr.__radd__
+    __rdivmod__ = gb.vector.VectorIndexExpr.__rdivmod__
+    __rfloordiv__ = gb.vector.VectorIndexExpr.__rfloordiv__
+    __rmod__ = gb.vector.VectorIndexExpr.__rmod__
+    __rmul__ = gb.vector.VectorIndexExpr.__rmul__
+    __rpow__ = gb.vector.VectorIndexExpr.__rpow__
+    __rsub__ = gb.vector.VectorIndexExpr.__rsub__
+    __rtruediv__ = gb.vector.VectorIndexExpr.__rtruediv__
+    __rxor__ = gb.vector.VectorIndexExpr.__rxor__
+    __sub__ = gb.vector.VectorIndexExpr.__sub__
+    __truediv__ = gb.vector.VectorIndexExpr.__truediv__
+    __xor__ = gb.vector.VectorIndexExpr.__xor__
+
+    # bad sugar:
+    __array__ = gb.vector.VectorIndexExpr.__array__
+    __bool__ = gb.vector.VectorIndexExpr.__bool__
+    __iadd__ = gb.vector.VectorIndexExpr.__iadd__
+    __iand__ = gb.vector.VectorIndexExpr.__iand__
+    __ifloordiv__ = gb.vector.VectorIndexExpr.__ifloordiv__
+    __imatmul__ = gb.vector.VectorIndexExpr.__imatmul__
+    __imod__ = gb.vector.VectorIndexExpr.__imod__
+    __imul__ = gb.vector.VectorIndexExpr.__imul__
+    __ior__ = gb.vector.VectorIndexExpr.__ior__
+    __ipow__ = gb.vector.VectorIndexExpr.__ipow__
+    __isub__ = gb.vector.VectorIndexExpr.__isub__
+    __itruediv__ = gb.vector.VectorIndexExpr.__itruediv__
+    __ixor__ = gb.vector.VectorIndexExpr.__ixor__
+
+
 def _chunk_diag(
     inner_vector,
     input_range,
@@ -611,9 +1014,6 @@ def _chunk_diag(
     The returned matrix is either empty or contains a piece of
     the k-diagonal given by inner_vector
     """
-    # This function creates a new matrix chunk with dimensions determined
-    # by the input k-diagonal vector chunk.  The matrix chunk may or may
-    # not include the k-diagonal chunk
     vector = inner_vector.value
     vec_chunk = input_range[0]
     rows = row_range[0]
@@ -747,14 +1147,23 @@ def _build_1D_chunk(inner_vector, out_index_range, fragments, dup_op=None):
     return InnerVector(inner_vector.value)
 
 
-def _from_values1D(fragments, index_range, gb_dtype=None):
+def _from_values1D(fragments, index_range, dup_op=None, gb_dtype=None):
     inds = np.concatenate([inds for (inds, _) in fragments])
     vals = np.concatenate([vals for (_, vals) in fragments])
     size = index_range[0].stop - index_range[0].start
-    return InnerVector(gb.Vector.from_values(inds, vals, size=size, dtype=gb_dtype))
+    if inds.size == 0:
+        return InnerVector(gb.Vector.new(gb_dtype, size=size))
+    return InnerVector(gb.Vector.from_values(inds, vals, size=size, dup_op=dup_op, dtype=gb_dtype))
 
 
-def _pick1D(indices, values, index_range):
+def _pick1D(indices, values, index_range, size):
+    # validate indices:
+    indices = np.where(indices < 0, indices + size, indices)
+    bad_indices = (indices < 0) | (size <= indices)
+    if np.any(bad_indices):
+        raise IndexOutOfBound
+
+    # filter into chunk:
     index_range = index_range[0]
     indices_in = (index_range.start <= indices) & (indices < index_range.stop)
     indices = indices[indices_in] - index_range.start
@@ -823,4 +1232,6 @@ def _concat_vector(seq, axis=0):
 
 
 gb.utils._output_types[Vector] = gb.Vector
+gb.utils._output_types[VectorExpression] = gb.Vector
+gb.utils._output_types[VectorIndexExpr] = gb.Vector
 from .matrix import InnerMatrix  # noqa isort:skip
