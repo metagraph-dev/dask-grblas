@@ -2,14 +2,14 @@
 # numpy unary, binary, monoid, and semiring objects.
 import itertools
 
-import grblas
-import grblas.binary.numpy as npbinary
-import grblas.monoid.numpy as npmonoid
-import grblas.semiring.numpy as npsemiring
-import grblas.unary.numpy as npunary
+import graphblas
+import graphblas.binary.numpy as npbinary
+import graphblas.monoid.numpy as npmonoid
+import graphblas.semiring.numpy as npsemiring
+import graphblas.unary.numpy as npunary
 import numpy as np
 import pytest
-from grblas.dtypes import _supports_complex
+from graphblas.dtypes import _supports_complex
 
 from dask_grblas import Vector
 
@@ -27,15 +27,15 @@ def test_numpyops_dir():
 def test_bool_doesnt_get_too_large():
     a = Vector.from_values([0, 1, 2, 3], [True, False, True, False])
     b = Vector.from_values([0, 1, 2, 3], [True, True, False, False])
-    if grblas.config["mapnumpy"]:
+    if graphblas.config["mapnumpy"]:
         with pytest.raises(KeyError, match="plus does not work with BOOL"):
-            z = a.ewise_mult(b, grblas.monoid.numpy.add).new()
+            z = a.ewise_mult(b, graphblas.monoid.numpy.add).new()
     else:
-        z = a.ewise_mult(b, grblas.monoid.numpy.add).new()
+        z = a.ewise_mult(b, graphblas.monoid.numpy.add).new()
         x, y = z.to_values()
         np.testing.assert_array_equal(y, (True, True, True, False))
 
-    op = grblas.operator.UnaryOp.register_anonymous(lambda x: np.add(x, x))
+    op = graphblas.core.operator.UnaryOp.register_anonymous(lambda x: np.add(x, x))
     z = a.apply(op).new()
     x, y = z.to_values()
     np.testing.assert_array_equal(y, (True, False, True, False))
@@ -55,7 +55,7 @@ def test_npunary():
             [Vector.from_values(L, L, dtype="FC64"), np.array(L, dtype=np.complex128)],
         )
     blacklist = {"BOOL": {"negative"}, "FC64": {"ceil", "floor", "trunc"}}
-    isclose = grblas.binary.isclose(1e-7, 0)
+    isclose = graphblas.binary.isclose(1e-7, 0)
     for gb_input, np_input in data:
         for unary_name in sorted(npunary._unary_names):
             op = getattr(npunary, unary_name)
@@ -86,8 +86,8 @@ def test_npunary():
             assert gb_result.nvals == np_result.size
             match = gb_result.ewise_mult(np_result, compare_op).new()
             if gb_result.dtype.name.startswith("F"):
-                match(accum=grblas.binary.lor) << gb_result.apply(npunary.isnan)
-            compare = match.reduce(grblas.monoid.land).new()
+                match(accum=graphblas.binary.lor) << gb_result.apply(npunary.isnan)
+            compare = match.reduce(graphblas.monoid.land).new()
             if not compare:  # pragma: no cover
                 print(unary_name, gb_input.dtype)
                 print(compute(gb_result))
@@ -134,7 +134,7 @@ def test_npbinary():
         "FP64": {"floor_divide"},  # numba/numpy difference for 1.0 / 0.0
         "BOOL": {"subtract"},  # not supported by numpy
     }
-    isclose = grblas.binary.isclose(1e-7, 0)
+    isclose = graphblas.binary.isclose(1e-7, 0)
     for (gb_left, gb_right), (np_left, np_right) in data:
         for binary_name in sorted(npbinary._binary_names):
             op = getattr(npbinary, binary_name)
@@ -158,11 +158,11 @@ def test_npbinary():
             assert gb_result.nvals == np_result.size
             match = gb_result.ewise_mult(np_result, compare_op).new()
             if gb_result.dtype.name.startswith("F"):
-                match(accum=grblas.binary.lor) << gb_result.apply(npunary.isnan)
+                match(accum=graphblas.binary.lor) << gb_result.apply(npunary.isnan)
             if gb_result.dtype.name.startswith("FC"):
                 # Divide by 0j sometimes result in different behavior, such as `nan` or `(inf+0j)`
-                match(accum=grblas.binary.lor) << gb_result.apply(npunary.isinf)
-            compare = match.reduce(grblas.monoid.land).new()
+                match(accum=graphblas.binary.lor) << gb_result.apply(npunary.isinf)
+            compare = match.reduce(graphblas.monoid.land).new()
             if not compare:  # pragma: no cover
                 print(binary_name)
                 print(compute(gb_left))
@@ -197,7 +197,7 @@ def test_npmonoid():
             [np.array([True, False, True, False]), np.array([True, True, False, False])],
         ],
     ]
-    # Complex monoids not working yet (they segfault upon creation in grblas.operators)
+    # Complex monoids not working yet (they segfault upon creation in graphblas.operators)
     # if _supports_complex:  # pragma: no branch
     #     data.append(
     #         [
@@ -232,8 +232,8 @@ def test_npmonoid():
             assert gb_result.nvals == np_result.size
             match = gb_result.ewise_mult(np_result, npbinary.equal).new()
             if gb_result.dtype.name.startswith("F"):
-                match(accum=grblas.binary.lor) << gb_result.apply(npunary.isnan)
-            compare = match.reduce(grblas.monoid.land).new()
+                match(accum=graphblas.binary.lor) << gb_result.apply(npunary.isnan)
+            compare = match.reduce(graphblas.monoid.land).new()
             if not compare:  # pragma: no cover
                 print(binary_name, gb_left.dtype)
                 print(compute(gb_result))
@@ -263,9 +263,9 @@ def test_npsemiring():
         name = monoid.name.split(".")[-1] + "_" + binary.name.split(".")[-1]
         if name in {"eq_pow", "eq_minus"}:
             continue
-        semiring = grblas.operator.Semiring.register_anonymous(monoid, binary, name)
+        semiring = graphblas.core.operator.Semiring.register_anonymous(monoid, binary, name)
         if len(semiring.types) == 0:
-            if not grblas.config["mapnumpy"] and "logical" not in name:
+            if not graphblas.config["mapnumpy"] and "logical" not in name:
                 assert not hasattr(npsemiring, semiring.name), name
         else:
             assert hasattr(npsemiring, f"{monoid_name}_{binary_name}"), (name, semiring.name)

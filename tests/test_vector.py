@@ -1,8 +1,8 @@
 import inspect
 
-import grblas as gb
+import graphblas as gb
 import pytest
-from grblas import dtypes
+from graphblas import dtypes
 from pytest import raises
 import dask.array as da
 
@@ -1058,7 +1058,7 @@ def test_subassign(vs, ws, vms, sms):
         def f2(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind]() << y
@@ -1067,7 +1067,7 @@ def test_subassign(vs, ws, vms, sms):
         def g1(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](mask=m) << y
@@ -1076,7 +1076,7 @@ def test_subassign(vs, ws, vms, sms):
         def g2(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](accum=gb.binary.plus) << y
@@ -1085,7 +1085,7 @@ def test_subassign(vs, ws, vms, sms):
         def g3(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](replace=True) << y
@@ -1094,7 +1094,7 @@ def test_subassign(vs, ws, vms, sms):
         def g4(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](replace=False) << y
@@ -1103,7 +1103,7 @@ def test_subassign(vs, ws, vms, sms):
         def h1(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](accum=gb.binary.plus, replace=True) << y
@@ -1112,7 +1112,7 @@ def test_subassign(vs, ws, vms, sms):
         def h2(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](accum=gb.binary.plus, replace=False) << y
@@ -1121,7 +1121,7 @@ def test_subassign(vs, ws, vms, sms):
         def h3(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](mask=m, replace=test_replace_true) << y
@@ -1130,7 +1130,7 @@ def test_subassign(vs, ws, vms, sms):
         def h4(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](mask=m, replace=False) << y
@@ -1139,7 +1139,7 @@ def test_subassign(vs, ws, vms, sms):
         def h5(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](mask=m, accum=gb.binary.plus) << y
@@ -1148,7 +1148,7 @@ def test_subassign(vs, ws, vms, sms):
         def i1(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](mask=m, accum=gb.binary.plus, replace=test_replace_true) << y
@@ -1157,7 +1157,7 @@ def test_subassign(vs, ws, vms, sms):
         def i2(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind](mask=m, accum=gb.binary.plus, replace=False) << y
@@ -1340,7 +1340,7 @@ def test_assign(vs, ws, vms, sms):
         def f1(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x[ind] << y
@@ -1349,7 +1349,7 @@ def test_assign(vs, ws, vms, sms):
         def f2(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x()[ind] << y
@@ -1358,7 +1358,7 @@ def test_assign(vs, ws, vms, sms):
         def g1(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(mask=m)[ind] << y
@@ -1367,7 +1367,7 @@ def test_assign(vs, ws, vms, sms):
         def g2(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(accum=gb.binary.plus)[ind] << y
@@ -1376,7 +1376,7 @@ def test_assign(vs, ws, vms, sms):
         def g3(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(replace=True)[ind] << y
@@ -1385,7 +1385,7 @@ def test_assign(vs, ws, vms, sms):
         def g4(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(replace=False)[ind] << y
@@ -1394,7 +1394,7 @@ def test_assign(vs, ws, vms, sms):
         def h1(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(accum=gb.binary.plus, replace=True)[ind] << y
@@ -1403,7 +1403,7 @@ def test_assign(vs, ws, vms, sms):
         def h2(x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(accum=gb.binary.plus, replace=False)[ind] << y
@@ -1412,7 +1412,7 @@ def test_assign(vs, ws, vms, sms):
         def h3(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(mask=m, replace=test_replace_true)[ind] << y
@@ -1421,7 +1421,7 @@ def test_assign(vs, ws, vms, sms):
         def h4(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(mask=m, replace=False)[ind] << y
@@ -1430,7 +1430,7 @@ def test_assign(vs, ws, vms, sms):
         def h5(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(mask=m, accum=gb.binary.plus)[ind] << y
@@ -1439,7 +1439,7 @@ def test_assign(vs, ws, vms, sms):
         def i1(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(mask=m, accum=gb.binary.plus, replace=test_replace_true)[ind] << y
@@ -1448,7 +1448,7 @@ def test_assign(vs, ws, vms, sms):
         def i2(m, x, y):
             ind = (
                 index.compute()
-                if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+                if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
                 else index
             )
             x(mask=m, accum=gb.binary.plus, replace=False)[ind] << y
@@ -1630,7 +1630,7 @@ def test_reduce_assign(vs, ws, vms, sms):
     ]:
 
         def f1(x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x[ind] << y
             else:
@@ -1639,7 +1639,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def g1(m, x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(mask=m)[ind] << y
             else:
@@ -1648,7 +1648,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def g2(x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(accum=gb.binary.plus)[ind] << y
             else:
@@ -1657,7 +1657,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def g3(x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(replace=True)[ind] << y
             else:
@@ -1666,7 +1666,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def g4(x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(replace=False)[ind] << y
             else:
@@ -1675,7 +1675,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def h1(x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(accum=gb.binary.plus, replace=True)[ind] << y
             else:
@@ -1684,7 +1684,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def h2(x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(accum=gb.binary.plus, replace=False)[ind] << y
             else:
@@ -1695,7 +1695,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def h3(m, x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(mask=m, replace=True)[ind] << y
             else:
@@ -1704,7 +1704,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def h4(m, x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(mask=m, replace=False)[ind] << y
             else:
@@ -1713,7 +1713,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def h5(m, x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(mask=m, accum=gb.binary.plus)[ind] << y
             else:
@@ -1722,7 +1722,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def i1(m, x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(mask=m, accum=gb.binary.plus, replace=True)[ind] << y
             else:
@@ -1733,7 +1733,7 @@ def test_reduce_assign(vs, ws, vms, sms):
             return x
 
         def i2(m, x, y):
-            if isinstance(x, gb.base.BaseType):
+            if isinstance(x, gb.core.base.BaseType):
                 ind = index.compute() if type(index) is da.core.Array else index
                 x(mask=m, accum=gb.binary.plus, replace=False)[ind] << y
             else:

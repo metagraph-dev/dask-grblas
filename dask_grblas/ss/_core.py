@@ -1,4 +1,4 @@
-from grblas.base import _expect_type
+from graphblas.core.base import _expect_type
 from ..matrix import Matrix, TransposedMatrix
 from ..scalar import Scalar
 from ..vector import Vector

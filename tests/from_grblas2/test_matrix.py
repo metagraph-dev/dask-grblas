@@ -5,11 +5,11 @@ import sys
 import weakref
 
 import dask_grblas
-import grblas
+import graphblas
 import numpy as np
 import pytest
-from grblas import agg, binary, dtypes, monoid, semiring, unary
-from grblas.exceptions import (
+from graphblas import agg, binary, dtypes, monoid, semiring, unary
+from graphblas.exceptions import (
     DimensionMismatch,
     EmptyObject,
     IndexOutOfBound,
@@ -1620,12 +1620,12 @@ def test_reduce_row_udf(A, A_chunks):
         A = A_.dup()
         A.rechunk(chunks=chunks, inplace=True)
         result = Vector.from_values([0, 1, 2, 3, 4, 5, 6], [5, 12, 1, 6, 7, 1, 15])
-        binop = grblas.operator.BinaryOp.register_anonymous(lambda x, y: x + y)
+        binop = graphblas.core.operator.BinaryOp.register_anonymous(lambda x, y: x + y)
         with pytest.raises(NotImplementedException):
             # Although allowed by the spec, SuiteSparse doesn't like user-defined binarops here
             A.reduce_rowwise(binop).new()
         # If the user creates a monoid from the binop, then we can use the monoid instead
-        monoid = grblas.operator.Monoid.register_anonymous(binop, 0)
+        monoid = graphblas.core.operator.Monoid.register_anonymous(binop, 0)
         w = A.reduce_rowwise(binop).new()
         assert w.isequal(result)
         w2 = A.reduce_rowwise(monoid).new()
@@ -1931,7 +1931,7 @@ def test_del(capsys):
     # A has `gb_obj` of NULL
     A = Matrix.from_values([0, 1], [0, 1], [0, 1])
     gb_obj = A.gb_obj
-    A.gb_obj = grblas.ffi.NULL
+    A.gb_obj = graphblas.core.ffi.NULL
     del A
     # let's clean up so we don't have a memory leak
     A2 = Matrix.__new__(Matrix)
@@ -2714,7 +2714,7 @@ def test_diag(A, A_chunks, params):
 
 
 def test_normalize_chunks():
-    from grblas._ss.matrix import normalize_chunks
+    from graphblas._ss.matrix import normalize_chunks
 
     shape = (20, 20)
     assert normalize_chunks(10, shape) == [[10, 10], [10, 10]]
@@ -2778,7 +2778,7 @@ def test_concat(A, A_chunks, v):
     for chunks in A_chunks:
         A = A_.dup()
         A.rechunk(chunks=chunks, inplace=True)
-        B1 = grblas.ss.concat([[A, A]], dtype=float)
+        B1 = graphblas.ss.concat([[A, A]], dtype=float)
         assert B1.dtype == "FP64"
         expected = Matrix.new(A.dtype, nrows=A.nrows, ncols=2 * A.ncols)
         expected[:, : A.ncols] = A
@@ -2793,46 +2793,46 @@ def test_concat(A, A_chunks, v):
         assert B2.isequal(expected)
 
         tiles = A.ss.split([4, 3])
-        A2 = grblas.ss.concat(tiles)
+        A2 = graphblas.ss.concat(tiles)
         assert A2.isequal(A)
 
         with pytest.raises(TypeError, match="tiles argument must be list or tuple"):
-            grblas.ss.concat(1)
+            graphblas.ss.concat(1)
         # with pytest.raises(TypeError, match="Each tile must be a Matrix"):
-        assert grblas.ss.concat([[A.T]]).isequal(A.T)
+        assert graphblas.ss.concat([[A.T]]).isequal(A.T)
         with pytest.raises(TypeError, match="tiles must be lists or tuples"):
-            grblas.ss.concat([A])
+            graphblas.ss.concat([A])
 
         with pytest.raises(ValueError, match="tiles argument must not be empty"):
-            grblas.ss.concat([])
+            graphblas.ss.concat([])
         with pytest.raises(ValueError, match="tiles must not be empty"):
-            grblas.ss.concat([[]])
+            graphblas.ss.concat([[]])
         with pytest.raises(ValueError, match="tiles must all be the same length"):
-            grblas.ss.concat([[A], [A, A]])
+            graphblas.ss.concat([[A], [A, A]])
 
         # Treat vectors like Nx1 matrices
-        B3 = grblas.ss.concat([[v, v]])
+        B3 = graphblas.ss.concat([[v, v]])
         expected = Matrix.new(v.dtype, nrows=v.size, ncols=2)
         expected[:, 0] = v
         expected[:, 1] = v
         assert B3.isequal(expected)
 
-        B4 = grblas.ss.concat([[v], [v]])
+        B4 = graphblas.ss.concat([[v], [v]])
         expected = Matrix.new(v.dtype, nrows=2 * v.size, ncols=1)
         expected[: v.size, 0] = v
         expected[v.size :, 0] = v
         assert B4.isequal(expected)
 
-        B5 = grblas.ss.concat([[A, v]])
+        B5 = graphblas.ss.concat([[A, v]])
         expected = Matrix.new(v.dtype, nrows=v.size, ncols=A.ncols + 1)
         expected[:, : A.ncols] = A
         expected[:, A.ncols] = v
         assert B5.isequal(expected)
 
         with pytest.raises(TypeError, match=""):
-            grblas.ss.concat([v, [v]])
+            graphblas.ss.concat([v, [v]])
         with pytest.raises(TypeError):
-            grblas.ss.concat([[v], v])
+            graphblas.ss.concat([[v], v])
 
 
 @pytest.mark.xfail("'Needs investigation'", strict=True)

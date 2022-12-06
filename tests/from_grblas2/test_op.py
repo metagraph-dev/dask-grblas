@@ -1,11 +1,12 @@
 import itertools
 
-import grblas as gb
+import graphblas as gb
 import numpy as np
 import pytest
-from grblas import agg, binary, dtypes, lib, monoid, op, operator, semiring, unary
-from grblas.exceptions import DomainMismatch, UdfParseError
-from grblas.operator import BinaryOp, Monoid, Semiring, UnaryOp, get_semiring
+from graphblas import agg, binary, dtypes, monoid, op, semiring, unary
+from graphblas.exceptions import DomainMismatch, UdfParseError
+from graphblas.core import lib, operator
+from graphblas.core.operator import BinaryOp, Monoid, Semiring, UnaryOp, get_semiring
 
 from dask_grblas import Matrix, Vector  # isort:skip
 
@@ -589,7 +590,7 @@ def test_nested_names():
 
     UnaryOp.register_new("incrementers.plus_four", plus_four)
     assert hasattr(unary.incrementers, "plus_four")
-    assert hasattr(op.incrementers, "plus_four")  # Also save it to `grblas.op`!
+    assert hasattr(op.incrementers, "plus_four")  # Also save it to `graphblas.op`!
     v << v.apply(unary.incrementers.plus_four)  # this is in addition to the plus_three earlier
     result2 = Vector.from_values([0, 1, 3], [8, 9, 3], dtype=dtypes.INT32)
     assert v.isequal(result2), v
@@ -620,7 +621,7 @@ def test_op_namespace():
     assert len(dir(op.numpy)) > 500
 
     with pytest.raises(
-        AttributeError, match="module 'grblas.op.numpy' has no attribute 'bad_attr'"
+        AttributeError, match="module 'graphblas.op.numpy' has no attribute 'bad_attr'"
     ):
         op.numpy.bad_attr
 

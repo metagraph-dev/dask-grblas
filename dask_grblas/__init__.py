@@ -1,5 +1,5 @@
-import grblas.mask
-from grblas import replace  # noqa
+import graphblas.core.mask
+from graphblas import replace  # noqa
 
 from . import _version, mask, scalar, utils, vector, ss  # noqa
 from .construction import column_stack, concat_vectors, row_stack  # noqa
@@ -10,13 +10,13 @@ from .vector import Vector
 from . import matrix  # isort:skip (here to avoid cyclic imports)
 
 for dgb_type, inner_type, gb_type in [
-    (mask.StructuralMask, None, grblas.mask.StructuralMask),
-    (mask.ValueMask, None, grblas.mask.ValueMask),
-    (mask.ComplementedStructuralMask, None, grblas.mask.ComplementedStructuralMask),
-    (mask.ComplementedValueMask, None, grblas.mask.ComplementedValueMask),
-    (Scalar, scalar.InnerScalar, grblas.Scalar),
-    (Vector, vector.InnerVector, grblas.Vector),
-    (Matrix, matrix.InnerMatrix, grblas.Matrix),
+    (mask.StructuralMask, None, graphblas.core.mask.StructuralMask),
+    (mask.ValueMask, None, graphblas.core.mask.ValueMask),
+    (mask.ComplementedStructuralMask, None, graphblas.core.mask.ComplementedStructuralMask),
+    (mask.ComplementedValueMask, None, graphblas.core.mask.ComplementedValueMask),
+    (Scalar, scalar.InnerScalar, graphblas.Scalar),
+    (Vector, vector.InnerVector, graphblas.Vector),
+    (Matrix, matrix.InnerMatrix, graphblas.Matrix),
 ]:
     utils._grblas_types[dgb_type] = gb_type
     utils._grblas_types[gb_type] = gb_type

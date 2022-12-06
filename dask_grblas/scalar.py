@@ -1,5 +1,5 @@
 import dask.array as da
-import grblas as gb
+import graphblas as gb
 import numpy as np
 from dask.delayed import Delayed, delayed
 
@@ -11,7 +11,7 @@ from .utils import get_meta, np_dtype
 def from_delayed(cls, scalar, dtype, *, name=None):
     if not isinstance(scalar, Delayed):
         raise TypeError(
-            "Value is not a dask delayed object.  Please use dask.delayed to create a grblas.Scalar"
+            "Value is not a dask delayed object.  Please use dask.delayed to create a graphblas.Scalar"
         )
     inner = delayed(InnerScalar)(scalar)
     value = da.from_delayed(inner, (), dtype=np_dtype(dtype), name=name)
@@ -36,7 +36,7 @@ def from_value(cls, scalar, dtype=None, *, name=None):
 
 
 def new(cls, dtype, *, name=None):
-    scalar = gb.Scalar.new(dtype)
+    scalar = gb.Scalar(dtype)
     return cls.from_delayed(delayed(scalar), scalar.dtype, name=name)
 
 
@@ -44,9 +44,9 @@ class InnerScalar(InnerBaseType):
     ndim = 0
     shape = ()
 
-    def __init__(self, grblas_scalar):
-        self.value = grblas_scalar
-        self.dtype = np_dtype(grblas_scalar.dtype)
+    def __init__(self, graphblas_scalar):
+        self.value = graphblas_scalar
+        self.dtype = np_dtype(graphblas_scalar.dtype)
 
 
 class Scalar(BaseType):
@@ -71,7 +71,7 @@ class Scalar(BaseType):
         assert delayed.ndim == 0
         self._delayed = delayed
         if meta is None:
-            meta = gb.Scalar.new(delayed.dtype)
+            meta = gb.Scalar(delayed.dtype)
         self._meta = meta
         self.dtype = meta.dtype
 
@@ -187,7 +187,7 @@ class Scalar(BaseType):
         """
         from .vector import Vector
 
-        rv = Vector.new(self.dtype, size=1)
+        rv = Vector(self.dtype, size=1)
         if not self.is_empty:
             rv[0] = self
         return rv
@@ -248,5 +248,5 @@ def _invert(x):
     return InnerScalar(~x.value)
 
 
-gb.utils._output_types[Scalar] = gb.Scalar
-gb.utils._output_types[PythonScalar] = gb.Scalar
+gb.core.utils._output_types[Scalar] = gb.Scalar
+gb.core.utils._output_types[PythonScalar] = gb.Scalar

@@ -1,14 +1,15 @@
 from numbers import Number
 import dask.array as da
-import grblas as gb
+import graphblas as gb
 import numpy as np
-from grblas.operator import UNKNOWN_OPCLASS, find_opclass, get_typed_op
+import graphblas.core.base
+from graphblas.core.operator import UNKNOWN_OPCLASS, find_opclass, get_typed_op
 
 from . import replace as replace_singleton
 from .mask import Mask
 from .utils import get_grblas_type, get_meta, np_dtype, wrap_inner
 
-_expect_type = gb.base._expect_type
+_expect_type = gb.core.base._expect_type
 
 
 def _check_mask(mask, output=None):
@@ -113,7 +114,7 @@ class BaseType:
         if mask is not None:
             if not isinstance(mask, Mask):
                 self._meta.dup(dtype=dtype, mask=mask, name=name)  # should raise
-                raise TypeError("Use dask_grblas mask, not a mask from grblas")
+                raise TypeError("Use dask_grblas mask, not a mask from graphblas")
             meta = self._meta.dup(dtype=dtype, mask=mask._meta, name=name)
         else:
             meta = self._meta.dup(dtype=dtype, name=name)
@@ -176,16 +177,16 @@ class BaseType:
                 accum = accum.binaryop
         return Updater(self, mask=mask, accum=accum, replace=replace, input_mask=input_mask)
 
-    __array__ = gb.base.BaseType.__array__
-    __bool__ = gb.base.BaseType.__bool__
+    __array__ = gb.core.base.BaseType.__array__
+    __bool__ = gb.core.base.BaseType.__bool__
     # TODO: get these to work so we can do things like `gb.op.plus(v | w)`
-    __or__ = gb.base.BaseType.__or__
-    __ror__ = gb.base.BaseType.__ror__
-    __and__ = gb.base.BaseType.__and__
-    __rand__ = gb.base.BaseType.__rand__
-    __matmul__ = gb.base.BaseType.__matmul__
-    __rmatmul__ = gb.base.BaseType.__rmatmul__
-    __imatmul__ = gb.base.BaseType.__imatmul__
+    __or__ = gb.core.base.BaseType.__or__
+    __ror__ = gb.core.base.BaseType.__ror__
+    __and__ = gb.core.base.BaseType.__and__
+    __rand__ = gb.core.base.BaseType.__rand__
+    __matmul__ = gb.core.base.BaseType.__matmul__
+    __rmatmul__ = gb.core.base.BaseType.__rmatmul__
+    __imatmul__ = gb.core.base.BaseType.__imatmul__
 
     def _optional_dup(self):
         # TODO: maybe try to create an optimization pass that remove these if they are unnecessary

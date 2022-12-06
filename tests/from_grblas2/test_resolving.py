@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from grblas import binary, dtypes, replace, unary
+from graphblas import binary, dtypes, replace, unary
 
 from dask_grblas.expr import Updater
 
