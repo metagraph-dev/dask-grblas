@@ -709,9 +709,7 @@ def _resize(output_range, inner_vector, index_range, old_size, new_size):
             return InnerVector(inner_vector.value[start:stop].new())
     elif index_range[0].stop == old_size and old_size <= output_range[0].start:
         return InnerVector(
-            gb.Vector(
-                dtype=inner_vector.dtype, size=output_range[0].stop - output_range[0].start
-            )
+            gb.Vector(dtype=inner_vector.dtype, size=output_range[0].stop - output_range[0].start)
         )
     else:
         return InnerVector(gb.Vector(inner_vector.dtype, size=0))

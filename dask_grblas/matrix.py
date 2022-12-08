@@ -1134,9 +1134,7 @@ def _concat_matrix(seq, axis=0):
         if len(ncols) == 1:
             (ncols,) = ncols
             seq = [
-                InnerMatrix(
-                    gb.Matrix(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols)
-                )
+                InnerMatrix(gb.Matrix(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols))
                 if item.value.ncols == 0
                 else item
                 for item in seq
@@ -1149,9 +1147,7 @@ def _concat_matrix(seq, axis=0):
         if len(nrows) == 1:
             (nrows,) = nrows
             seq = [
-                InnerMatrix(
-                    gb.Matrix(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols)
-                )
+                InnerMatrix(gb.Matrix(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols))
                 if item.value.nrows == 0
                 else item
                 for item in seq
