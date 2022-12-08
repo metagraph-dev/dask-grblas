@@ -11,7 +11,8 @@ from .utils import get_meta, np_dtype
 def from_delayed(cls, scalar, dtype, *, name=None):
     if not isinstance(scalar, Delayed):
         raise TypeError(
-            "Value is not a dask delayed object.  Please use dask.delayed to create a graphblas.Scalar"
+            "Value is not a dask delayed object.  "
+            "Please use dask.delayed to create a graphblas.Scalar"
         )
     inner = delayed(InnerScalar)(scalar)
     value = da.from_delayed(inner, (), dtype=np_dtype(dtype), name=name)
