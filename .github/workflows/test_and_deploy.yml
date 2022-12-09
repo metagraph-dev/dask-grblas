@@ -47,7 +47,7 @@ jobs:
       - name: Update env
         run: |
           conda install -q -c conda-forge python-graphblas dask pytest 'black=22.10' flake8 coverage coveralls scipy
-          pip install -e .
+          pip install -e . --no-deps
       - name: Lint with Black
         run: |
           black --version
