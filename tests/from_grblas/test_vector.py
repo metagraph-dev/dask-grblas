@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
-from grblas import binary, dtypes, monoid, semiring, unary
-from grblas.exceptions import IndexOutOfBound, OutputNotEmpty
+from graphblas import binary, dtypes, monoid, semiring, unary
+from graphblas.exceptions import IndexOutOfBound, OutputNotEmpty
 
 from dask_grblas import Matrix, Scalar, Vector
 import dask.array as da

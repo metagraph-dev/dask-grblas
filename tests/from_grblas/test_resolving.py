@@ -1,5 +1,5 @@
 import pytest
-from grblas import binary, dtypes, unary
+from graphblas import binary, dtypes, unary
 
 from dask_grblas import Matrix, Vector
 from dask_grblas.expr import Updater

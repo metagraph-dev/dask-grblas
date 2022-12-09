@@ -1,6 +1,6 @@
 import numpy as np
 
-import grblas as gb
+import graphblas as gb
 
 import dask_grblas as dgb
 
@@ -41,7 +41,7 @@ def compare(func, gb_args, dgb_args, gb_kwargs={}, dgb_kwargs={}, *, compute=Non
                 raise
             dgb_result = exc
     assert type(gb_result) == type(dgb_result), f"{type(gb_result)} - {type(dgb_result)}"
-    if isinstance(gb_result, gb.base.BaseType):
+    if isinstance(gb_result, gb.core.base.BaseType):
         assert gb_result.dtype == dgb_result.dtype, f"{gb_result.dtype} - {dgb_result.dtype}"
         if not gb_result.isequal(dgb_result, check_dtype=True):
             print(gb_result)

@@ -2,7 +2,7 @@ import os
 
 from math import floor, sqrt
 from numpy import asarray, conj, zeros, concatenate, ones, empty
-from scipy.io import mmio  # noqa
+from scipy.io import _mmio as mmio  # noqa
 
 
 def symm_I_J(pos, n):
@@ -120,7 +120,7 @@ def mmread(source, *, dup_op=None, name=None, row_begin=0, row_end=None, col_beg
     )
     if isinstance(array, coo_matrix):
         nrows, ncols = array.shape
-        return Matrix.from_values(
+        return Matrix.from_coo(
             array.row, array.col, array.data, nrows=nrows, ncols=ncols, dup_op=dup_op, name=name
         )
     # SS, SuiteSparse-specific: import_full

@@ -1,11 +1,11 @@
 import dask.array as da
 import numpy as np
-import grblas as gb
+import graphblas as gb
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
 from dask.highlevelgraph import HighLevelGraph
-from grblas import binary, monoid, semiring
-from grblas.dtypes import lookup_dtype
+from graphblas import binary, monoid, semiring
+from graphblas.dtypes import lookup_dtype
 
 from .base import BaseType, InnerBaseType
 from .base import _nvals as _nvals_in_chunk
@@ -27,11 +27,11 @@ from .utils import (
 class InnerMatrix(InnerBaseType):
     ndim = 2
 
-    def __init__(self, grblas_matrix):
-        assert type(grblas_matrix) is gb.Matrix
-        self.value = grblas_matrix
-        self.shape = grblas_matrix.shape
-        self.dtype = np_dtype(grblas_matrix.dtype)
+    def __init__(self, graphblas_matrix):
+        assert type(graphblas_matrix) is gb.Matrix
+        self.value = graphblas_matrix
+        self.shape = graphblas_matrix.shape
+        self.dtype = np_dtype(graphblas_matrix.dtype)
 
     def __getitem__(self, index):
         # This always copies!
@@ -50,7 +50,7 @@ class Matrix(BaseType):
         if not isinstance(matrix, Delayed):
             raise TypeError(
                 "Value is not a dask delayed object.  "
-                "Please use dask.delayed to create a grblas.Matrix"
+                "Please use dask.delayed to create a graphblas.Matrix"
             )
         inner = delayed(InnerMatrix)(matrix)
         value = da.from_delayed(inner, (nrows, ncols), dtype=np_dtype(dtype), name=name)
@@ -59,7 +59,7 @@ class Matrix(BaseType):
     @classmethod
     def from_matrix(cls, matrix, chunks=None, *, name=None):
         if not isinstance(matrix, gb.Matrix):
-            raise TypeError("Value is not a grblas.Matrix")
+            raise TypeError("Value is not a graphblas.Matrix")
         if chunks is not None:
             raise NotImplementedError()
         return cls.from_delayed(delayed(matrix), matrix.dtype, *matrix.shape, name=name)
@@ -149,9 +149,9 @@ class Matrix(BaseType):
                 nrows = implied_nrows if nrows is None else nrows
                 ncols = implied_ncols if ncols is None else ncols
 
-            idtype = gb.Matrix.new(rows.dtype).dtype
+            idtype = gb.Matrix(rows.dtype).dtype
             np_idtype_ = np_dtype(idtype)
-            vdtype = gb.Matrix.new(values.dtype).dtype
+            vdtype = gb.Matrix(values.dtype).dtype
             np_vdtype_ = np_dtype(vdtype)
 
             chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_idtype_)
@@ -172,7 +172,7 @@ class Matrix(BaseType):
                 dtype=np_idtype_,
                 meta=np.array([]),
             )
-            meta = InnerMatrix(gb.Matrix.new(vdtype))
+            meta = InnerMatrix(gb.Matrix(vdtype))
             delayed = da.core.blockwise(
                 *(_from_values2D, "ij"),
                 *(fragments, "ijk"),
@@ -196,7 +196,7 @@ class Matrix(BaseType):
     def new(cls, dtype, nrows=0, ncols=0, *, chunks="auto", name=None):
         dtype = dtype.lower() if isinstance(dtype, str) else dtype
         if nrows == 0 and ncols == 0:
-            matrix = gb.Matrix.new(dtype, nrows, ncols)
+            matrix = gb.Matrix(dtype, nrows, ncols)
             return cls.from_delayed(
                 delayed(matrix), matrix.dtype, matrix.nrows, matrix.ncols, nvals=0, name=name
             )
@@ -209,7 +209,7 @@ class Matrix(BaseType):
             row_ranges = build_ranges_dask_array_from_chunks(chunks[0], rname)
             col_ranges = build_ranges_dask_array_from_chunks(chunks[1], cname)
 
-            meta = InnerMatrix(gb.Matrix.new(dtype))
+            meta = InnerMatrix(gb.Matrix(dtype))
             try:
                 np_dtype_ = np_dtype(dtype)
             except AttributeError:
@@ -238,7 +238,7 @@ class Matrix(BaseType):
         assert delayed.ndim == 2
         self._delayed = delayed
         if meta is None:
-            meta = gb.Matrix.new(delayed.dtype, *delayed.shape)
+            meta = gb.Matrix(delayed.dtype, *delayed.shape)
         self._meta = meta
         self._nrows = meta.nrows
         self._ncols = meta.ncols
@@ -318,7 +318,7 @@ class Matrix(BaseType):
         len_kdiag = kdiag_row_stop - kdiag_row_start
 
         gb_dtype = self.dtype if dtype is None else lookup_dtype(dtype)
-        meta = wrap_inner(gb.Vector.new(gb_dtype))
+        meta = wrap_inner(gb.Vector(gb_dtype))
         if len_kdiag <= 0:
             return get_return_type(meta).new(gb_dtype)
 
@@ -380,9 +380,9 @@ class Matrix(BaseType):
         len_kdiag = kdiag_row_stop - kdiag_row_start
 
         gb_dtype = self.dtype if dtype is None else lookup_dtype(dtype)
-        meta = gb.Vector.new(gb_dtype)
+        meta = gb.Vector(gb_dtype)
         if len_kdiag <= 0:
-            return get_return_type(meta).new(gb_dtype)
+            return get_return_type(meta)(gb_dtype)
 
         chunks = da.core.normalize_chunks(chunks, (len_kdiag,), dtype=np.int64)
         output_indx_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_indx_ranges-")
@@ -470,9 +470,9 @@ class Matrix(BaseType):
         right_meta = right
 
         if type(left) is Scalar:
-            left_meta = left.dtype.np_type(0)
+            left_meta = left.dtype.np_type.type(0)
         if type(right) is Scalar:
-            right_meta = right.dtype.np_type(0)
+            right_meta = right.dtype.np_type.type(0)
 
         meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
         return GbDelayed(self, "apply", op, right, meta=meta, left=left)
@@ -534,9 +534,9 @@ class Matrix(BaseType):
         if type(values) is list:
             values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
 
-        idtype = gb.Matrix.new(rows.dtype).dtype
+        idtype = gb.Matrix(rows.dtype).dtype
         np_idtype_ = np_dtype(idtype)
-        vdtype = gb.Matrix.new(values.dtype).dtype
+        vdtype = gb.Matrix(values.dtype).dtype
         np_vdtype_ = np_dtype(vdtype)
 
         rname = "-row-ranges" + tokenize(x, x.chunks[0])
@@ -553,7 +553,7 @@ class Matrix(BaseType):
             dtype=np_idtype_,
             meta=np.array([]),
         )
-        meta = InnerMatrix(gb.Matrix.new(vdtype))
+        meta = InnerMatrix(gb.Matrix(vdtype))
         delayed = da.core.blockwise(
             *(_build_2D_chunk, "ij"),
             *(x, "ij"),
@@ -676,7 +676,7 @@ class Matrix(BaseType):
         self.__init__(deleted)
 
 
-Matrix.ss = gb.utils.class_property(Matrix.ss, ss)
+Matrix.ss = gb.core.utils.class_property(Matrix.ss, ss)
 
 
 class TransposedMatrix:
@@ -818,9 +818,9 @@ def _chunk_diag(
                 chunk_kdiag_col_start:chunk_kdiag_col_stop,
             ]
             # extract its diagonal
-            vector = gb.ss.diag(matrix.new(), k=0, dtype=gb_dtype)
+            vector = gb.ss.diag(matrix(), k=0, dtype=gb_dtype)
             return wrap_inner(vector)
-    return wrap_inner(gb.Vector.new(gb_dtype))
+    return wrap_inner(gb.Vector(gb_dtype))
 
 
 def _resize(
@@ -941,7 +941,7 @@ def _new_Matrix_chunk(out_row_range, out_col_range, gb_dtype=None):
     """
     nrows = out_row_range[0].stop - out_row_range[0].start
     ncols = out_col_range[0].stop - out_col_range[0].start
-    return InnerMatrix(gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols))
+    return InnerMatrix(gb.Matrix(gb_dtype, nrows=nrows, ncols=ncols))
 
 
 def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
@@ -957,7 +957,7 @@ def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
     nrows = out_row_range[0].stop - out_row_range[0].start
     ncols = out_col_range[0].stop - out_col_range[0].start
     return InnerMatrix(
-        gb.Matrix.from_values(rows, cols, vals, nrows=nrows, ncols=ncols, dtype=gb_dtype)
+        gb.Matrix.from_coo(rows, cols, vals, nrows=nrows, ncols=ncols, dtype=gb_dtype)
     )
 
 
@@ -1134,9 +1134,7 @@ def _concat_matrix(seq, axis=0):
         if len(ncols) == 1:
             (ncols,) = ncols
             seq = [
-                InnerMatrix(
-                    gb.Matrix.new(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols)
-                )
+                InnerMatrix(gb.Matrix(dtype=item.value.dtype, nrows=item.value.nrows, ncols=ncols))
                 if item.value.ncols == 0
                 else item
                 for item in seq
@@ -1149,9 +1147,7 @@ def _concat_matrix(seq, axis=0):
         if len(nrows) == 1:
             (nrows,) = nrows
             seq = [
-                InnerMatrix(
-                    gb.Matrix.new(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols)
-                )
+                InnerMatrix(gb.Matrix(dtype=item.value.dtype, nrows=nrows, ncols=item.value.ncols))
                 if item.value.nrows == 0
                 else item
                 for item in seq
@@ -1160,5 +1156,5 @@ def _concat_matrix(seq, axis=0):
     return InnerMatrix(value)
 
 
-gb.utils._output_types[Matrix] = gb.Matrix
-gb.utils._output_types[TransposedMatrix] = gb.matrix.TransposedMatrix
+gb.core.utils._output_types[Matrix] = gb.Matrix
+gb.core.utils._output_types[TransposedMatrix] = gb.core.matrix.TransposedMatrix

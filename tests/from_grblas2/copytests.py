@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-import grblas.tests as gb_tests
+import graphblas.tests as gb_tests
 
 XFAIL_TESTS = {
     "test_matrix.py": {
@@ -75,7 +75,7 @@ XFAIL_TESTS = {
         "test_update": "Needs investigated",
         "test_expr_is_like_scalar": "Needs investigated",
         "test_ndim": "Needs investigated",
-        "test_cscalar": "Should work in upcoming grblas release",
+        "test_cscalar": "Should work in upcoming graphblas release",
     },
     "test_vector.py": {
         "test_resize": "Needs investigated",
@@ -135,9 +135,9 @@ def main():
                 is_strict = filename not in NOT_STRICT or key not in NOT_STRICT[filename]
                 return f"@pytest.mark.xfail({msg!r}, strict={is_strict})\n{line}"
             if (
-                line.startswith("from grblas import ")
+                line.startswith("from graphblas import ")
                 and ("Matrix" in line or "Vector" in line or "Scalar" in line)
-                or line.startswith("from grblas.expr import Updater")
+                or line.startswith("from graphblas.expr import Updater")
             ):
                 return line[: len("from ")] + "dask_" + line[len("from ") :]
             return line

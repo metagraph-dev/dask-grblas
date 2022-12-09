@@ -4,9 +4,9 @@ from numbers import Number, Integral
 
 import dask.array as da
 import numpy as np
-import grblas as gb
+import graphblas as gb
 
-from grblas.exceptions import DimensionMismatch
+from graphblas.exceptions import DimensionMismatch
 from dask.base import tokenize
 
 from .base import BaseType, InnerBaseType, _check_mask
@@ -549,7 +549,7 @@ class IndexerResolver:
 
     @classmethod
     def normalize_index(cls, index, size):
-        if type(index) is get_return_type(gb.Scalar.new(int)):
+        if type(index) is get_return_type(gb.Scalar(int)):
             # This branch needs a second look: How to work with the lazy index?
             index = index.value.compute()
             if not isinstance(index, Integral):
@@ -726,7 +726,7 @@ def reduce_assign(lhs, indices, rhs, dup_op="last", mask=None, accum=None, repla
 
     # create CSC matrix C from indices:
     dtype = indices_dtype
-    meta = gb.Matrix.new(dtype)
+    meta = gb.Matrix(dtype)
     lhs_chunk_ranges = build_chunk_ranges_dask_array(lhs._delayed, 0, "lhs-ranges")
     # deal with default
     dup_ops = {"first": gb.monoid.min, "last": gb.monoid.max}
@@ -769,7 +769,7 @@ def reduce_assign(lhs, indices, rhs, dup_op="last", mask=None, accum=None, repla
         C = get_return_type(meta)(delayed)
         red_columns = C.reduce_rowwise(op=gb.monoid.any).new()
 
-    semiring_dup_op_2nd = gb.operator.get_semiring(dup_op, gb.binary.second)
+    semiring_dup_op_2nd = gb.core.operator.get_semiring(dup_op, gb.binary.second)
     rhs = C.mxv(rhs, semiring_dup_op_2nd).new(mask=mask)
     if accum is None:
         rhs(mask=~red_columns.S) << lhs
@@ -801,11 +801,11 @@ def _squeeze(tupl):
 
 def _get_type_with_ndims(n):
     if n == 0:
-        return get_return_type(gb.Scalar.new(int))
+        return get_return_type(gb.Scalar(int))
     elif n == 1:
-        return get_return_type(gb.Vector.new(int))
+        return get_return_type(gb.Vector(int))
     else:
-        return get_return_type(gb.Matrix.new(int))
+        return get_return_type(gb.Matrix(int))
 
 
 def _get_grblas_type_with_ndims(n):
@@ -1073,34 +1073,34 @@ def _assign(
     return wrap_inner(x)
 
 
-def _upcast(grblas_object, ndim, axis_is_missing):
+def _upcast(graphblas_object, ndim, axis_is_missing):
     """
-    Returns grblas_object upcast to the given number `ndim` of
+    Returns graphblas_object upcast to the given number `ndim` of
     dimensions.  The missing axis/axes are determined by means
     of the list `axis_is_missing` of bool datatypes and whose
     length is `ndim`.
     """
-    input = grblas_object
+    input = graphblas_object
     if np.all(axis_is_missing):
-        # grblas_object is a scalar
+        # graphblas_object is a scalar
         if ndim == 1:
-            # upcast grblas.Scalar to grblas.Vector
-            output = gb.Vector.new(input.dtype, size=1)
+            # upcast graphblas.Scalar to graphblas.Vector
+            output = gb.Vector(input.dtype, size=1)
             if input.value is not None:
                 output[0] = input
         else:
-            # upcast grblas.Scalar to grblas.Matrix
-            output = gb.Matrix.new(input.dtype, nrows=1, ncols=1)
+            # upcast graphblas.Scalar to graphblas.Matrix
+            output = gb.Matrix(input.dtype, nrows=1, ncols=1)
             if input.value is not None:
                 output[0, 0] = input
         return output
     elif ndim == 2:
-        # grblas_object is a Vector
+        # graphblas_object is a Vector
         if axis_is_missing[0]:
-            # upcast grblas.Vector to one-row grblas.Matrix
+            # upcast graphblas.Vector to one-row graphblas.Matrix
             return input._as_matrix().T.new()
         elif axis_is_missing[1]:
-            # upcast grblas.Vector to one-column grblas.Matrix
+            # upcast graphblas.Vector to one-column graphblas.Matrix
             return input._as_matrix()
     return input
 
@@ -1186,14 +1186,17 @@ def _data_x_index_meshpoint_4extract(
         mask = mask_type(mask.value[mask_index_tuple].new()) if mask is not None else None
         input_mask = input_mask_type(input_mask.value) if input_mask is not None else None
         x = x.T if xt else x
-        out = x[index_tuple].new(gb_dtype, mask=mask, input_mask=input_mask)
+        if hasattr(x[index_tuple], "ndim") and x[index_tuple].ndim == 0:  # Scalar doesn't have mask
+            out = x[index_tuple].new(gb_dtype)
+        else:
+            out = x[index_tuple].new(gb_dtype, mask=mask, input_mask=input_mask)
 
         # Now we need to upcast `out` to the required number
         # of dimensions (x.ndim) in order to enable concatenation
         # (in the next blockwise) along the missing axis/axes.
         return wrap_inner(_upcast(out, x.ndim, index_is_a_number))
     else:
-        return wrap_inner(type(x).new(gb_dtype, *out_shape))
+        return wrap_inner(type(x)(gb_dtype, *out_shape))
 
 
 def _defrag_to_index_chunk(*args, x_chunks, dtype=None):
@@ -1487,7 +1490,7 @@ def _uniquify(ndim, index, obj, mask=None, ot=False):
                 unique_indx, obj_indx = np.unique(reverse_indx, return_index=True)
             if unique_indx.size < reverse_indx.size:
                 indx = list(unique_indx)
-                if (isinstance(obj, BaseType) or isinstance(obj, gb.base.BaseType)) and len(
+                if (isinstance(obj, BaseType) or isinstance(obj, gb.core.base.BaseType)) and len(
                     obj.shape
                 ) > 0:
                     obj = extract(obj, obj_indx, T[obj_axis])
@@ -1893,7 +1896,7 @@ def _reduce_combine(op, x, axis=None, keepdims=None, computing_meta=None, dtype=
             vals = [val.value.value for sublist in x for val in sublist]
         else:
             vals = [val.value.value for val in x]
-        values = gb.Vector.from_values(list(range(len(vals))), vals, size=len(vals), dtype=dtype)
+        values = gb.Vector.from_coo(list(range(len(vals))), vals, size=len(vals), dtype=dtype)
         return wrap_inner(values.reduce(op).new())
     return x
 
@@ -1903,13 +1906,13 @@ def _reduce_accum(output, reduced, accum):
     # This is pretty ugly.  If only we could call binary operators on scalars...
     dtype = output.value.dtype
     if output.value.is_empty:
-        left = gb.Vector.new(dtype, 1)
+        left = gb.Vector(dtype, 1)
     else:
-        left = gb.Vector.from_values([0], [output.value.value], dtype=dtype)
+        left = gb.Vector.from_coo([0], [output.value.value], dtype=dtype)
     if reduced.value.is_empty:
-        right = gb.Vector.new(reduced.value.dtype, 1)
+        right = gb.Vector(reduced.value.dtype, 1)
     else:
-        right = gb.Vector.from_values([0], [reduced.value.value], dtype=reduced.value.dtype)
+        right = gb.Vector.from_coo([0], [reduced.value.value], dtype=reduced.value.dtype)
     result = left.ewise_add(right, op=accum, require_monoid=False).new(dtype=dtype)
     result = result[0].new()
     return wrap_inner(result)
@@ -1918,14 +1921,14 @@ def _reduce_accum(output, reduced, accum):
 def _reduce_axis_accum(output, reduced, accum):
     """Accumulate the results of reduce_axis with a vector"""
     if isinstance(reduced, np.ndarray) and (reduced.size == 0):
-        return wrap_inner(gb.Vector.new())
+        return wrap_inner(gb.Vector())
     dtype = output.value.dtype
     if output.value.shape == 0:
-        left = gb.Vector.new(dtype, 1)
+        left = gb.Vector(dtype, 1)
     else:
         left = output.value
     if reduced.value.shape == 0:
-        right = gb.Vector.new(reduced.value.dtype, 1)
+        right = gb.Vector(reduced.value.dtype, 1)
     else:
         right = reduced.value
     result = left.ewise_add(right, op=accum, require_monoid=False).new(dtype=dtype)
@@ -2061,7 +2064,7 @@ def _concat_fragmenter(seq, axis=0):
         obj = frag1.obj
         ot = frag1.ot
         T = (1, 0) if ot else (0, 1)
-        if isinstance(obj, gb.base.BaseType) and type(obj) in {gb.Vector, gb.Matrix}:
+        if isinstance(obj, gb.core.base.BaseType) and type(obj) in {gb.Vector, gb.Matrix}:
             concat = da.core.concatenate_lookup.dispatch(type(wrap_inner(obj)))
             obj = concat([wrap_inner(frag1.obj), wrap_inner(frag2.obj)], axis=T[axis]).value
         out.obj = obj

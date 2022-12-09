@@ -1,10 +1,10 @@
 import dask.array as da
 import numpy as np
-import grblas as gb
+import graphblas as gb
 from dask.base import tokenize
 from dask.delayed import Delayed, delayed
-from grblas import binary, monoid, semiring
-from grblas.dtypes import lookup_dtype
+from graphblas import binary, monoid, semiring
+from graphblas.dtypes import lookup_dtype
 
 from .base import BaseType, InnerBaseType, _nvals
 from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater, Assigner
@@ -23,12 +23,12 @@ from .utils import (
 class InnerVector(InnerBaseType):
     ndim = 1
 
-    def __init__(self, grblas_vector):
-        assert type(grblas_vector) is gb.Vector
-        self.value = grblas_vector
-        self.size = grblas_vector.size
-        self.shape = grblas_vector.shape
-        self.dtype = np_dtype(grblas_vector.dtype)
+    def __init__(self, graphblas_vector):
+        assert type(graphblas_vector) is gb.Vector
+        self.value = graphblas_vector
+        self.size = graphblas_vector.size
+        self.shape = graphblas_vector.shape
+        self.dtype = np_dtype(graphblas_vector.dtype)
 
     def __getitem__(self, index):
         # This always copies!
@@ -46,12 +46,12 @@ class InnerVector(InnerBaseType):
                     return InnerVector(value)
                 elif type(index) is slice and index == slice(None):
                     # [None, :]
-                    matrix_value = gb.Matrix.new(self.value.dtype, 1, self.value.size)
+                    matrix_value = gb.Matrix(self.value.dtype, 1, self.value.size)
                     matrix_value[0, :] = self.value
                 else:
                     # [None, :5], [None, [1, 2]], etc
                     value = self.value[index].new()
-                    matrix_value = gb.Matrix.new(self.value.dtype, 1, value.size)
+                    matrix_value = gb.Matrix(self.value.dtype, 1, value.size)
                     matrix_value[0, :] = value
                 return InnerMatrix(matrix_value)
             elif index[1] is None:
@@ -63,12 +63,12 @@ class InnerVector(InnerBaseType):
                 elif type(index) is slice and index == slice(None):
                     # [:, None]
                     # matrix_value = self.value._as_matrix()  # TODO: grblas >=1.3.15
-                    matrix_value = gb.Matrix.new(self.value.dtype, self.value.size, 1)
+                    matrix_value = gb.Matrix(self.value.dtype, self.value.size, 1)
                     matrix_value[:, 0] = self.value
                 else:
                     # [:5, None], [[1, 2], None], etc
                     value = self.value[index].new()
-                    matrix_value = gb.Matrix.new(self.value.dtype, value.size, 1)
+                    matrix_value = gb.Matrix(self.value.dtype, value.size, 1)
                     matrix_value[:, 0] = value
                 return InnerMatrix(matrix_value)
         raise IndexError(f"Too many indices for vector: {index}")
@@ -83,7 +83,7 @@ class Vector(BaseType):
         if not isinstance(vector, Delayed):
             raise TypeError(
                 "Value is not a dask delayed object.  "
-                "Please use dask.delayed to create a grblas.Vector"
+                "Please use dask.delayed to create a graphblas.Vector"
             )
         inner = delayed(InnerVector)(vector)
         value = da.from_delayed(inner, (size,), dtype=np_dtype(dtype), name=name)
@@ -92,7 +92,7 @@ class Vector(BaseType):
     @classmethod
     def from_vector(cls, vector, *, chunks=None, name=None):
         if not isinstance(vector, gb.Vector):
-            raise TypeError("Value is not a grblas.Vector")
+            raise TypeError("Value is not a graphblas.Vector")
         if chunks is not None:
             raise NotImplementedError()
         return cls.from_delayed(delayed(vector), vector.dtype, vector.size, name=name)
@@ -125,9 +125,9 @@ class Vector(BaseType):
                     raise Exception()
                 size = implied_size if size is None else size
 
-            idtype = gb.Vector.new(indices.dtype).dtype
+            idtype = gb.Vector(indices.dtype).dtype
             np_idtype_ = np_dtype(idtype)
-            vdtype = gb.Vector.new(values.dtype).dtype
+            vdtype = gb.Vector(values.dtype).dtype
             np_vdtype_ = np_dtype(vdtype)
             chunks = da.core.normalize_chunks(chunks, (size,), dtype=np_idtype_)
             name_ = name
@@ -142,7 +142,7 @@ class Vector(BaseType):
                 dtype=np_vdtype_,
                 meta=np.array([]),
             )
-            meta = InnerVector(gb.Vector.new(vdtype))
+            meta = InnerVector(gb.Vector(vdtype))
             delayed = da.core.blockwise(
                 *(_from_values1D, "i"),
                 *(fragments, "ij"),
@@ -156,14 +156,14 @@ class Vector(BaseType):
             return Vector(delayed)
 
         chunks = None
-        vector = gb.Vector.from_values(indices, values, size=size, dup_op=dup_op, dtype=dtype)
+        vector = gb.Vector.from_coo(indices, values, size=size, dup_op=dup_op, dtype=dtype)
         return cls.from_vector(vector, chunks=chunks, name=name)
 
     @classmethod
     def new(cls, dtype, size=0, *, chunks="auto", name=None):
         if size > 0:
             chunks = da.core.normalize_chunks(chunks, (size,), dtype=int)
-            meta = gb.Vector.new(dtype)
+            meta = gb.Vector(dtype)
             vdtype = meta.dtype
             np_vdtype_ = np_dtype(vdtype)
             chunksz = build_ranges_dask_array_from_chunks(chunks[0], "ranges-" + tokenize(chunks))
@@ -176,7 +176,7 @@ class Vector(BaseType):
             )
             return Vector(delayed_, nvals=0)
 
-        vector = gb.Vector.new(dtype, size)
+        vector = gb.Vector(dtype, size)
         return cls.from_delayed(delayed(vector), vector.dtype, vector.size, nvals=0, name=name)
 
     def __init__(self, delayed, meta=None, nvals=None):
@@ -191,7 +191,7 @@ class Vector(BaseType):
         assert delayed.ndim == 1
         self._delayed = delayed
         if meta is None:
-            meta = gb.Vector.new(delayed.dtype, delayed.shape[0])
+            meta = gb.Vector(delayed.dtype, delayed.shape[0])
         self._meta = meta
         self._size = meta.size
         self.dtype = meta.dtype
@@ -213,7 +213,7 @@ class Vector(BaseType):
             chunks=(x.chunks[0], (1,)),
             new_axis=1,
             dtype=x.dtype,
-            meta=InnerMatrix(gb.Matrix.new(self.dtype)),
+            meta=InnerMatrix(gb.Matrix(self.dtype)),
         )
         return Matrix(x)
 
@@ -297,7 +297,7 @@ class Vector(BaseType):
             dtype=dtype,
             meta=np.array([[[]]]),
         )
-        meta = gb.Matrix.new(gb_dtype)
+        meta = gb.Matrix(gb_dtype)
         delayed = da.reduction(
             fragments,
             _identity,
@@ -318,7 +318,7 @@ class Vector(BaseType):
             return self.resize(*self.shape, chunks=chunks, inplace=False)
         # chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
         # id = self.to_values()
-        # new = Vector.from_values(*id, *self.shape, trust_size=True, chunks=chunks)
+        # new = Vector.from_coo(*id, *self.shape, trust_size=True, chunks=chunks)
         # if inplace:
         #     self.__init__(new._delayed)
         # else:
@@ -434,9 +434,9 @@ class Vector(BaseType):
         right_meta = right
 
         if type(left) is Scalar:
-            left_meta = left.dtype.np_type(0)
+            left_meta = left.dtype.np_type.type(0)
         if type(right) is Scalar:
-            right_meta = right.dtype.np_type(0)
+            right_meta = right.dtype.np_type.type(0)
 
         meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
         return GbDelayed(self, "apply", op, right, meta=meta, left=left)
@@ -469,9 +469,9 @@ class Vector(BaseType):
         if type(values) is list:
             values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
 
-        idtype = gb.Matrix.new(indices.dtype).dtype
+        idtype = gb.Matrix(indices.dtype).dtype
         np_idtype_ = np_dtype(idtype)
-        vdtype = gb.Matrix.new(values.dtype).dtype
+        vdtype = gb.Matrix(values.dtype).dtype
         np_vdtype_ = np_dtype(vdtype)
 
         iname = "-index-ranges" + tokenize(x, x.chunks[0])
@@ -484,7 +484,7 @@ class Vector(BaseType):
             dtype=np_idtype_,
             meta=np.array([[]]),
         )
-        meta = InnerVector(gb.Vector.new(vdtype))
+        meta = InnerVector(gb.Vector(vdtype))
         delayed = da.core.blockwise(
             *(_build_1D_chunk, "i"),
             *(x, "i"),
@@ -499,7 +499,7 @@ class Vector(BaseType):
         # # This doesn't do anything special yet.  Should we have name= and chunks= keywords?
         # # TODO: raise if output is not empty
         # # This operation could, perhaps, partition indices and values if there are chunks
-        # vector = gb.Vector.new(self.dtype, size=self.size)
+        # vector = gb.Vector(self.dtype, size=self.size)
         # vector.build(indices, values, dup_op=dup_op)
         # self.__init__(Vector.from_vector(vector)._delayed)
 
@@ -589,7 +589,7 @@ class Vector(BaseType):
         # return self.gb_obj[0]
 
 
-Vector.ss = gb.utils.class_property(Vector.ss, ss)
+Vector.ss = gb.core.utils.class_property(Vector.ss, ss)
 
 
 def _chunk_diag(
@@ -648,7 +648,7 @@ def _chunk_diag(
             out_col_stop_ = max(cols.stop, out_col_stop_)
 
         ncols = out_col_stop_ - out_col_start
-        matrix = gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols)
+        matrix = gb.Matrix(gb_dtype, nrows=nrows, ncols=ncols)
 
         # return empty matrix if k-diagonal does not touch it
         if rows.stop <= kdiag_nt_out_col_start or kdiag_nt_out_col_stop_ <= rows.start:
@@ -685,7 +685,7 @@ def _chunk_diag(
     if vec_chunk.stop == kdiag_size:
         if cols.start >= kdiag_col_stop_:
             width = ncols
-    matrix = gb.Matrix.new(gb_dtype, nrows=nrows, ncols=width)
+    matrix = gb.Matrix(gb_dtype, nrows=nrows, ncols=width)
     return wrap_inner(matrix)
 
 
@@ -709,12 +709,10 @@ def _resize(output_range, inner_vector, index_range, old_size, new_size):
             return InnerVector(inner_vector.value[start:stop].new())
     elif index_range[0].stop == old_size and old_size <= output_range[0].start:
         return InnerVector(
-            gb.Vector.new(
-                dtype=inner_vector.dtype, size=output_range[0].stop - output_range[0].start
-            )
+            gb.Vector(dtype=inner_vector.dtype, size=output_range[0].stop - output_range[0].start)
         )
     else:
-        return InnerVector(gb.Vector.new(inner_vector.dtype, size=0))
+        return InnerVector(gb.Vector(inner_vector.dtype, size=0))
 
 
 def _as_matrix(x):
@@ -730,7 +728,7 @@ def _delitem_chunk(inner_vec, chunk_range, index):
 
 
 def _new_Vector_chunk(chunk_range, gb_dtype):
-    return InnerVector(gb.Vector.new(gb_dtype, size=chunk_range[0].stop - chunk_range[0].start))
+    return InnerVector(gb.Vector(gb_dtype, size=chunk_range[0].stop - chunk_range[0].start))
 
 
 def _build_1D_chunk(inner_vector, out_index_range, fragments, dup_op=None):
@@ -751,7 +749,7 @@ def _from_values1D(fragments, index_range, gb_dtype=None):
     inds = np.concatenate([inds for (inds, _) in fragments])
     vals = np.concatenate([vals for (_, vals) in fragments])
     size = index_range[0].stop - index_range[0].start
-    return InnerVector(gb.Vector.from_values(inds, vals, size=size, dtype=gb_dtype))
+    return InnerVector(gb.Vector.from_coo(inds, vals, size=size, dtype=gb_dtype))
 
 
 def _pick1D(indices, values, index_range):
@@ -802,8 +800,8 @@ class VectorTupleExtractor:
 
 
 class TupleExtractor:
-    def __init__(self, grblas_inner_vector, index_offset, gb_dtype=None):
-        self.indices, self.values = grblas_inner_vector.value.to_values(gb_dtype)
+    def __init__(self, graphblas_inner_vector, index_offset, gb_dtype=None):
+        self.indices, self.values = graphblas_inner_vector.value.to_values(gb_dtype)
         self.indices += index_offset[0]
 
 
@@ -813,7 +811,7 @@ def _concat_vector(seq, axis=0):
         raise ValueError(f"Can only concatenate for axis 0.  Got {axis}")
     # return InnerVector(gb.ss.concat([item.value for item in seq]))  # TODO: grblas >=1.3.15
     size = sum(x.size for x in seq)
-    value = gb.Vector.new(seq[0].value.dtype, size)
+    value = gb.Vector(seq[0].value.dtype, size)
     start = end = 0
     for x in seq:
         end += x.size
@@ -822,5 +820,5 @@ def _concat_vector(seq, axis=0):
     return InnerVector(value)
 
 
-gb.utils._output_types[Vector] = gb.Vector
+gb.core.utils._output_types[Vector] = gb.Vector
 from .matrix import InnerMatrix  # noqa isort:skip

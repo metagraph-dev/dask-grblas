@@ -1,8 +1,8 @@
 import inspect
 
-import grblas as gb
+import graphblas as gb
 import pytest
-from grblas import dtypes
+from graphblas import dtypes
 from pytest import raises
 
 import dask_grblas as dgb

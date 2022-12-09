@@ -1,5 +1,5 @@
 import pytest
-from grblas import dtypes
+from graphblas import dtypes
 
 from dask_grblas import Scalar
 

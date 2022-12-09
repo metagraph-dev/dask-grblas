@@ -2,9 +2,9 @@ import inspect
 import itertools
 from functools import partial
 
-import grblas as gb
+import graphblas as gb
 import pytest
-from grblas import dtypes
+from graphblas import dtypes
 from pytest import raises
 
 import dask.array as da
@@ -22,7 +22,7 @@ def inv_if(mask, is_inv=False):
 def adapt(index, x):
     return (
         index.compute()
-        if isinstance(x, gb.base.BaseType) and type(index) is da.core.Array
+        if isinstance(x, gb.core.base.BaseType) and type(index) is da.core.Array
         else index
     )
 
@@ -366,13 +366,13 @@ def test_from_MMfile():
     filename = str(path / "notebooks" / "coo_matrix_A.mtx")
 
     M = mmread(filename)
-    M = gb.io.from_scipy_sparse_matrix(M)
+    M = gb.io.from_scipy_sparse(M)
     dM = dgb.Matrix.from_MMfile(filename)
     compare(lambda x: x, M, dM)
 
     filename = str(path / "notebooks" / "dense_matrix_A.mtx")
     M = mmread(filename)
-    M = gb.io.from_scipy_sparse_matrix(coo_matrix(M))
+    M = gb.io.from_scipy_sparse(coo_matrix(M))
     dM = dgb.Matrix.from_MMfile(filename)
     compare(lambda x: x, M, dM)
 

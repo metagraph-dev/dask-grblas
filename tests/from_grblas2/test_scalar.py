@@ -4,8 +4,8 @@ import weakref
 
 import numpy as np
 import pytest
-from grblas import binary, dtypes, replace
-from grblas.scalar import _CScalar
+from graphblas import binary, dtypes, replace
+from graphblas.core.scalar import Scalar
 
 from .conftest import autocompute, compute
 
@@ -214,12 +214,12 @@ def test_not_hashable(s):
         hash(s)
 
 
-@pytest.mark.xfail("'Should work in upcoming grblas release'", strict=False)
+@pytest.mark.xfail("'Should work in upcoming graphblas release'", strict=False)
 def test_cscalar():
-    c1 = _CScalar(Scalar.from_value(5))
-    assert c1 == _CScalar(Scalar.from_value(5))
+    c1 = Scalar.from_value(5, is_cscalar=True)
+    assert c1 == Scalar.from_value(5, is_cscalar=True)
     assert c1 == 5
-    assert c1 != _CScalar(Scalar.from_value(6))
+    assert c1 != Scalar.from_value(6, is_cscalar=True)
     assert c1 != 6
     assert repr(c1) == "5"
     assert c1._repr_html_() == c1.scalar._repr_html_()
