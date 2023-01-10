@@ -2,9 +2,18 @@ import numpy as np
 import pandas as pd
 import dask.array as da
 import dask.dataframe as dd
+from functools import reduce
 from dask.base import tokenize
 from dask.delayed import delayed
 from .io import MMFile
+
+
+def pack_args(*args):
+    return args
+
+
+def pack_kwargs(**kwargs):
+    return kwargs
 
 
 def np_dtype(dtype):
@@ -29,6 +38,10 @@ def get_return_type(val):
 
 def wrap_inner(val):
     return _inner_types[type(val)](val)
+
+
+def flatten(lol):
+    return reduce(lambda x, y: x + y, lol)
 
 
 def build_block_index_dask_array(x, axis, name):

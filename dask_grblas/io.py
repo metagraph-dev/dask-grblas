@@ -2,7 +2,6 @@ import os
 
 from math import floor, sqrt
 from numpy import asarray, conj, zeros, concatenate, ones, empty
-from scipy.io import mmio  # noqa
 
 
 def symm_I_J(pos, n):
@@ -97,40 +96,238 @@ def home(stream, search_window_size=8):
 
 
 # -----------------------------------------------------------------------------
-
-
-def mmread(source, *, dup_op=None, name=None, row_begin=0, row_end=None, col_begin=0, col_end=None):
-    """
-    Read the contents of a Matrix Market filename or file into a new Matrix.
-
-    This uses `scipy.io.mmread`:
-    https://docs.scipy.org/doc/scipy/reference/generated/scipy.io.mmread.html
-
-    For more information on the Matrix Market format, see:
-    https://math.nist.gov/MatrixMarket/formats.html
-    """
-    from . import Matrix
-
-    try:
-        from scipy.sparse import coo_matrix  # noqa
-    except ImportError:  # pragma: no cover
-        raise ImportError("scipy is required to read Matrix Market files")
-    array = MMFile().read(
-        source, row_begin=row_begin, row_end=row_end, col_begin=col_begin, col_end=col_end
-    )
-    if isinstance(array, coo_matrix):
-        nrows, ncols = array.shape
-        return Matrix.from_values(
-            array.row, array.col, array.data, nrows=nrows, ncols=ncols, dup_op=dup_op, name=name
-        )
-    # SS, SuiteSparse-specific: import_full
-    return Matrix.ss.import_fullr(values=array, take_ownership=True, name=name)
+def asstr(s):
+    if isinstance(s, bytes):
+        return s.decode("latin1")
+    return str(s)
 
 
 # -----------------------------------------------------------------------------
 
 
-class MMFile(mmio.MMFile):
+class MMFile:
+    __slots__ = ("_rows", "_cols", "_entries", "_format", "_field", "_symmetry")
+
+    @property
+    def rows(self):
+        return self._rows
+
+    @property
+    def cols(self):
+        return self._cols
+
+    @property
+    def entries(self):
+        return self._entries
+
+    @property
+    def format(self):
+        return self._format
+
+    @property
+    def field(self):
+        return self._field
+
+    @property
+    def symmetry(self):
+        return self._symmetry
+
+    @property
+    def has_symmetry(self):
+        return self._symmetry in (
+            self.SYMMETRY_SYMMETRIC,
+            self.SYMMETRY_SKEW_SYMMETRIC,
+            self.SYMMETRY_HERMITIAN,
+        )
+
+    # format values
+    FORMAT_COORDINATE = "coordinate"
+    FORMAT_ARRAY = "array"
+
+    # field values
+    FIELD_INTEGER = "integer"
+    FIELD_UNSIGNED = "unsigned-integer"
+    FIELD_REAL = "real"
+    FIELD_COMPLEX = "complex"
+    FIELD_PATTERN = "pattern"
+    FIELD_VALUES = (FIELD_INTEGER, FIELD_UNSIGNED, FIELD_REAL, FIELD_COMPLEX, FIELD_PATTERN)
+
+    # symmetry values
+    SYMMETRY_GENERAL = "general"
+    SYMMETRY_SYMMETRIC = "symmetric"
+    SYMMETRY_SKEW_SYMMETRIC = "skew-symmetric"
+    SYMMETRY_HERMITIAN = "hermitian"
+    SYMMETRY_VALUES = (
+        SYMMETRY_GENERAL,
+        SYMMETRY_SYMMETRIC,
+        SYMMETRY_SKEW_SYMMETRIC,
+        SYMMETRY_HERMITIAN,
+    )
+
+    @classmethod
+    def info(self, source):
+        """
+        Return size, storage parameters from Matrix Market file-like 'source'.
+
+        Parameters
+        ----------
+        source : str or file-like
+            Matrix Market filename (extension .mtx) or open file-like object
+
+        Returns
+        -------
+        rows : int
+            Number of matrix rows.
+        cols : int
+            Number of matrix columns.
+        entries : int
+            Number of non-zero entries of a sparse matrix
+            or rows*cols for a dense matrix.
+        format : str
+            Either 'coordinate' or 'array'.
+        field : str
+            Either 'real', 'complex', 'pattern', or 'integer'.
+        symmetry : str
+            Either 'general', 'symmetric', 'skew-symmetric', or 'hermitian'.
+        """
+
+        stream, close_it = self._open(source)
+
+        try:
+
+            # read and validate header line
+            line = stream.readline()
+            mmid, matrix, format, field, symmetry = [asstr(part.strip()) for part in line.split()]
+            if not mmid.startswith("%%MatrixMarket"):
+                raise ValueError("source is not in Matrix Market format")
+            if not matrix.lower() == "matrix":
+                raise ValueError("Problem reading file header: " + line)
+
+            # http://math.nist.gov/MatrixMarket/formats.html
+            if format.lower() == "array":
+                format = self.FORMAT_ARRAY
+            elif format.lower() == "coordinate":
+                format = self.FORMAT_COORDINATE
+
+            # skip comments
+            # line.startswith('%')
+            while line and line[0] in ["%", 37]:
+                line = stream.readline()
+
+            # skip empty lines
+            while not line.strip():
+                line = stream.readline()
+
+            split_line = line.split()
+            if format == self.FORMAT_ARRAY:
+                if not len(split_line) == 2:
+                    raise ValueError("Header line not of length 2: " + line.decode("ascii"))
+                rows, cols = map(int, split_line)
+                entries = rows * cols
+            else:
+                if not len(split_line) == 3:
+                    raise ValueError("Header line not of length 3: " + line.decode("ascii"))
+                rows, cols, entries = map(int, split_line)
+
+            return (rows, cols, entries, format, field.lower(), symmetry.lower())
+
+        finally:
+            if close_it:
+                stream.close()
+
+    @staticmethod
+    def _open(filespec, mode="rb"):
+        """Return an open file stream for reading based on source.
+
+        If source is a file name, open it (after trying to find it with mtx and
+        gzipped mtx extensions). Otherwise, just return source.
+
+        Parameters
+        ----------
+        filespec : str or file-like
+            String giving file name or file-like object
+        mode : str, optional
+            Mode with which to open file, if `filespec` is a file name.
+
+        Returns
+        -------
+        fobj : file-like
+            Open file-like object.
+        close_it : bool
+            True if the calling function should close this file when done,
+            false otherwise.
+        """
+        # If 'filespec' is path-like (str, pathlib.Path, os.DirEntry, other class
+        # implementing a '__fspath__' method), try to convert it to str. If this
+        # fails by throwing a 'TypeError', assume it's an open file handle and
+        # return it as-is.
+        try:
+            filespec = os.fspath(filespec)
+        except TypeError:
+            return filespec, False
+
+        # 'filespec' is definitely a str now
+
+        # open for reading
+        if mode[0] == "r":
+
+            # determine filename plus extension
+            if not os.path.isfile(filespec):
+                if os.path.isfile(filespec + ".mtx"):
+                    filespec = filespec + ".mtx"
+                elif os.path.isfile(filespec + ".mtx.gz"):
+                    filespec = filespec + ".mtx.gz"
+                elif os.path.isfile(filespec + ".mtx.bz2"):
+                    filespec = filespec + ".mtx.bz2"
+            # open filename
+            if filespec.endswith(".gz"):
+                import gzip
+
+                stream = gzip.open(filespec, mode)
+            elif filespec.endswith(".bz2"):
+                import bz2
+
+                stream = bz2.BZ2File(filespec, "rb")
+            else:
+                stream = open(filespec, mode)
+
+        # open for writing
+        else:
+            if filespec[-4:] != ".mtx":
+                filespec = filespec + ".mtx"
+            stream = open(filespec, mode)
+
+        return stream, True
+
+    # -------------------------------------------------------------------------
+    def _parse_header(self, stream):
+        rows, cols, entries, format, field, symmetry = self.__class__.info(stream)
+        self._init_attrs(
+            rows=rows, cols=cols, entries=entries, format=format, field=field, symmetry=symmetry
+        )
+
+    # -------------------------------------------------------------------------
+    def _init_attrs(self, **kwargs):
+        """
+        Initialize each attributes with the corresponding keyword arg value
+        or a default of None
+        """
+
+        attrs = self.__class__.__slots__
+        public_attrs = [attr[1:] for attr in attrs]
+        invalid_keys = set(kwargs.keys()) - set(public_attrs)
+
+        if invalid_keys:
+            raise ValueError(
+                """found %s invalid keyword arguments, please only
+                                use %s"""
+                % (tuple(invalid_keys), public_attrs)
+            )
+
+        for attr in attrs:
+            setattr(self, attr, kwargs.get(attr[1:], None))
+
+    # -------------------------------------------------------------------------
     def get_data_begin(self, source):
         """
         Reads the contents of a Matrix Market file-like 'source' into a matrix.
@@ -157,11 +354,13 @@ class MMFile(mmio.MMFile):
                 stream.close()
 
     # -------------------------------------------------------------------------
+
     def _get_data_begin(self, stream):
         _ = self.__class__.info(stream)
         return stream.tell()
 
     # -----------------------------------------------------------------------------
+
     def read_part(self, source, line_start=None, line_stop=None, read_begin=None, read_end=None):
         """
         Reads the contents of a Matrix Market file-like 'source' into a matrix.

@@ -1,18 +1,24 @@
 import dask.array as da
 import numpy as np
 import grblas as gb
-from dask.base import tokenize
+
+from numbers import Integral, Number
+from dask.base import tokenize, is_dask_collection
 from dask.delayed import Delayed, delayed
 from dask.highlevelgraph import HighLevelGraph
 from grblas import binary, monoid, semiring
 from grblas.dtypes import lookup_dtype
+from grblas.exceptions import IndexOutOfBound, EmptyObject, DimensionMismatch
 
-from .base import BaseType, InnerBaseType
+from . import _automethods
+from .base import BaseType, InnerBaseType, DOnion, is_DOnion, any_dOnions, Box, skip
 from .base import _nvals as _nvals_in_chunk
-from .expr import AmbiguousAssignOrExtract, GbDelayed, Updater
+from .expr import AmbiguousAssignOrExtract, IndexerResolver, GbDelayed, Updater
 from .mask import StructuralMask, ValueMask
 from ._ss.matrix import ss
 from .utils import (
+    pack_args,
+    pack_kwargs,
     np_dtype,
     get_return_type,
     get_grblas_type,
@@ -44,6 +50,44 @@ class Matrix(BaseType):
     __slots__ = ("ss",)
     ndim = 2
     _is_transposed = False
+
+    __abs__ = gb.Matrix.__abs__
+    __add__ = gb.Matrix.__add__
+    __divmod__ = gb.Matrix.__divmod__
+    __eq__ = gb.Matrix.__eq__
+    __floordiv__ = gb.Matrix.__floordiv__
+    __ge__ = gb.Matrix.__ge__
+    __gt__ = gb.Matrix.__gt__
+    __iadd__ = gb.Matrix.__iadd__
+    __iand__ = gb.Matrix.__iand__
+    __ifloordiv__ = gb.Matrix.__ifloordiv__
+    __imod__ = gb.Matrix.__imod__
+    __imul__ = gb.Matrix.__imul__
+    __invert__ = gb.Matrix.__invert__
+    __ior__ = gb.Matrix.__ior__
+    __ipow__ = gb.Matrix.__ipow__
+    __isub__ = gb.Matrix.__isub__
+    __itruediv__ = gb.Matrix.__itruediv__
+    __ixor__ = gb.Matrix.__ixor__
+    __le__ = gb.Matrix.__le__
+    __lt__ = gb.Matrix.__lt__
+    __mod__ = gb.Matrix.__mod__
+    __mul__ = gb.Matrix.__mul__
+    __ne__ = gb.Matrix.__ne__
+    __neg__ = gb.Matrix.__neg__
+    __pow__ = gb.Matrix.__pow__
+    __radd__ = gb.Matrix.__radd__
+    __rdivmod__ = gb.Matrix.__rdivmod__
+    __rfloordiv__ = gb.Matrix.__rfloordiv__
+    __rmod__ = gb.Matrix.__rmod__
+    __rmul__ = gb.Matrix.__rmul__
+    __rpow__ = gb.Matrix.__rpow__
+    __rsub__ = gb.Matrix.__rsub__
+    __rtruediv__ = gb.Matrix.__rtruediv__
+    __rxor__ = gb.Matrix.__rxor__
+    __sub__ = gb.Matrix.__sub__
+    __truediv__ = gb.Matrix.__truediv__
+    __xor__ = gb.Matrix.__xor__
 
     @classmethod
     def from_delayed(cls, matrix, dtype, nrows, ncols, *, nvals=None, name=None):
@@ -121,40 +165,92 @@ class Matrix(BaseType):
         nrows=None,
         ncols=None,
         *,
-        trust_shape=False,
         dup_op=None,
         dtype=None,
         chunks="auto",
         name=None,
     ):
-        # Note: `trust_shape` is a bool parameter that, when True,
-        # can be used to avoid expensive computation of max(rows)
-        # and max(columns) which are used to verify that `nrows`
-        # and `ncols` are indeed large enough to hold all the given
-        # tuples.
-        if (
-            dup_op is None
-            and type(rows) is da.Array
-            and type(columns) is da.Array
-            and type(values) is da.Array
-        ):
-            if not trust_shape or nrows is None or ncols is None:
-                # this branch is an expensive operation:
-                implied_nrows = 1 + da.max(rows).compute()
-                implied_ncols = 1 + da.max(columns).compute()
-                if nrows is not None and implied_nrows > nrows:
-                    raise Exception()
-                if ncols is not None and implied_ncols > ncols:
-                    raise Exception()
-                nrows = implied_nrows if nrows is None else nrows
-                ncols = implied_ncols if ncols is None else ncols
+        if isinstance(values, Number):
+            dtype = lookup_dtype(type(values) if dtype is None else dtype)
+        elif hasattr(values, "dtype"):
+            dtype = lookup_dtype(values.dtype if dtype is None else dtype)
 
-            idtype = gb.Matrix.new(rows.dtype).dtype
-            np_idtype_ = np_dtype(idtype)
-            vdtype = gb.Matrix.new(values.dtype).dtype
+        meta = gb.Matrix.new(
+            dtype,
+            nrows=nrows if isinstance(nrows, Number) else 0,
+            ncols=ncols if isinstance(ncols, Number) else 0,
+        )
+
+        # check for any dOnions:
+        args = pack_args(rows, columns, values, nrows, ncols)
+        kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+        if any_dOnions(*args, **kwargs):
+            # dive into dOnion(s):
+            out_donion = DOnion.multi_access(meta, Matrix.from_values, *args, **kwargs)
+            return Matrix(out_donion, meta=meta)
+
+        # no dOnions
+        if type(rows) is da.Array or type(columns) is da.Array or type(values) is da.Array:
+            nrows_, ncols_ = nrows, ncols
+            if type(rows) in {tuple, list, np.ndarray}:
+                nrows_ = nrows or (np.max(rows) + 1)
+                rows = da.asarray(rows)
+            if type(columns) in {tuple, list, np.ndarray}:
+                ncols_ = ncols or (np.max(columns) + 1)
+                columns = da.asarray(columns)
+            if type(values) in {tuple, list, np.ndarray}:
+                values = da.asarray(values)
+
+            np_idtype_ = np_dtype(lookup_dtype(rows.dtype))
+            if isinstance(nrows_, Integral) and isinstance(ncols_, Integral):
+                nrows, ncols = nrows_, ncols_
+                chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_idtype_)
+            else:
+                if nrows is None and rows.size == 0:
+                    raise ValueError("No row indices provided. Unable to infer nrows.")
+
+                if ncols is None and columns.size == 0:
+                    raise ValueError("No column indices provided. Unable to infer ncols.")
+
+                if type(values) is da.Array and (
+                    rows.size != columns.size or columns.size != values.size
+                ):
+                    raise ValueError(
+                        "`rows` and `columns` and `values` lengths must match: "
+                        f"{rows.size}, {columns.size}, {values.size}"
+                    )
+                elif rows.size != columns.size:
+                    raise ValueError(
+                        f"`rows` and `columns` lengths must match: {rows.size}, {columns.size}"
+                    )
+
+                if rows.dtype.kind not in "ui":
+                    raise ValueError(f"rows must be integers, not {rows.dtype}")
+
+                if columns.dtype.kind not in "ui":
+                    raise ValueError(f"columns must be integers, not {columns.dtype}")
+
+                nrows = nrows_
+                if nrows is None:
+                    nrows = da.max(rows) + np.asarray(1, dtype=rows.dtype)
+
+                ncols = ncols_
+                if ncols is None:
+                    ncols = da.max(columns) + np.asarray(1, dtype=columns.dtype)
+
+                # Create dOnion from `nrows` and/or `ncols`, that is,
+                # use the inner value of `nrows` and/or `ncols` to create the new Matrix:
+                shape = (nrows, ncols)
+                _shape = [skip if is_dask_collection(x) else x for x in shape]
+                dasks = [x for x in shape if is_dask_collection(x)]
+                args = pack_args(rows, columns, values, *_shape)
+                kwargs = pack_kwargs(dup_op=dup_op, dtype=dtype, chunks=chunks, name=name)
+                donion = DOnion.sprout(dasks, meta, Matrix.from_values, *args, **kwargs)
+                return Matrix(donion, meta=meta)
+
+            # output shape `(nrows, ncols)` is completely determined
+            vdtype = dtype
             np_vdtype_ = np_dtype(vdtype)
-
-            chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np_idtype_)
 
             name_ = name
             name = str(name) if name else ""
@@ -166,19 +262,22 @@ class Matrix(BaseType):
                 *(_pick2D, "ijk"),
                 *(rows, "k"),
                 *(columns, "k"),
-                *(values, "k"),
+                *(values, "k" if type(values) is da.Array else None),
                 *(row_ranges, "i"),
                 *(col_ranges, "j"),
+                shape=(nrows, ncols),
                 dtype=np_idtype_,
                 meta=np.array([]),
             )
-            meta = InnerMatrix(gb.Matrix.new(vdtype))
+            meta = InnerMatrix(gb.Matrix.new(vdtype, nrows=nrows, ncols=ncols))
             delayed = da.core.blockwise(
                 *(_from_values2D, "ij"),
+                *(values if isinstance(values, Number) else None, None),
                 *(fragments, "ijk"),
                 *(row_ranges, "i"),
                 *(col_ranges, "j"),
                 concatenate=False,
+                dup_op=dup_op,
                 gb_dtype=vdtype,
                 dtype=np_vdtype_,
                 meta=meta,
@@ -192,8 +291,130 @@ class Matrix(BaseType):
         )
         return cls.from_matrix(matrix, chunks=chunks, name=name)
 
+    def build(
+        self,
+        rows,
+        columns,
+        values,
+        *,
+        dup_op=None,
+        clear=False,
+        nrows=None,
+        ncols=None,
+        chunks=None,
+        in_dOnion=False,  # not part of the API
+    ):
+        if not clear and self._nvals != 0:
+            raise gb.exceptions.OutputNotEmpty()
+
+        # TODO: delayed nrows/ncols
+        nrows = nrows or self._nrows
+        ncols = ncols or self._ncols
+        meta = self._meta
+
+        # check for any DOnions:
+        args = pack_args(self, rows, columns, values)
+        kwargs = pack_kwargs(
+            dup_op=dup_op, clear=clear, nrows=nrows, ncols=ncols, chunks=chunks, in_dOnion=True
+        )
+        if any_dOnions(*args, **kwargs):
+            # dive into DOnion(s):
+            out_donion = DOnion.multi_access(meta, Matrix.build, *args, **kwargs)
+            self.__init__(out_donion, meta=meta)
+            return
+
+        # no DOnions
+        if clear:
+            self.clear()
+
+        self.resize(nrows, ncols)
+
+        if chunks is not None:
+            self.rechunk(inplace=True, chunks=chunks)
+
+        x = self._optional_dup()
+        if type(rows) in {tuple, list, np.ndarray}:
+            if np.max(rows) >= self._nrows:
+                raise gb.exceptions.IndexOutOfBound
+            rows = da.core.from_array(np.array(rows), name="rows-" + tokenize(rows))
+
+        if type(columns) in {tuple, list, np.ndarray}:
+            if np.max(columns) >= self._ncols:
+                raise gb.exceptions.IndexOutOfBound
+            columns = da.core.from_array(np.array(columns), name="columns-" + tokenize(columns))
+
+        if type(values) in {tuple, list, np.ndarray}:
+            values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
+
+        if type(values) is da.Array and (rows.size != columns.size or columns.size != values.size):
+            raise ValueError(
+                "`rows` and `columns` and `values` lengths must match: "
+                f"{rows.size}, {columns.size}, {values.size}"
+            )
+        elif rows.size != columns.size:
+            raise ValueError(
+                f"`rows` and `columns` lengths must match: {rows.size}, {columns.size}"
+            )
+        elif values is None:
+            raise EmptyObject()
+
+        idtype = gb.Matrix.new(rows.dtype).dtype
+        np_idtype_ = np_dtype(idtype)
+        vdtype = (
+            lookup_dtype(type(values))
+            if isinstance(values, Number)
+            else gb.Matrix.new(values.dtype).dtype
+        )
+        np_vdtype_ = np_dtype(vdtype)
+
+        rname = "-row-ranges" + tokenize(x, x.chunks[0])
+        cname = "-col-ranges" + tokenize(x, x.chunks[1])
+        row_ranges = build_chunk_ranges_dask_array(x, 0, rname)
+        col_ranges = build_chunk_ranges_dask_array(x, 1, cname)
+        fragments = da.core.blockwise(
+            *(_pick2D, "ijk"),
+            *(rows, "k"),
+            *(columns, "k"),
+            *(values, None if isinstance(values, Number) else "k"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            shape=(nrows, ncols),
+            dtype=np_idtype_,
+            meta=np.array([]),
+        )
+        meta = InnerMatrix(gb.Matrix.new(vdtype))
+        delayed = da.core.blockwise(
+            *(_build_2D_chunk, "ij"),
+            *(x, "ij"),
+            *(row_ranges, "i"),
+            *(col_ranges, "j"),
+            *(fragments, "ijk"),
+            values=values if isinstance(values, Number) else None,
+            dup_op=dup_op,
+            clear=False,
+            concatenate=False,
+            dtype=np_vdtype_,
+            meta=meta,
+        )
+        if in_dOnion:
+            return Matrix(delayed)
+        self.__init__(delayed)
+
     @classmethod
     def new(cls, dtype, nrows=0, ncols=0, *, chunks="auto", name=None):
+        if any_dOnions(nrows, ncols):
+            meta = gb.Matrix.new(dtype)
+            donion = DOnion.multi_access(
+                meta, cls.new, dtype, nrows=nrows, ncols=ncols, chunks=chunks, name=name
+            )
+            return Matrix(donion, meta=meta)
+
+        if type(nrows) is Box:
+            nrows = nrows.content
+
+        if type(ncols) is Box:
+            ncols = ncols.content
+
         dtype = dtype.lower() if isinstance(dtype, str) else dtype
         if nrows == 0 and ncols == 0:
             matrix = gb.Matrix.new(dtype, nrows, ncols)
@@ -234,15 +455,19 @@ class Matrix(BaseType):
         # if it is already known  at the time of initialization of
         # this Matrix,  otherwise its value should be left as None
         # (the default)
-        assert type(delayed) is da.Array
-        assert delayed.ndim == 2
+        assert type(delayed) in {da.Array, DOnion}
         self._delayed = delayed
-        if meta is None:
-            meta = gb.Matrix.new(delayed.dtype, *delayed.shape)
+        if type(delayed) is da.Array:
+            assert delayed.ndim == 2
+            if meta is None:
+                meta = gb.Matrix.new(delayed.dtype, *delayed.shape)
+        else:
+            if meta is None:
+                meta = gb.Matrix.new(delayed.dtype)
         self._meta = meta
-        self._nrows = meta.nrows
-        self._ncols = meta.ncols
         self.dtype = meta.dtype
+        self._nrows = self.nrows
+        self._ncols = self.ncols
         self._nvals = nvals
         # Add ss extension methods
         self.ss = ss(self)
@@ -261,17 +486,34 @@ class Matrix(BaseType):
 
     @property
     def nrows(self):
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta.nrows, getattr, self, "nrows")
         return self._meta.nrows
 
     @property
     def ncols(self):
+        if self.is_dOnion:
+            return DOnion.multi_access(self._meta.ncols, getattr, self, "ncols")
         return self._meta.ncols
 
     @property
     def shape(self):
-        return (self._meta.nrows, self._meta.ncols)
+        if self.is_dOnion:
+            return (self.nrows, self.ncols)
+            # return DOnion.multi_access(self._meta.shape, getattr, self, "shape")
+        return self._meta.shape
 
     def resize(self, nrows, ncols, inplace=True, chunks="auto"):
+        if self.is_dOnion:
+            donion = self._delayed.getattr(
+                self._meta, "resize", nrows, ncols, inplace=False, chunks=chunks
+            )
+            if inplace:
+                self.__init__(donion, meta=self._meta)
+                return
+            else:
+                return Matrix(donion, meta=self._meta)
+
         chunks = da.core.normalize_chunks(chunks, (nrows, ncols), dtype=np.int64)
         output_row_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_row_ranges-")
         output_col_ranges = build_ranges_dask_array_from_chunks(chunks[1], "output_col_ranges-")
@@ -311,6 +553,29 @@ class Matrix(BaseType):
         else:
             return Matrix(x, nvals=nvals)
 
+    def rechunk(self, inplace=False, chunks="auto"):
+        if self.is_dOnion:
+            meta = self._meta
+            donion = self._delayed.getattr(meta, "rechunk", inplace=False, chunks=chunks)
+            if inplace:
+                self.__init__(donion, meta=meta)
+                return
+            else:
+                return Matrix(donion, meta=meta)
+
+        delayed = self._delayed.rechunk(chunks=chunks)
+        if inplace:
+            self._delayed = delayed
+            return
+        else:
+            return Matrix(delayed, meta=self._meta, nvals=self._nvals)
+        # chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
+        # if inplace:
+        #     self.resize(*self.shape, chunks=chunks)
+        #     return
+        # else:
+        #     return self.resize(*self.shape, chunks=chunks, inplace=False)
+
     def _diag(self, k=0, dtype=None, chunks="auto"):
         kdiag_row_start = max(0, -k)
         kdiag_col_start = max(0, k)
@@ -336,7 +601,7 @@ class Matrix(BaseType):
         row_blockid = np.arange(A.numblocks[0])
         col_blockid = np.arange(A.numblocks[1])
 
-        # locate first chunk containing diaagonal:
+        # locate first chunk containing diagonal:
         row_filter = (row_starts <= kdiag_row_start) & (kdiag_row_start < row_stops_)
         col_filter = (col_starts <= kdiag_col_start) & (kdiag_col_start < col_stops_)
         (R,) = row_blockid[row_filter]
@@ -413,13 +678,35 @@ class Matrix(BaseType):
         nvals = 0 if self._nvals == 0 else None
         return get_return_type(meta)(delayed, nvals=nvals)
 
-    def __getitem__(self, index):
-        return AmbiguousAssignOrExtract(self, index)
+    def __getitem__(self, keys):
+        resolved_indexes = IndexerResolver(self, keys)
+        shape = resolved_indexes.shape
+        if not shape:
+            from .scalar import ScalarIndexExpr
 
-    def __delitem__(self, keys):
+            return ScalarIndexExpr(self, resolved_indexes)
+        elif len(shape) == 1:
+            from .vector import VectorIndexExpr
+
+            return VectorIndexExpr(self, resolved_indexes, *shape)
+        else:
+            return MatrixIndexExpr(self, resolved_indexes, *shape)
+
+    def __delitem__(self, keys, in_dOnion=False):
+        if is_DOnion(self._delayed):
+            good_keys = [x for x in keys if isinstance(x, Integral)]
+            if len(good_keys) != 2:
+                raise TypeError("Remove Element only supports scalars.")
+
+            donion = self._delayed.getattr(self._meta, "__delitem__", keys, in_dOnion=True)
+            self.__init__(donion, meta=self._meta)
+            return
+
         del Updater(self)[keys]
+        if in_dOnion:
+            return self
 
-    def __setitem__(self, index, delayed):
+    def __setitem__(self, index, delayed, in_dOnion=False):
         Updater(self)[index] = delayed
 
     def __contains__(self, index):
@@ -437,219 +724,214 @@ class Matrix(BaseType):
         return zip(rows.flat, columns.flat)
 
     def ewise_add(self, other, op=monoid.plus, *, require_monoid=True):
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
-        meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
-        return GbDelayed(self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta)
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix) + gb_types, within="ewise_add", argname="other"
+        )
+
+        try:
+            meta = self._meta.ewise_add(other._meta, op=op, require_monoid=require_monoid)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                meta = self._meta.ewise_add(self._meta, op=op, require_monoid=require_monoid)
+            else:
+                raise
+
+        return MatrixExpression(
+            self, "ewise_add", other, op, require_monoid=require_monoid, meta=meta
+        )
 
     def ewise_mult(self, other, op=binary.times):
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
-        meta = self._meta.ewise_mult(other._meta, op=op)
-        return GbDelayed(self, "ewise_mult", other, op, meta=meta)
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix) + gb_types, within="ewise_mult", argname="other"
+        )
+
+        try:
+            meta = self._meta.ewise_mult(other._meta, op=op)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                meta = self._meta.ewise_mult(self._meta, op=op)
+            else:
+                raise
+
+        return MatrixExpression(self, "ewise_mult", other, op, meta=meta)
 
     def mxv(self, other, op=semiring.plus_times):
-        from .vector import Vector
+        from .vector import Vector, VectorExpression
 
-        assert type(other) is Vector
-        meta = self._meta.mxv(other._meta, op=op)
-        return GbDelayed(self, "mxv", other, op, meta=meta)
+        other = self._expect_type(other, (Vector, gb.Vector), within="mxv", argname="other")
+
+        try:
+            meta = self._meta.mxv(other._meta, op=op)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                other_meta = gb.Vector.new(dtype=other._meta.dtype, size=self._meta.ncols)
+                meta = self._meta.mxv(other_meta, op=op)
+            else:
+                raise
+
+        return VectorExpression(self, "mxv", other, op, meta=meta, size=self.nrows)
 
     def mxm(self, other, op=semiring.plus_times):
-        assert type(other) in (Matrix, TransposedMatrix)
-        meta = self._meta.mxm(other._meta, op=op)
-        return GbDelayed(self, "mxm", other, op, meta=meta)
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix) + gb_types, within="mxm", argname="other"
+        )
+
+        try:
+            meta = self._meta.mxm(other._meta, op=op)
+        except DimensionMismatch:
+            if any_dOnions(self, other):
+                other_meta = gb.Matrix.new(
+                    dtype=other._meta.dtype, nrows=self._meta.ncols, ncols=other._meta.ncols
+                )
+                meta = self._meta.mxm(other_meta, op=op)
+            else:
+                raise
+
+        return MatrixExpression(
+            self, "mxm", other, op, meta=meta, nrows=self.nrows, ncols=other.ncols
+        )
 
     def kronecker(self, other, op=binary.times):
-        assert type(other) is Matrix  # TODO: or TransposedMatrix
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix) + gb_types, within="kronecker", argname="other"
+        )
         meta = self._meta.kronecker(other._meta, op=op)
-        return GbDelayed(self, "kronecker", other, op, meta=meta)
+        return MatrixExpression(self, "kronecker", other, op, meta=meta)
 
     def apply(self, op, right=None, *, left=None):
-        from .scalar import Scalar
-
         left_meta = left
         right_meta = right
 
-        if type(left) is Scalar:
-            left_meta = left.dtype.np_type(0)
-        if type(right) is Scalar:
-            right_meta = right.dtype.np_type(0)
+        if isinstance(left, BaseType):
+            left_meta = left._meta
+            if left_meta._is_scalar and left_meta.is_empty:
+                left_meta = gb.Scalar.from_value(0, dtype=left_meta.dtype)
+        if isinstance(right, BaseType):
+            right_meta = right._meta
+            if right_meta._is_scalar and right_meta.is_empty:
+                right_meta = gb.Scalar.from_value(0, dtype=right_meta.dtype)
 
+        if self._meta.shape == (0,) * self.ndim:
+            self._meta.resize(*((1,) * self.ndim))
         meta = self._meta.apply(op=op, left=left_meta, right=right_meta)
-        return GbDelayed(self, "apply", op, right, meta=meta, left=left)
+        return MatrixExpression(self, "apply", op, right, meta=meta, left=left)
 
     def reduce_rowwise(self, op=monoid.plus):
+        from .vector import VectorExpression
+
         meta = self._meta.reduce_rowwise(op)
-        return GbDelayed(self, "reduce_rowwise", op, meta=meta)
+        return VectorExpression(self, "reduce_rowwise", op, meta=meta, size=self.nrows)
 
     def reduce_columnwise(self, op=monoid.plus):
+        from .vector import VectorExpression
+
         meta = self._meta.reduce_columnwise(op)
-        return GbDelayed(self, "reduce_columnwise", op, meta=meta)
+        return VectorExpression(self, "reduce_columnwise", op, meta=meta, size=self.ncols)
 
-    def reduce_scalar(self, op=monoid.plus):
+    def reduce_scalar(self, op=monoid.plus, *, allow_empty=True):
+        from .scalar import ScalarExpression
+
         meta = self._meta.reduce_scalar(op)
-        return GbDelayed(self, "reduce_scalar", op, meta=meta)
-
-    def build(
-        self,
-        rows,
-        columns,
-        values,
-        *,
-        dup_op=None,
-        clear=False,
-        nrows=None,
-        ncols=None,
-        chunks=None,
-    ):
-        if clear:
-            self.clear()
-        elif self.nvals.compute() > 0:
-            raise gb.exceptions.OutputNotEmpty
-
-        if nrows is not None or ncols is not None:
-            if nrows is None:
-                nrows = self._nrows
-            if ncols is None:
-                ncols = self._ncols
-            self.resize(nrows, ncols)
-
-        if chunks is not None:
-            self.rechunk(inplace=True, chunks=chunks)
-
-        x = self._optional_dup()
-        if type(rows) is list:
-            if np.max(rows) >= self._nrows:
-                raise gb.exceptions.IndexOutOfBound
-            rows = da.core.from_array(np.array(rows), name="rows-" + tokenize(rows))
-        else:
-            if da.max(rows).compute() >= self._nrows:
-                raise gb.exceptions.IndexOutOfBound
-        if type(columns) is list:
-            if np.max(columns) >= self._ncols:
-                raise gb.exceptions.IndexOutOfBound
-            columns = da.core.from_array(np.array(columns), name="columns-" + tokenize(columns))
-        else:
-            if da.max(columns).compute() >= self._ncols:
-                raise gb.exceptions.IndexOutOfBound
-        if type(values) is list:
-            values = da.core.from_array(np.array(values), name="values-" + tokenize(values))
-
-        idtype = gb.Matrix.new(rows.dtype).dtype
-        np_idtype_ = np_dtype(idtype)
-        vdtype = gb.Matrix.new(values.dtype).dtype
-        np_vdtype_ = np_dtype(vdtype)
-
-        rname = "-row-ranges" + tokenize(x, x.chunks[0])
-        cname = "-col-ranges" + tokenize(x, x.chunks[1])
-        row_ranges = build_chunk_ranges_dask_array(x, 0, rname)
-        col_ranges = build_chunk_ranges_dask_array(x, 1, cname)
-        fragments = da.core.blockwise(
-            *(_pick2D, "ijk"),
-            *(rows, "k"),
-            *(columns, "k"),
-            *(values, "k"),
-            *(row_ranges, "i"),
-            *(col_ranges, "j"),
-            dtype=np_idtype_,
-            meta=np.array([]),
-        )
-        meta = InnerMatrix(gb.Matrix.new(vdtype))
-        delayed = da.core.blockwise(
-            *(_build_2D_chunk, "ij"),
-            *(x, "ij"),
-            *(row_ranges, "i"),
-            *(col_ranges, "j"),
-            *(fragments, "ijk"),
-            dup_op=dup_op,
-            concatenate=False,
-            dtype=np_vdtype_,
-            meta=meta,
-        )
-        self.__init__(delayed)
+        return ScalarExpression(self, "reduce_scalar", op, meta=meta, allow_empty=allow_empty)
 
     def to_values(self, dtype=None, chunks="auto"):
-        x = self._delayed
+        dtype = lookup_dtype(self.dtype if dtype is None else dtype)
+        meta_i, _, meta_v = self._meta.to_values(dtype)
+
+        if self.is_dOnion:
+            meta = np.array([])
+            result = DOnion.multi_access(
+                meta, self.__class__.to_values, self, dtype=dtype, chunks=chunks
+            )
+            rows = DOnion.multi_access(meta_i, tuple.__getitem__, result, 0)
+            columns = DOnion.multi_access(meta_i, tuple.__getitem__, result, 1)
+            values = DOnion.multi_access(meta_v, tuple.__getitem__, result, 2)
+            return rows, columns, values
+
         # first find the number of values in each chunk and return
         # them as a 2D numpy array whose shape is equal to x.numblocks
+        x = self._delayed
         nvals_2D = da.core.blockwise(
             *(_nvals_in_chunk, "ij"),
             *(x, "ij"),
             adjust_chunks={"i": 1, "j": 1},
             dtype=np.int64,
             meta=np.array([[]]),
-        ).compute()
+        )
 
         # use the above array to determine the output tuples' array
-        # bounds (`starts` and `stops`) for each chunk of this
+        # bounds (`starts` and `stops_`) for each chunk of this
         # Matrix (self)
-        nvals_1D = nvals_2D.flatten()
-
-        stops = np.cumsum(nvals_1D)
-        starts = np.roll(stops, 1)
+        stops_ = da.cumsum(nvals_2D)  # BEWARE: this function rechunks!
+        starts = da.roll(stops_, 1)
+        starts = starts.copy() if starts.size == 1 else starts  # bug!!
         starts[0] = 0
-        nnz = stops[-1]
+        nnz = stops_[-1]
+        starts = starts.reshape(nvals_2D.shape).rechunk(1)
+        stops_ = stops_.reshape(nvals_2D.shape).rechunk(1)
 
-        # convert numpy 2D-arrays (`starts` and `stops`) to 2D dask Arrays
-        # of ranges.  Don't forget to fix their `chunks` in oder to enable
-        # them to align with x
-        starts = starts.reshape(nvals_2D.shape)
-        starts = da.from_array(starts, chunks=1, name="starts" + tokenize(starts))
-        starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+        def _to_values(x, starts, stops_, dtype, chunks, nnz):
+            # the following changes the `.chunks` attribute of `starts` and `stops_` so that
+            # `blockwise()` can align them with `x`
+            starts = da.core.Array(starts.dask, starts.name, x.chunks, starts.dtype, meta=x._meta)
+            stops_ = da.core.Array(stops_.dask, stops_.name, x.chunks, stops_.dtype, meta=x._meta)
 
-        stops = stops.reshape(nvals_2D.shape)
-        stops = da.from_array(stops, chunks=1, name="stops" + tokenize(stops))
-        stops = da.core.Array(stops.dask, stops.name, x.chunks, stops.dtype, meta=x._meta)
+            chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
+            output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
 
-        chunks = da.core.normalize_chunks(chunks, (nnz,), dtype=np.int64)
-        output_ranges = build_ranges_dask_array_from_chunks(chunks[0], "output_ranges-")
+            gb_dtype = lookup_dtype(dtype)
+            dtype_ = np_dtype(gb_dtype)
+            # Compute row/col offsets as dask arrays that can align with this
+            # Matrix's (self's) chunks to convert chunk row/col indices to
+            # full dask-grblas Matrix indices.
+            row_offsets = build_chunk_offsets_dask_array(x, 0, "row_offset-")
+            col_offsets = build_chunk_offsets_dask_array(x, 1, "col_offset-")
+            x = da.core.blockwise(
+                *(MatrixTupleExtractor, "ijk"),
+                *(output_ranges, "k"),
+                *(x, "ij"),
+                *(row_offsets, "i"),
+                *(col_offsets, "j"),
+                *(starts, "ij"),
+                *(stops_, "ij"),
+                gb_dtype=dtype,
+                dtype=dtype_,
+                meta=np.array([[[]]]),
+            )
+            x = da.reduction(
+                x, _identity, _flatten, axis=1, concatenate=False, dtype=dtype_, meta=np.array([[]])
+            )
+            return da.reduction(
+                x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
+            )
 
-        dtype_ = np_dtype(self.dtype)
-        # Compute row/col offsets as dask arrays that can align with this
-        # Matrix's (self's) chunks to convert chunk row/col indices to
-        # full dask-grblas Matrix indices.
-        row_offsets = build_chunk_offsets_dask_array(x, 0, "row_offset-")
-        col_offsets = build_chunk_offsets_dask_array(x, 1, "col_offset-")
-        x = da.core.blockwise(
-            *(MatrixTupleExtractor, "ijk"),
-            *(output_ranges, "k"),
-            *(x, "ij"),
-            *(row_offsets, "i"),
-            *(col_offsets, "j"),
-            *(starts, "ij"),
-            *(stops, "ij"),
-            gb_dtype=dtype,
-            dtype=dtype_,
-            meta=np.array([[[]]]),
-        )
-        x = da.reduction(
-            x, _identity, _flatten, axis=1, concatenate=False, dtype=dtype_, meta=np.array([[]])
-        )
-        x = da.reduction(
-            x, _identity, _flatten, axis=0, concatenate=False, dtype=dtype_, meta=np.array([])
-        )
+        # since the size of the output (rows, columns, values) depends on nnz, a delayed quantity,
+        # we need to return the output as DOnions (twice-delayed dask-arrays)
+        meta = np.array([])
+        rcv_donion = DOnion.sprout(nnz, meta, _to_values, x, starts, stops_, dtype, chunks)
 
-        meta_i, meta_j, meta_v = self._meta.to_values(dtype)
-        rows = da.map_blocks(_get_rows, x, dtype=meta_i.dtype, meta=meta_i)
-        cols = da.map_blocks(_get_cols, x, dtype=meta_j.dtype, meta=meta_j)
-        vals = da.map_blocks(_get_vals, x, dtype=meta_v.dtype, meta=meta_v)
+        dtype_i = np_dtype(lookup_dtype(meta_i.dtype))
+        rows = rcv_donion.deep_extract(meta_i, da.map_blocks, _get_rows, dtype=dtype_i, meta=meta_i)
+        cols = rcv_donion.deep_extract(meta_i, da.map_blocks, _get_cols, dtype=dtype_i, meta=meta_i)
+        dtype_v = np_dtype(lookup_dtype(meta_v.dtype))
+        vals = rcv_donion.deep_extract(meta_v, da.map_blocks, _get_vals, dtype=dtype_v, meta=meta_v)
         return rows, cols, vals
 
-    def rechunk(self, inplace=False, chunks="auto"):
-        chunks = da.core.normalize_chunks(chunks, self.shape, dtype=np.int64)
-        if inplace:
-            self.resize(*self.shape, chunks=chunks)
-        else:
-            return self.resize(*self.shape, chunks=chunks, inplace=False)
-
     def isequal(self, other, *, check_dtype=False):
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
         other = self._expect_type(
-            other, (Matrix, TransposedMatrix), within="isequal", argname="other"
+            other, (Matrix, TransposedMatrix) + gb_types, within="isequal", argname="other"
         )
         return super().isequal(other, check_dtype=check_dtype)
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
+        gb_types = (gb.Matrix, gb.matrix.TransposedMatrix)
         other = self._expect_type(
-            other, (Matrix, TransposedMatrix), within="isclose", argname="other"
+            other, (Matrix, TransposedMatrix) + gb_types, within="isclose", argname="other"
         )
         return super().isclose(other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype)
 
@@ -681,29 +963,79 @@ Matrix.ss = gb.utils.class_property(Matrix.ss, ss)
 
 class TransposedMatrix:
     ndim = 2
+    _is_scalar = False
     _is_transposed = True
 
-    def __init__(self, matrix):
+    __and__ = gb.matrix.TransposedMatrix.__and__
+    __bool__ = gb.matrix.TransposedMatrix.__bool__
+    __or__ = gb.matrix.TransposedMatrix.__or__
+
+    __abs__ = gb.matrix.TransposedMatrix.__abs__
+    __add__ = gb.matrix.TransposedMatrix.__add__
+    __divmod__ = gb.matrix.TransposedMatrix.__divmod__
+    __eq__ = gb.matrix.TransposedMatrix.__eq__
+    __floordiv__ = gb.matrix.TransposedMatrix.__floordiv__
+    __ge__ = gb.matrix.TransposedMatrix.__ge__
+    __gt__ = gb.matrix.TransposedMatrix.__gt__
+    __invert__ = gb.matrix.TransposedMatrix.__invert__
+    __le__ = gb.matrix.TransposedMatrix.__le__
+    __lt__ = gb.matrix.TransposedMatrix.__lt__
+    __mod__ = gb.matrix.TransposedMatrix.__mod__
+    __mul__ = gb.matrix.TransposedMatrix.__mul__
+    __ne__ = gb.matrix.TransposedMatrix.__ne__
+    __neg__ = gb.matrix.TransposedMatrix.__neg__
+    __pow__ = gb.matrix.TransposedMatrix.__pow__
+    __radd__ = gb.matrix.TransposedMatrix.__radd__
+    __rdivmod__ = gb.matrix.TransposedMatrix.__rdivmod__
+    __rfloordiv__ = gb.matrix.TransposedMatrix.__rfloordiv__
+    __rmod__ = gb.matrix.TransposedMatrix.__rmod__
+    __rmul__ = gb.matrix.TransposedMatrix.__rmul__
+    __rpow__ = gb.matrix.TransposedMatrix.__rpow__
+    __rsub__ = gb.matrix.TransposedMatrix.__rsub__
+    __rtruediv__ = gb.matrix.TransposedMatrix.__rtruediv__
+    __rxor__ = gb.matrix.TransposedMatrix.__rxor__
+    __sub__ = gb.matrix.TransposedMatrix.__sub__
+    __truediv__ = gb.matrix.TransposedMatrix.__truediv__
+    __xor__ = gb.matrix.TransposedMatrix.__xor__
+
+    def __init__(self, matrix, meta=None):
         assert type(matrix) is Matrix
         self._matrix = matrix
-        self._meta = matrix._meta.T
+        self._meta = matrix._meta.T if meta is None else meta
 
         # Aggregator-specific requirements:
-        self._nrows = self.nrows
-        self._ncols = self.ncols
+        self._nrows = self._meta.nrows
+        self._ncols = self._meta.ncols
+
+    @property
+    def is_dOnion(self):
+        return is_DOnion(self._matrix._delayed)
+
+    @property
+    def dOnion_if(self):
+        return self._matrix._delayed if self.is_dOnion else self
+
+    def dup(self, dtype=None, *, mask=None, name=None):
+        return self.new(dtype=dtype, mask=mask)
 
     def new(self, *, dtype=None, mask=None):
+        if any_dOnions(self, mask):
+            donion = DOnion.multi_access(
+                self._meta.new(dtype), self.__class__.new, self, dtype=dtype, mask=mask
+            )
+            return Matrix(donion)
+
         gb_dtype = self._matrix.dtype if dtype is None else lookup_dtype(dtype)
         dtype = np_dtype(gb_dtype)
 
         delayed = self._matrix._delayed
         if mask is None:
-            mask_ind = None
             mask_type = None
+            mask_ind = None
         else:
-            mask = mask.mask
-            mask_ind = "ji"
             mask_type = get_grblas_type(mask)
+            mask = mask.mask._delayed
+            mask_ind = "ji"
         delayed = da.core.blockwise(
             *(_transpose, "ji"),
             *(delayed, "ij"),
@@ -724,17 +1056,27 @@ class TransposedMatrix:
         return self._meta.dtype
 
     def to_values(self, dtype=None, chunks="auto"):
-        # TODO: make this lazy; can we do something smart with this?
         rows, cols, vals = self._matrix.to_values(dtype=dtype, chunks=chunks)
         return cols, rows, vals
 
     # Properties
-    nrows = Matrix.nrows
-    ncols = Matrix.ncols
-    shape = Matrix.shape
-    nvals = Matrix.nvals
+    def isequal(self, other, *, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isequal", argname="other"
+        )
+        return BaseType.isequal(self, other, check_dtype=check_dtype)
+
+    def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
+        other = self._expect_type(
+            other, (Matrix, TransposedMatrix), within="isclose", argname="other"
+        )
+        return BaseType.isclose(
+            self, other, rel_tol=rel_tol, abs_tol=abs_tol, check_dtype=check_dtype
+        )
 
     # Delayed methods
+    __contains__ = Matrix.__contains__
+    __getitem__ = Matrix.__getitem__
     ewise_add = Matrix.ewise_add
     ewise_mult = Matrix.ewise_mult
     mxv = Matrix.mxv
@@ -746,11 +1088,209 @@ class TransposedMatrix:
     reduce_scalar = Matrix.reduce_scalar
 
     # Misc.
-    isequal = Matrix.isequal
-    isclose = Matrix.isclose
-    __getitem__ = Matrix.__getitem__
+    nrows = Matrix.nrows
+    ncols = Matrix.ncols
+    shape = Matrix.shape
+    nvals = Matrix.nvals
+    _expect_type = Matrix._expect_type
     __array__ = Matrix.__array__
     name = Matrix.name
+
+
+class MatrixExpression(GbDelayed):
+    __slots__ = ()
+    output_type = gb.Matrix
+    ndim = 2
+    _is_scalar = False
+
+    # automethods:
+    __and__ = gb.matrix.MatrixExpression.__and__
+    __bool__ = gb.matrix.MatrixExpression.__bool__
+    __or__ = gb.matrix.MatrixExpression.__or__
+    _get_value = _automethods._get_value
+    S = gb.matrix.MatrixExpression.S
+    T = gb.matrix.MatrixExpression.T
+    V = gb.matrix.MatrixExpression.V
+    apply = gb.matrix.MatrixExpression.apply
+    ewise_add = gb.matrix.MatrixExpression.ewise_add
+    ewise_mult = gb.matrix.MatrixExpression.ewise_mult
+    isclose = gb.matrix.MatrixExpression.isclose
+    isequal = gb.matrix.MatrixExpression.isequal
+    kronecker = gb.matrix.MatrixExpression.kronecker
+    mxm = gb.matrix.MatrixExpression.mxm
+    mxv = gb.matrix.MatrixExpression.mxv
+    ncols = gb.matrix.MatrixExpression.ncols
+    nrows = gb.matrix.MatrixExpression.nrows
+    nvals = gb.matrix.MatrixExpression.nvals
+    reduce_rowwise = gb.matrix.MatrixExpression.reduce_rowwise
+    reduce_columnwise = gb.matrix.MatrixExpression.reduce_columnwise
+    reduce_scalar = gb.matrix.MatrixExpression.reduce_scalar
+    shape = gb.matrix.MatrixExpression.shape
+    nvals = gb.matrix.MatrixExpression.nvals
+
+    # infix sugar:
+    __abs__ = gb.matrix.MatrixExpression.__abs__
+    __add__ = gb.matrix.MatrixExpression.__add__
+    __divmod__ = gb.matrix.MatrixExpression.__divmod__
+    __eq__ = gb.matrix.MatrixExpression.__eq__
+    __floordiv__ = gb.matrix.MatrixExpression.__floordiv__
+    __ge__ = gb.matrix.MatrixExpression.__ge__
+    __gt__ = gb.matrix.MatrixExpression.__gt__
+    __invert__ = gb.matrix.MatrixExpression.__invert__
+    __le__ = gb.matrix.MatrixExpression.__le__
+    __lt__ = gb.matrix.MatrixExpression.__lt__
+    __mod__ = gb.matrix.MatrixExpression.__mod__
+    __mul__ = gb.matrix.MatrixExpression.__mul__
+    __ne__ = gb.matrix.MatrixExpression.__ne__
+    __neg__ = gb.matrix.MatrixExpression.__neg__
+    __pow__ = gb.matrix.MatrixExpression.__pow__
+    __radd__ = gb.matrix.MatrixExpression.__radd__
+    __rdivmod__ = gb.matrix.MatrixExpression.__rdivmod__
+    __rfloordiv__ = gb.matrix.MatrixExpression.__rfloordiv__
+    __rmod__ = gb.matrix.MatrixExpression.__rmod__
+    __rmul__ = gb.matrix.MatrixExpression.__rmul__
+    __rpow__ = gb.matrix.MatrixExpression.__rpow__
+    __rsub__ = gb.matrix.MatrixExpression.__rsub__
+    __rtruediv__ = gb.matrix.MatrixExpression.__rtruediv__
+    __rxor__ = gb.matrix.MatrixExpression.__rxor__
+    __sub__ = gb.matrix.MatrixExpression.__sub__
+    __truediv__ = gb.matrix.MatrixExpression.__truediv__
+    __xor__ = gb.matrix.MatrixExpression.__xor__
+
+    # bad sugar:
+    __itruediv__ = gb.matrix.MatrixExpression.__itruediv__
+    __imul__ = gb.matrix.MatrixExpression.__imul__
+    __imatmul__ = gb.matrix.MatrixExpression.__imatmul__
+    __iadd__ = gb.matrix.MatrixExpression.__iadd__
+    __iand__ = gb.matrix.MatrixExpression.__iand__
+    __ipow__ = gb.matrix.MatrixExpression.__ipow__
+    __imod__ = gb.matrix.MatrixExpression.__imod__
+    __isub__ = gb.matrix.MatrixExpression.__isub__
+    __ixor__ = gb.matrix.MatrixExpression.__ixor__
+    __ifloordiv__ = gb.matrix.MatrixExpression.__ifloordiv__
+    __ior__ = gb.matrix.MatrixExpression.__ior__
+
+    def __init__(
+        self,
+        parent,
+        method_name,
+        *args,
+        meta=None,
+        ncols=None,
+        nrows=None,
+        **kwargs,
+    ):
+        super().__init__(
+            parent,
+            method_name,
+            *args,
+            meta=meta,
+            **kwargs,
+        )
+        if ncols is None:
+            ncols = self.parent._ncols
+        if nrows is None:
+            nrows = self.parent._nrows
+        self._ncols = ncols
+        self._nrows = nrows
+
+    # def __getattr__(self, item):
+    #     return getattr(gb.matrix.MatrixExpression, item)
+
+    # def construct_output(self, dtype=None, *, name=None):
+    #     if dtype is None:
+    #         dtype = self.dtype
+    #     nrows = 0 if self._nrows.is_dOnion else self._nrows
+    #     ncols = 0 if self._ncols.is_dOnion else self._ncols
+    #     return Matrix.new(dtype, nrows, ncols, name=name)
+
+
+class MatrixIndexExpr(AmbiguousAssignOrExtract):
+    __slots__ = "_ncols", "_nrows"
+    ndim = 2
+    output_type = gb.Matrix
+    _is_transposed = False
+
+    def __init__(self, parent, resolved_indexes, nrows, ncols):
+        super().__init__(parent, resolved_indexes)
+        self._nrows = nrows
+        self._ncols = ncols
+
+    @property
+    def ncols(self):
+        return self._ncols
+
+    @property
+    def nrows(self):
+        return self._nrows
+
+    @property
+    def shape(self):
+        return (self._nrows, self._ncols)
+
+    # Begin auto-generated code: Matrix
+    __and__ = gb.matrix.MatrixIndexExpr.__and__
+    __bool__ = gb.matrix.MatrixIndexExpr.__bool__
+    __or__ = gb.matrix.MatrixIndexExpr.__or__
+    _get_value = _automethods._get_value
+    S = gb.matrix.MatrixIndexExpr.S
+    T = gb.matrix.MatrixIndexExpr.T
+    V = gb.matrix.MatrixIndexExpr.V
+    apply = gb.matrix.MatrixIndexExpr.apply
+    ewise_add = gb.matrix.MatrixIndexExpr.ewise_add
+    ewise_mult = gb.matrix.MatrixIndexExpr.ewise_mult
+    isclose = gb.matrix.MatrixIndexExpr.isclose
+    isequal = gb.matrix.MatrixIndexExpr.isequal
+    kronecker = gb.matrix.MatrixIndexExpr.kronecker
+    mxm = gb.matrix.MatrixIndexExpr.mxm
+    mxv = gb.matrix.MatrixIndexExpr.mxv
+    nvals = gb.matrix.MatrixIndexExpr.nvals
+    reduce_rowwise = gb.matrix.MatrixIndexExpr.reduce_rowwise
+    reduce_columnwise = gb.matrix.MatrixIndexExpr.reduce_columnwise
+    reduce_scalar = gb.matrix.MatrixIndexExpr.reduce_scalar
+    nvals = gb.matrix.MatrixIndexExpr.nvals
+
+    # infix sugar:
+    __abs__ = gb.matrix.MatrixIndexExpr.__abs__
+    __add__ = gb.matrix.MatrixIndexExpr.__add__
+    __divmod__ = gb.matrix.MatrixIndexExpr.__divmod__
+    __eq__ = gb.matrix.MatrixIndexExpr.__eq__
+    __floordiv__ = gb.matrix.MatrixIndexExpr.__floordiv__
+    __ge__ = gb.matrix.MatrixIndexExpr.__ge__
+    __gt__ = gb.matrix.MatrixIndexExpr.__gt__
+    __invert__ = gb.matrix.MatrixIndexExpr.__invert__
+    __le__ = gb.matrix.MatrixIndexExpr.__le__
+    __lt__ = gb.matrix.MatrixIndexExpr.__lt__
+    __mod__ = gb.matrix.MatrixIndexExpr.__mod__
+    __mul__ = gb.matrix.MatrixIndexExpr.__mul__
+    __ne__ = gb.matrix.MatrixIndexExpr.__ne__
+    __neg__ = gb.matrix.MatrixIndexExpr.__neg__
+    __pow__ = gb.matrix.MatrixIndexExpr.__pow__
+    __radd__ = gb.matrix.MatrixIndexExpr.__radd__
+    __rdivmod__ = gb.matrix.MatrixIndexExpr.__rdivmod__
+    __rfloordiv__ = gb.matrix.MatrixIndexExpr.__rfloordiv__
+    __rmod__ = gb.matrix.MatrixIndexExpr.__rmod__
+    __rmul__ = gb.matrix.MatrixIndexExpr.__rmul__
+    __rpow__ = gb.matrix.MatrixIndexExpr.__rpow__
+    __rsub__ = gb.matrix.MatrixIndexExpr.__rsub__
+    __rtruediv__ = gb.matrix.MatrixIndexExpr.__rtruediv__
+    __rxor__ = gb.matrix.MatrixIndexExpr.__rxor__
+    __sub__ = gb.matrix.MatrixIndexExpr.__sub__
+    __truediv__ = gb.matrix.MatrixIndexExpr.__truediv__
+    __xor__ = gb.matrix.MatrixIndexExpr.__xor__
+
+    # bad sugar:
+    __itruediv__ = gb.matrix.MatrixIndexExpr.__itruediv__
+    __imul__ = gb.matrix.MatrixIndexExpr.__imul__
+    __imatmul__ = gb.matrix.MatrixIndexExpr.__imatmul__
+    __iadd__ = gb.matrix.MatrixIndexExpr.__iadd__
+    __iand__ = gb.matrix.MatrixIndexExpr.__iand__
+    __ipow__ = gb.matrix.MatrixIndexExpr.__ipow__
+    __imod__ = gb.matrix.MatrixIndexExpr.__imod__
+    __isub__ = gb.matrix.MatrixIndexExpr.__isub__
+    __ixor__ = gb.matrix.MatrixIndexExpr.__ixor__
+    __ifloordiv__ = gb.matrix.MatrixIndexExpr.__ifloordiv__
+    __ior__ = gb.matrix.MatrixIndexExpr.__ior__
 
 
 def _chunk_diag_v2(inner_matrix, k):
@@ -911,7 +1451,9 @@ def _build_2D_chunk(
     out_row_range,
     out_col_range,
     fragments,
+    values,
     dup_op=None,
+    clear=False,
 ):
     """
     Reassembles filtered tuples (row, col, val) in the list `fragments`
@@ -921,17 +1463,25 @@ def _build_2D_chunk(
     """
     rows = np.concatenate([rows for (rows, _, _) in fragments])
     cols = np.concatenate([cols for (_, cols, _) in fragments])
-    vals = np.concatenate([vals for (_, _, vals) in fragments])
     nrows = out_row_range[0].stop - out_row_range[0].start
     ncols = out_col_range[0].stop - out_col_range[0].start
-    inner_matrix.value.build(
-        rows,
-        cols,
-        vals,
-        nrows=nrows,
-        ncols=ncols,
-        dup_op=dup_op,
-    )
+    if not clear and inner_matrix.value.nvals > 0:
+        raise gb.exceptions.OutputNotEmpty()
+
+    if values is None:
+        vals = np.concatenate([vals for (_, _, vals) in fragments])
+        inner_matrix.value.build(
+            rows,
+            cols,
+            vals,
+            nrows=nrows,
+            ncols=ncols,
+            dup_op=dup_op,
+            clear=clear,
+        )
+    else:
+        vals = values
+        inner_matrix.value.ss.build_scalar(rows, cols, vals)
     return InnerMatrix(inner_matrix.value)
 
 
@@ -944,7 +1494,7 @@ def _new_Matrix_chunk(out_row_range, out_col_range, gb_dtype=None):
     return InnerMatrix(gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols))
 
 
-def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
+def _from_values2D(values, fragments, out_row_range, out_col_range, dup_op=None, gb_dtype=None):
     """
     Reassembles filtered tuples (row, col, val) in the list `fragments`
     obtained from _pick2D() for the chunk within the given row and column
@@ -953,26 +1503,46 @@ def _from_values2D(fragments, out_row_range, out_col_range, gb_dtype=None):
     """
     rows = np.concatenate([rows for (rows, _, _) in fragments])
     cols = np.concatenate([cols for (_, cols, _) in fragments])
-    vals = np.concatenate([vals for (_, _, vals) in fragments])
+    if values is None:
+        vals = np.concatenate([vals for (_, _, vals) in fragments])
+    else:
+        vals = values
     nrows = out_row_range[0].stop - out_row_range[0].start
     ncols = out_col_range[0].stop - out_col_range[0].start
+    if rows.size == 0 or cols.size == 0:
+        return InnerMatrix(gb.Matrix.new(gb_dtype, nrows=nrows, ncols=ncols))
     return InnerMatrix(
-        gb.Matrix.from_values(rows, cols, vals, nrows=nrows, ncols=ncols, dtype=gb_dtype)
+        gb.Matrix.from_values(
+            rows, cols, vals, nrows=nrows, ncols=ncols, dup_op=dup_op, dtype=gb_dtype
+        )
     )
 
 
-def _pick2D(rows, cols, values, row_range, col_range):
+def _pick2D(rows, cols, values, row_range, col_range, shape):
     """
     Filters out only those tuples (row, col, val) that lie within
     the given row and column ranges.  Indices are also offset
     appropriately.
     """
+    # validate indices:
+    rows = np.where(rows < 0, rows + shape[0], rows)
+    bad_indices = (rows < 0) | (shape[0] <= rows)
+    if np.any(bad_indices):
+        raise IndexOutOfBound
+
+    cols = np.where(cols < 0, cols + shape[1], cols)
+    bad_indices = (cols < 0) | (shape[1] <= cols)
+    if np.any(bad_indices):
+        raise IndexOutOfBound
+
+    # filter into chunk:
     row_range, col_range = row_range[0], col_range[0]
     rows_in = (row_range.start <= rows) & (rows < row_range.stop)
     cols_in = (col_range.start <= cols) & (cols < col_range.stop)
     rows = rows[rows_in & cols_in] - row_range.start
     cols = cols[rows_in & cols_in] - col_range.start
-    values = values[rows_in & cols_in]
+    if isinstance(values, np.ndarray):
+        values = values[rows_in & cols_in]
     return (rows, cols, values)
 
 
@@ -1005,7 +1575,8 @@ def _identity(chunk, keepdims=None, axis=None):
 def _concatenate_files(chunk_files, keepdims=None, axis=None):
     import os
     import shutil
-    from scipy.io.mmio import MMFile, mminfo
+    from .io import MMFile
+    from scipy.io import mminfo
 
     chunk_files = chunk_files if type(chunk_files) is list else [chunk_files]
     first_chunk_file, _, row_range_first, col_range_first = chunk_files[0]
@@ -1162,3 +1733,5 @@ def _concat_matrix(seq, axis=0):
 
 gb.utils._output_types[Matrix] = gb.Matrix
 gb.utils._output_types[TransposedMatrix] = gb.matrix.TransposedMatrix
+gb.utils._output_types[MatrixExpression] = gb.Matrix
+gb.utils._output_types[MatrixIndexExpr] = gb.Matrix

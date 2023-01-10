@@ -4,6 +4,7 @@ import pickle
 import sys
 import weakref
 
+import dask.array as da
 import dask_grblas
 import grblas
 import numpy as np
@@ -124,6 +125,138 @@ def test_from_values():
         Vector.from_values([0], [1, 2])
 
 
+def test_from_values_dask():
+    indices = da.from_array(np.array([0, 1, 3]))
+    values = da.from_array(np.array([True, False, True]))
+    u = Vector.from_values(indices, values)
+    assert u.size == 4
+    assert u.nvals == 3
+    assert u.dtype == bool
+    values = da.from_array(np.array([12.3, 12.4, 12.5]))
+    u2 = Vector.from_values(indices, values, size=17)
+    assert u2.size == 17
+    assert u2.nvals == 3
+    assert u2.dtype == float
+    indices = da.from_array(np.array([0, 1, 1]))
+    values = da.from_array(np.array([1, 2, 3], dtype=np.int64))
+    u3 = Vector.from_values(indices, values, size=10, dup_op=binary.times)
+    assert u3.size == 10
+    assert u3.nvals == 2  # duplicates were combined
+    assert u3.dtype == int
+    assert u3[1].value == 6  # 2*3
+    values = da.from_array(np.array([True, True, True]))
+    with pytest.raises(ValueError, match="Duplicate indices found"):
+        # Duplicate indices requires a dup_op
+        Vector.from_values(indices, values).compute()
+    empty_da = da.from_array(np.array([]))
+    with pytest.raises(ValueError, match="No indices provided. Unable to infer size."):
+        Vector.from_values(empty_da, empty_da).compute()
+
+    # Changed: Assume empty value is float64 (like numpy)
+    # with pytest.raises(ValueError, match="No values provided. Unable to determine type"):
+    w = Vector.from_values(empty_da, empty_da, size=10)
+    assert w.size == 10
+    assert w.nvals == 0
+    assert w.dtype == dtypes.FP64
+
+    with pytest.raises(ValueError, match="No indices provided. Unable to infer size"):
+        Vector.from_values(empty_da, empty_da, dtype=dtypes.INT64)
+    u4 = Vector.from_values(empty_da, empty_da, size=10, dtype=dtypes.INT64)
+    u5 = Vector.new(dtypes.INT64, size=10)
+    assert u4.isequal(u5, check_dtype=True)
+
+    # we check index dtype if given dask array
+    indices = da.from_array(np.array([1.2, 3.4]))
+    values = da.from_array(np.array([1, 2]))
+    with pytest.raises(ValueError, match="indices must be integers, not float64"):
+        Vector.from_values(indices, values).compute()
+
+    # mis-matched sizes
+    indices = da.from_array(np.array([0]))
+    with pytest.raises(ValueError, match="`indices` and `values` lengths must match"):
+        Vector.from_values(indices, values).compute()
+
+
+def test_from_values_DOnion(v):
+    indices = da.from_array(np.array([0, 1, 3]))
+    values = da.from_array(np.array([True, False, True]))
+
+    # The following creates a Vector `u` with `type(u._delayed) == DOnion`
+    # because keyword argument `size` has not been specified:
+    u = Vector.from_values(indices, values)
+    assert u.size == 4
+    assert u.nvals == 3
+    assert u.dtype == bool
+
+    # The output of `.to_values()` is always a tuple of DOnions
+    indices, values = u.to_values()
+
+    # The following creates a Vector `v` with `type(v._delayed) == DOnion`
+    # because arguments `indices` and  `values` are DOnions:
+    v = Vector.from_values(indices, values)
+    assert v.size == 4
+    assert v.nvals == 3
+    assert v.dtype == bool
+    values = da.from_array(np.array([12.3, 12.4, 12.5]))
+
+    # The following creates a Vector `u2` with `type(u2._delayed) == DOnion`
+    # because argument `indices` is a DOnion:
+    u2 = Vector.from_values(indices, values, size=17)
+    assert u2.size == 17
+    assert u2.nvals == 3
+    assert u2.dtype == float
+
+    indices = da.from_array(np.array([0, 1, 1]))
+    indices_ = da.from_array(np.array([1, 2, 3]))
+    i0 = Vector.from_values(indices_, indices)
+    _, indices = i0.to_values()
+    values = da.from_array(np.array([1, 2, 3], dtype=np.int64))
+
+    # The following creates a Vector `u3` with `type(u3._delayed) == DOnion`
+    # because arguments `indices` and `values` are DOnions:
+    u3 = Vector.from_values(indices, values, size=10, dup_op=binary.times)
+    assert u3.size == 10
+    assert u3.nvals == 2  # duplicates were combined
+    assert u3.dtype == int
+    assert u3[1].value == 6  # 2*3
+
+    values = da.from_array(np.array([True, True, True]))
+    with pytest.raises(ValueError, match="Duplicate indices found"):
+        # Duplicate indices requires a dup_op
+        Vector.from_values(indices, values).compute()
+    _, empty_da = Vector.new(float).to_values()
+    with pytest.raises(ValueError, match="No indices provided. Unable to infer size."):
+        Vector.from_values(empty_da, empty_da).compute()
+
+    # Changed: Assume empty value is float64 (like numpy)
+    # with pytest.raises(ValueError, match="No values provided. Unable to determine type"):
+    w = Vector.from_values(empty_da, empty_da, size=10)
+    assert w.size == 10
+    assert w.nvals == 0
+    assert w.dtype == dtypes.FP64
+
+    with pytest.raises(ValueError, match="No indices provided. Unable to infer size"):
+        Vector.from_values(empty_da, empty_da, dtype=dtypes.INT64).compute()
+    u4 = Vector.from_values(empty_da, empty_da, size=10, dtype=dtypes.INT64)
+    u5 = Vector.new(dtypes.INT64, size=10)
+    assert u4.isequal(u5, check_dtype=True)
+
+    # we check index dtype if given dask array
+    indices = da.from_array(np.array([1.2, 3.4]))
+    values = da.from_array(np.array([1, 2]))
+    i0 = Vector.from_values(values, indices)
+    _, indices = i0.to_values()
+    with pytest.raises(ValueError, match="indices must be integers, not float64"):
+        Vector.from_values(indices, values).compute()
+
+    # mis-matched sizes
+    indices = da.from_array(np.array([0]))
+    i0 = Vector.from_values(indices, indices)
+    indices, _ = i0.to_values()
+    with pytest.raises(ValueError, match="`indices` and `values` lengths must match"):
+        Vector.from_values(indices, values).compute()
+
+
 def test_from_values_scalar():
     u = Vector.from_values([0, 1, 3], 7)
     assert u.size == 4
@@ -217,20 +350,20 @@ def test_build_scalar(v):
 
 def test_extract_values(v):
     idx, vals = v.to_values()
-    np.testing.assert_array_equal(idx, (1, 3, 4, 6))
-    np.testing.assert_array_equal(vals, (1, 1, 2, 0))
+    np.testing.assert_array_equal(idx.compute(), (1, 3, 4, 6))
+    np.testing.assert_array_equal(vals.compute(), (1, 1, 2, 0))
     assert idx.dtype == np.uint64
     assert vals.dtype == np.int64
 
     idx, vals = v.to_values(dtype=int)
-    np.testing.assert_array_equal(idx, (1, 3, 4, 6))
-    np.testing.assert_array_equal(vals, (1, 1, 2, 0))
+    np.testing.assert_array_equal(idx.compute(), (1, 3, 4, 6))
+    np.testing.assert_array_equal(vals.compute(), (1, 1, 2, 0))
     assert idx.dtype == np.uint64
     assert vals.dtype == np.int64
 
     idx, vals = v.to_values(dtype=float)
-    np.testing.assert_array_equal(idx, (1, 3, 4, 6))
-    np.testing.assert_array_equal(vals, (1, 1, 2, 0))
+    np.testing.assert_array_equal(idx.compute(), (1, 3, 4, 6))
+    np.testing.assert_array_equal(vals.compute(), (1, 1, 2, 0))
     assert idx.dtype == np.uint64
     assert vals.dtype == np.float64
 

@@ -3,8 +3,9 @@ import grblas as gb
 import numpy as np
 from dask.delayed import Delayed, delayed
 
-from .base import BaseType, InnerBaseType
-from .expr import AmbiguousAssignOrExtract, GbDelayed
+from . import _automethods
+from .base import BaseType, InnerBaseType, DOnion, Box, any_dOnions
+from .expr import AmbiguousAssignOrExtract, GbDelayed, _is_pair
 from .utils import get_meta, np_dtype
 
 
@@ -67,35 +68,128 @@ class Scalar(BaseType):
         return new(cls, dtype, name=name)
 
     def __init__(self, delayed, meta=None):
-        assert type(delayed) is da.Array, type(delayed)
-        assert delayed.ndim == 0
+        assert type(delayed) in {da.Array, DOnion}, type(delayed)
         self._delayed = delayed
+        if type(delayed) is da.Array:
+            assert delayed.ndim == 0
         if meta is None:
             meta = gb.Scalar.new(delayed.dtype)
+            # meta = gb.Scalar.from_value(1, dtype=delayed.dtype)
         self._meta = meta
         self.dtype = meta.dtype
 
-    def update(self, expr):
+    def update(self, expr, in_dOnion=False):
+        typ = type(expr)
+        if any_dOnions(self, expr):
+            self_copy = self.__class__(self._optional_dup(), meta=self._meta)
+            expr_ = expr
+            if isinstance(expr, AmbiguousAssignOrExtract) and expr.has_dOnion:
+
+                def update_by_aae(c, p, k_0, k_1):
+                    keys = k_0 if k_1 is None else (k_0, k_1)
+                    return c.update(p[keys], in_dOnion=True)
+
+                if _is_pair(expr_.index):
+                    keys_0, keys_1 = expr_.index[0], expr_.index[1]
+                else:
+                    keys_0, keys_1 = expr_.index, None
+
+                donion = DOnion.multi_access(
+                    self._meta,
+                    update_by_aae,
+                    self_copy,
+                    expr_.parent,
+                    *(keys_0, keys_1),
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            if isinstance(expr, GbDelayed) and expr.has_dOnion:
+
+                def update_by_gbd(c, *args, **kwargs):
+                    gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
+                    return c.update(gbd, in_dOnion=True)
+
+                donion = DOnion.multi_access(
+                    self._meta,
+                    update_by_gbd,
+                    self_copy,
+                    expr_.parent,
+                    expr_.method_name,
+                    *expr_.args,
+                    **expr_.kwargs,
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            donion = DOnion.multi_access(
+                self._meta, Scalar.update, self_copy, expr_, in_dOnion=True
+            )
+            self.__init__(donion, self._meta)
+            return
+
+        if typ is Box:
+            expr = expr.content
+            typ = type(expr)
+
         self._meta.update(get_meta(expr))
         self._meta.clear()
-        typ = type(expr)
-        if typ is AmbiguousAssignOrExtract:
+        if isinstance(expr, AmbiguousAssignOrExtract):
             # Extract (s << v[index])
-            self.value = expr.new(dtype=self.dtype).value
+            expr_new = expr.new(dtype=self.dtype)
+            self.value = expr_new.value
         elif typ is Scalar:
             # Simple assignment (s << t)
             self.value = expr.value
-        elif typ is GbDelayed:
+        elif isinstance(expr, GbDelayed):
             # s << v.reduce()
             expr._update(self)
         else:
             # Try simple assignment (s << 1)
             self.value = expr
+        if in_dOnion:
+            return self.__class__(self._delayed, meta=self._meta)
 
-    def _update(self, delayed, *, accum):
+    def _update(self, expr, *, accum, in_dOnion=False):
         # s(accum=accum) << v.reduce()
-        assert type(delayed) is GbDelayed
-        delayed._update(self, accum=accum)
+        typ = type(expr)
+        if typ is Box:
+            expr = expr.content
+
+        assert isinstance(expr, GbDelayed)
+
+        if any_dOnions(self, expr):
+            self_copy = self.__class__(self._optional_dup(), meta=self._meta)
+            expr_ = expr
+            if isinstance(expr, GbDelayed) and expr.has_dOnion:
+
+                def _update_by_gbd(c, *args, accum=None, **kwargs):
+                    gbd = getattr(args[0], args[1])(*args[2:], **kwargs)
+                    return c._update(gbd, accum=accum, in_dOnion=True)
+
+                donion = DOnion.multi_access(
+                    self._meta,
+                    _update_by_gbd,
+                    self_copy,
+                    expr_.parent,
+                    expr_.method_name,
+                    *expr_.args,
+                    accum=accum,
+                    **expr_.kwargs,
+                )
+                self.__init__(donion, self._meta)
+                return
+
+            expr_ = expr.parent.dOnion_if
+            donion = DOnion.mult_access(
+                self._meta, Scalar._update, self_copy, expr_, accum=accum, in_dOnion=True
+            )
+            self.__init__(donion, self._meta)
+            return
+
+        expr._update(self, accum=accum)
+        if in_dOnion:
+            return self.__class__(self._delayed, meta=self._meta)
 
     def dup(self, dtype=None, *, name=None):
         if dtype is None:
@@ -112,7 +206,10 @@ class Scalar(BaseType):
 
     def _persist(self, *args, **kwargs):
         """Since scalars are small, persist them if they need to be computed"""
-        self._delayed = self._delayed.persist(*args, **kwargs)
+        if self.is_dOnion:
+            self._delayed = self._delayed._persist(*args, **kwargs)
+        else:
+            self._delayed = self._delayed.persist(*args, **kwargs)
 
     def __eq__(self, other):
         return self.isequal(other).compute()
@@ -154,11 +251,28 @@ class Scalar(BaseType):
     def isequal(self, other, *, check_dtype=False):
         if other is None:
             return self.is_empty
+        if type(other) is Box:
+            other = other.content
         if type(other) is not Scalar:
+            if other is None:
+                return self.is_empty
             self._meta.isequal(get_meta(other))
-            other = Scalar.from_value(other)
+            try:
+                other = Scalar.from_value(other)
+            except TypeError:
+                other = self._expect_type(
+                    other,
+                    (Scalar, gb.Scalar),
+                    within="isequal",
+                    argname="other",
+                    extra_message="Literal scalars also accepted.",
+                )
+            # Don't check dtype if we had to infer dtype of `other`
             check_dtype = False
-        return super().isequal(other, check_dtype=check_dtype)
+        if check_dtype and self.dtype != other.dtype:
+            return False
+        else:
+            return super().isequal(other, check_dtype=check_dtype)
 
     def isclose(self, other, *, rel_tol=1e-7, abs_tol=0.0, check_dtype=False):
         if other is None:
@@ -171,6 +285,10 @@ class Scalar(BaseType):
 
     @property
     def is_empty(self):
+        if self.is_dOnion:
+            donion = DOnion.multi_access(gb.Scalar.new(bool), getattr, self, "is_empty")
+            return PythonScalar(donion)
+
         delayed = da.core.elemwise(
             _is_empty,
             self._delayed,
@@ -198,6 +316,11 @@ class Scalar(BaseType):
 
     @value.setter
     def value(self, val):
+        if any_dOnions(self, val):
+            donion = DOnion.multi_access(self._meta, Scalar.from_value, val)
+            self.__init__(donion, meta=self._meta)
+            return
+
         scalar = Scalar.from_value(val, dtype=self.dtype)
         self._delayed = scalar._delayed
 
@@ -210,6 +333,7 @@ class PythonScalar:
     __complex__ = Scalar.__complex__
     __index__ = Scalar.__index__
     _persist = Scalar._persist
+    is_dOnion = Scalar.is_dOnion
 
     @classmethod
     def from_delayed(cls, scalar, dtype, *, name=None):
@@ -228,7 +352,65 @@ class PythonScalar:
 
     def compute(self, *args, **kwargs):
         innerval = self._delayed.compute(*args, **kwargs)
+        if self.is_dOnion:
+            return innerval.value if hasattr(innerval, "value") else innerval
+
         return innerval.value.value
+
+
+class ScalarExpression(GbDelayed):
+    __slots__ = ()
+    output_type = gb.Scalar
+    ndim = 0
+    shape = ()
+    _is_scalar = True
+    _is_cscalar = False
+    __and__ = gb.scalar.ScalarExpression.__and__
+    __bool__ = gb.scalar.ScalarExpression.__bool__
+    __eq__ = gb.scalar.ScalarExpression.__eq__
+    __float__ = gb.scalar.ScalarExpression.__float__
+    __index__ = gb.scalar.ScalarExpression.__index__
+    __int__ = gb.scalar.ScalarExpression.__int__
+    __or__ = gb.scalar.ScalarExpression.__or__
+    _get_value = _automethods._get_value
+    isclose = gb.scalar.ScalarExpression.isclose
+    isequal = gb.scalar.ScalarExpression.isequal
+    value = gb.scalar.ScalarExpression.value
+
+    # def __getattr__(self, item):
+    #     return getattr(gb.scalar.ScalarExpression, item)
+
+
+class ScalarIndexExpr(AmbiguousAssignOrExtract):
+    output_type = gb.Scalar
+    ndim = 0
+    shape = ()
+    _is_scalar = True
+    _is_cscalar = False
+
+    dup = new
+
+    @property
+    def is_cscalar(self):
+        return self._is_cscalar
+
+    @property
+    def is_grbscalar(self):
+        return not self._is_cscalar
+
+    # Begin auto-generated code: Scalar
+    __and__ = gb.scalar.ScalarIndexExpr.__and__
+    __bool__ = gb.scalar.ScalarIndexExpr.__bool__
+    __eq__ = gb.scalar.ScalarIndexExpr.__eq__
+    __float__ = gb.scalar.ScalarIndexExpr.__float__
+    __index__ = gb.scalar.ScalarIndexExpr.__index__
+    __int__ = gb.scalar.ScalarIndexExpr.__int__
+    __or__ = gb.scalar.ScalarIndexExpr.__or__
+    _get_value = _automethods._get_value
+    isclose = gb.scalar.ScalarIndexExpr.isclose
+    isequal = gb.scalar.ScalarIndexExpr.isequal
+    value = gb.scalar.ScalarIndexExpr.value
+    # End auto-generated code: Scalar
 
 
 # Dask task functions
@@ -250,3 +432,5 @@ def _invert(x):
 
 gb.utils._output_types[Scalar] = gb.Scalar
 gb.utils._output_types[PythonScalar] = gb.Scalar
+gb.utils._output_types[ScalarExpression] = gb.Scalar
+gb.utils._output_types[ScalarIndexExpr] = gb.Scalar
